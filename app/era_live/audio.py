@@ -405,6 +405,37 @@ class AudioIOMixin:
             print(f"[era] [ERROR] Mic: {e}")
             raise
 
+    def _log_turn_latency(self) -> None:
+        """One structured line per turn saying where the wait went. (Item 22.)
+
+        The configured `silence_ms` rides along with the measured
+        `endpoint_wait_ms` so the two can be compared — that comparison is the
+        whole point, because it is what separates "Era is being patient, turn
+        the dial" from "the model is slow, the dial will not help". See
+        core/turn_latency.py.
+
+        The tracker is reset in a `finally`: a turn that logged nothing must not
+        leak its marks into the next one and report a latency of several turns.
+        """
+        from core.turn_latency import enabled as latency_enabled
+
+        try:
+            if not latency_enabled():
+                return
+            silence_ms = None
+            try:
+                from core.vad import get_endpointing_config
+
+                ep = get_endpointing_config()
+                silence_ms = ep["silence_ms"] if ep.get("enabled") else None
+            except Exception:
+                pass
+            summary = self.turn_latency.summary(silence_ms=silence_ms)
+            if summary:
+                log_event(main_logger, "turn.latency", "INFO", **summary)
+        finally:
+            self.turn_latency.reset()
+
     async def _receive_audio(self):
         print("[era] [RECV] Recv started")
         out_buf, in_buf = [], []
@@ -490,6 +521,10 @@ class AudioIOMixin:
                         # heard anything — core/live_turn_state.py explains why
                         # that distinction is the whole recovery decision.
                         self.live_turn.note_audio_received(len(response.data))
+                        # First byte of the answer = she started answering
+                        # (board item 22). Idempotent, so the stream of later
+                        # chunks costs nothing and cannot move the mark.
+                        self.turn_latency.note_model_output()
                         if self._turn_done_event and self._turn_done_event.is_set():
                             self._turn_done_event.clear()
                         # Swallow Gemini's audio while a CM hand-off window is
@@ -530,6 +565,7 @@ class AudioIOMixin:
                             # Recorded so the reconnect never "finishes" a turn
                             # they chose to stop.
                             self.live_turn.note_interrupted()
+                            self.turn_latency.note_interrupted()
                             self._barge_in_requested = True
                             hud.barge_in("model")
                             self._flush_audio_in_queue()
@@ -540,6 +576,12 @@ class AudioIOMixin:
                                 out_buf.append(txt)
                                 self._live_turn_text = " ".join(out_buf)  # for barge-in resume
                                 self.live_turn.note_text(txt)
+                                # Also "she started answering": in the
+                                # transcript-synthesis voice modes Gemini's own
+                                # audio is discarded above, so TEXT is the first
+                                # sign of the answer and response.data may never
+                                # come at all. Idempotent with the audio mark.
+                                self.turn_latency.note_model_output()
                                 hud.response_delta(txt)
                                 # ── fish_audio: the TRANSCRIPT is the speech ──
                                 # Gemini's own audio was discarded above, so this
@@ -567,6 +609,13 @@ class AudioIOMixin:
                                 # continuation we were about to send: a recovered
                                 # answer must never be spoken over a live human.
                                 self.live_turn.note_user_speaking(True)
+                                # Board item 22: the transcript streams while the
+                                # user talks, so the LAST delta is the closest
+                                # thing Era has to "they stopped making sound" —
+                                # the local VAD only runs while SHE is speaking.
+                                # See core/turn_latency.py on why that makes
+                                # endpoint_wait_ms a proxy, not a measurement.
+                                self.turn_latency.note_user_delta()
                                 self._user_spoke_since_drop = True
                                 if not in_buf:
                                     # When the user STARTED saying it: a gate asking
@@ -599,6 +648,9 @@ class AudioIOMixin:
                             and in_buf
                         ):
                             hud.user_speech_finished(" ".join(in_buf))
+                            # The endpointing wait ended here: everything after
+                            # this is the model, not Era's patience (item 22).
+                            self.turn_latency.note_user_finished()
 
                         # ── The model finished the ANSWER ──
                         # Distinct from turn_complete, which also fires when the
@@ -807,6 +859,16 @@ class AudioIOMixin:
                             # so a later drop cannot inherit this turn's verdict.
                             self.live_turn.note_turn_complete()
                             self.live_turn.reset()
+                            # Board item 22: one line per turn saying where the
+                            # time went. Emitted HERE, beside live_turn's own
+                            # reset, so the two can never drift out of step over
+                            # what counts as a turn boundary. Never load-bearing:
+                            # any fault in measuring is swallowed, because the
+                            # alternative is diagnostics that end the session.
+                            try:
+                                self._log_turn_latency()
+                            except Exception as e:
+                                print(f"[era] [LATENCY] ignored: {e}")
                             # The fallback window for this turn is over; release the
                             # held Gemini audio so it can never play late.
                             self._clear_cloud_audio_buffer()
@@ -1221,6 +1283,11 @@ class AudioIOMixin:
                 # kill it. Diagnostics are never load-bearing.
                 try:
                     self.live_turn.note_audio_played(len(chunk))
+                    # The first byte the user could actually HEAR — the end of
+                    # the wait they are complaining about (item 22). Inside the
+                    # same guard, for the reason written directly above: a
+                    # counter must never be able to kill the session.
+                    self.turn_latency.note_audio_played()
                 except Exception:
                     pass
         except Exception as e:

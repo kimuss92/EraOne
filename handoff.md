@@ -8,6 +8,105 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · Board item 22 — the turn-latency instrument, and the dial that was already there
+**Objectives:** 2 — "she listens and doesn't respond, it responds too late"
+
+Karim reported Era answering late. The board's rule for item 22 is *"Measure first
+— do not optimize on a guess"*, so this is the measurement, plus one finding that
+needed no measurement at all.
+
+**The finding that costs nothing: the lateness is partly a setting.**
+`core/vad.py:523-529` — `silence_ms: 800`, `end_sensitivity: "low"`,
+`start_sensitivity: "high"`. Its own docstring says why: *"Longer silence_ms +
+end_sensitivity='low' make Era wait through the pauses in a trailing thought
+instead of cutting in — the core of 'let me finish my sentence'."* The lateness is
+bought deliberately, to stop her interrupting. It is tunable from the environment
+(`ERA_ENDPOINTING_SILENCE_MS`, `ERA_ENDPOINTING_END`) without touching
+`config/api_keys.json`, which the guard hook blocks anyway. That is a dial, not a
+defect, and there is no setting that is both maximally patient and maximally
+quick.
+
+Also noted while there: `config/wake_word.json` has `wake_word: "shazam"` but its
+`decoys` are `["error", "her", "area", "here", ...]` — words that sound like
+**"era"**, not "shazam". The decoy list was built for the previous wake word and
+never updated, so it is not guarding the current one. Harmless (decoys only cause
+rejections) but it means that protection is inert. Not fixed here: changing wake
+word behaviour on a live voice assistant is Karim's call, and it is on the board.
+
+**What was built.** `core/turn_latency.py` — a pure tracker with an injected
+clock, logging one `turn.latency` line per turn:
+
+    response_ms        the user's last word -> the first sound back  (THE number)
+    endpoint_wait_ms   a PROXY for the silence_ms wait (see below)
+    model_ms           the model thinking
+    playback_ms        audio received -> audio heard
+    tool_ms/tool_count time spent in tools during the turn
+    total_ms, interrupted, configured_silence_ms
+
+**The honest limit, which shaped the whole design.** Era's local VAD runs only
+WHILE SHE IS SPEAKING — `audio.py`'s barge-in detector sits behind
+`if era_speaking:`. While the user talks, mic frames go straight to Gemini
+unexamined, so there is **no local "the user stopped making sound" timestamp**.
+`endpoint_wait_ms` is therefore the gap between the last input-transcript delta
+and Gemini's `finished` mark: a proxy, inflated by however long the server sat on
+that delta. It is logged next to `configured_silence_ms` precisely so the two can
+be compared — if they track, the wait is the config and the dial is the fix; if
+the proxy runs far above it, the server is slow and the dial will not help.
+Measuring it properly would mean running VAD on every mic frame during normal
+capture, which is a CPU and behaviour change, not instrumentation, and that
+decision is deliberately not made here.
+
+**Marks wired at six points**, all idempotent and none load-bearing: first/last
+input-transcript delta, `input_transcription.finished`, first `response.data` AND
+first `output_transcription` (whichever comes first — in the transcript-synthesis
+voice modes Gemini's audio is discarded, so text is the only sign of an answer),
+`interrupted`, first byte actually played, and `turn_complete`. Tool time attaches
+at the single funnel every tool result passes through, beside `hud.tool_finished`.
+
+**Two things guarded on purpose.** The tracker is reset in a `finally`, so a turn
+that logs nothing cannot leak its marks into the next one; and the first-played
+mark sits inside the existing try/except in `_play_audio`, whose comment already
+says it: *"Diagnostics are never load-bearing."*
+
+**A weak test of my own, caught by checking it was load-bearing.** The bleed guard
+was first asserted on `endpoint_wait_ms` — which is immune, because it measures
+from the LAST delta and a new turn refreshes that. Reverting the `finally` left
+the test green. `total_ms` measures from the FIRST mark, which is exactly what a
+missed reset leaves stale (30,400ms instead of 400ms — two turns reported as one).
+The assertion moved there and now fails against the pre-fix code. The lesson is
+the one this repo keeps relearning: a test is not load-bearing until it has been
+watched to fail.
+
+**Verification.** 17 tests, all clock-driven — the subject is arithmetic over
+timestamps, and a test needing a real microphone and a real 800ms wait to check
+subtraction is a test that gets deleted the first time it flakes.
+
+    tools/test_turn_latency.py                17 passed
+    era_gate.py --changed <the four modules>   ruff PASS, manifest PASS,
+                                               1,074 passed, 15 skipped, 8 failed
+    ruff check . / format --check .            clean, 694 files
+
+All 8 gate failures are **byte-identical before and after** (stash-proven, `comm`
+empty both ways) — the container's usual Windows-path and local-model artifacts.
+
+**What is NOT verified here, and cannot be.** The six wiring points inside
+`_receive_audio` are verified by reading, not by execution: there is no Live
+session, no microphone and no speaker in this container. The unit tests prove the
+arithmetic and the logging contract; `_log_turn_latency` is driven directly via
+the real method borrowed onto a bare object. **The live proof is Karim's next
+spoken turn producing a `turn.latency` line** — and if it does not appear, the
+wiring is wrong and the numbers above say nothing about that.
+
+**Reading the result** (tested against a synthetic log, not written from memory):
+
+    python -c "import json,statistics as st;r=[json.loads(l) for l in open('logs/era.log',encoding='utf-8',errors='replace') if '\"turn.latency\"' in l];r=[x for x in r if not x.get('interrupted')];f=lambda k:[x[k] for x in r if x.get(k) is not None];p=lambda k:(k,len(f(k)),int(st.median(f(k))),max(f(k)));print('turns:',len(r));[print('%-18s n=%-3d median=%-6d max=%d'%p(k)) for k in ('response_ms','endpoint_wait_ms','model_ms','playback_ms','tool_ms')]"
+
+Interrupted turns are excluded: their numbers describe the interruption, not the
+latency, and averaging them in drags every statistic toward whatever was cut
+short.
+
+---
+
 ### 2026-09-30 · "DEGRADED" was the threshold talking — Gemini's 5xx was being logged as an Era crash
 **Objectives:** 10, 1, 4 — board item 37, from Karim's `diag_20260930_150251.md`
 

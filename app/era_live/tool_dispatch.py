@@ -950,6 +950,15 @@ class ToolDispatchMixin:
             hud_call, name, hud_args, result, routed_to=(_routed[0] if _routed else None)
         )
         self._trace_routed = self._trace_safety = None
+        # Board item 22: attribute this tool's time to the turn that ran it, so a
+        # slow reply can be read as "the model thought" or "a tool blocked" from
+        # the turn.latency line instead of by correlating timestamps by hand.
+        # One call site, because this is the funnel EVERY tool result passes
+        # through — success, failure and unknown-tool alike.
+        try:
+            self.turn_latency.note_tool(result.duration_ms)
+        except Exception:
+            pass
         if result.success:
             log_event(
                 main_logger,
