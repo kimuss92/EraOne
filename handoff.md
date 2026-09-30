@@ -8,6 +8,59 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · The item-36 measurement would not run, and the reason is a production defect
+**Objectives:** 11 — board items 36 (unblock) and 41 (new)
+
+Karim pulled the fixture and ran the measurement. Ollama was up and
+`ollama list` showed `all-minilm:latest`, 45 MB, pulled 24 hours earlier — and the
+runner said *"the local embedding model 'all-minilm' is not reachable — start
+Ollama and run: ollama pull all-minilm"*. A model that is installed, on a server
+that is answering, reported as missing.
+
+**The cause, and it is not the message.** `memory/semantic_recall.py:92` gives the
+availability probe `_PROBE_TIMEOUT_S = 1.5`. Era's own measured cold-load figure
+is **~4s** — from the docstring of `core/vision_config.resolve_ollama_timeout`:
+*"warm calls land in ~1-2s and a cold load costs ~4s"*. `ollama list` does not load
+a model into memory, so the probe hands a cold model 1.5 seconds to do a four
+second job. `_post` collapses refused / 404 / timeout / malformed-JSON into one
+bare `None`, so `available()` cannot tell which happened and the caller invents the
+most likely-sounding cause. The message I wrote was confidently wrong, which is
+worse than vague.
+
+**The production consequence is the real finding.** Ollama unloads idle models
+(roughly five minutes by default). So the first recall after any conversational
+gap probes a cold model, times out, and recall silently falls back to lexical —
+top-1 6/12 instead of 9/12, with nothing logged. That is exactly the risk board
+item 30b names ("it degrades to lexical silently if not [up]"), arriving from a
+cause nobody had identified. It is now item 41.
+
+**What was changed, and what deliberately was not.** Only the measurement runner
+(`tools/test_semantic_recall.py`'s `__main__`): it now warms the model itself with
+a 90s budget, and if that still fails it asks the server directly and reports the
+real reason — HTTP code and body, the refused address, or the timeout — plus the
+detail that Era resolves its base URL from `ollama_base_url` / `OLLAMA_BASE_URL`
+and **not** from the `OLLAMA_HOST` the CLI may be using. Verified here: with no
+Ollama in the container it now prints `cannot reach http://127.0.0.1:11434/api/embed:
+[Errno 111] Connection refused` instead of sending someone to re-pull a model they
+already have.
+
+`_PROBE_TIMEOUT_S` itself is untouched. Changing a live timeout to make a
+measurement run is how a measurement starts changing the thing it measures, and
+the honest fix is not a bigger number anyway: a longer probe stalls a turn, which
+is the cost item 22 exists to watch. The candidate is Ollama's `keep_alive` on the
+embed call so the model stays resident, plus one warm-up at boot — to be checked
+against his Ollama version before building, not assumed from memory.
+
+**Item 38 dropped.** Karim's call: the one unhandled `email` OAuth exception is
+closed without a fix. Left on the board struck through rather than deleted, with
+the evidence intact, so that if it recurs it is recognised rather than rediscovered
+from scratch.
+
+**Verification.** `tools/test_semantic_recall.py` → 22 passed, 3 skipped;
+`python tools/test_semantic_recall.py` → the new diagnostic; ruff clean.
+
+---
+
 ### 2026-09-30 · Item 36 — the measurement gets a corpus that cannot drift
 **Objectives:** 11, 1 — board item 36, Phase 0 closing
 

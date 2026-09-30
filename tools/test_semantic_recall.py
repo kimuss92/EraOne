@@ -585,11 +585,50 @@ if __name__ == "__main__":
     os.environ.pop("ERA_SEMANTIC_RECALL", None)
     sr.reset_probe()
 
-    if not sr.available():
-        raise SystemExit(
-            f"the local embedding model {sr.MODEL!r} is not reachable — "
-            f"start Ollama and run: ollama pull {sr.MODEL}"
-        )
+    # ── Absorb the cold start, and diagnose honestly if it still fails ──────
+    #
+    # `ollama list` does NOT load a model into memory, so the first embed after
+    # a restart (or after Ollama's idle unload) pays a cold load. Era's own
+    # measured figure for that is ~4s — see the docstring of
+    # core/vision_config.resolve_ollama_timeout — against available()'s
+    # _PROBE_TIMEOUT_S of 1.5s. The probe therefore reports "unavailable" for a
+    # model that is installed and a server that is answering, which is exactly
+    # what happened on Karim's machine on 2026-09-30.
+    #
+    # This runner is a one-off measurement, so it can simply wait. Production
+    # cannot, and that is a separate defect (board item 41) — NOT patched here,
+    # because changing a live timeout to unblock a measurement is how a
+    # measurement starts changing the thing it measures.
+    print(f"warming {sr.MODEL!r} at {sr._base_url()} (a cold load takes a few seconds)...")
+    if sr.embed(["warm up the model"], timeout_s=90.0) is None:
+        # _post() collapses refused / 404 / timeout / bad-JSON into one None, so
+        # ask the server directly and report which it actually was.
+        import urllib.error
+        import urllib.request
+
+        url = f"{sr._base_url()}/api/embed"
+        body = json.dumps({"model": sr.MODEL, "input": ["probe"]}).encode()
+        req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=90.0) as resp:
+                detail = f"HTTP {resp.status} but the reply had no usable 'embeddings' array"
+        except urllib.error.HTTPError as e:
+            detail = (
+                f"HTTP {e.code} from {url}\n  {e.read()[:300].decode('utf-8', 'replace')}\n"
+                f"  (a 404 here usually means an Ollama too old for /api/embed — "
+                f"check `ollama --version`)"
+            )
+        except urllib.error.URLError as e:
+            detail = (
+                f"cannot reach {url}: {e.reason}\n"
+                f"  Era resolves the base URL from config `ollama_base_url` / env "
+                f"OLLAMA_BASE_URL, NOT from OLLAMA_HOST that the CLI may be using."
+            )
+        except Exception as e:  # noqa: BLE001 — a diagnostic must never hide the cause
+            detail = f"{type(e).__name__}: {e}"
+        raise SystemExit(f"\ncannot embed with {sr.MODEL!r}:\n  {detail}\n")
+
+    sr.reset_probe()  # the warm model should now pass the 1.5s probe
 
     report = measure(load_fixture())
     print(f"\nfixture      : {FIXTURE_PATH}")
