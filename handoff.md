@@ -8,6 +8,118 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · Item 36 — the measurement gets a corpus that cannot drift
+**Objectives:** 11, 1 — board item 36, Phase 0 closing
+
+**What was wrong.** `test_measured_recall_beats_the_lexical_baseline` asserted
+`MEASURED_TOP1=9 / TOP3=10` against `load_memory()` — which conftest.py seeds from
+the REAL `memory/*.json`. That store is gitignored, personal, and grows every time
+Era learns something, so the one test carrying acceptance point 4's numbers could
+not be reproduced on another machine, could not be re-measured later, and went red
+on 2026-09-30 with no relevant code change: entries added since the calibration had
+pushed one target out of the top 3.
+
+**What was built.** `tools/golden/semantic_recall_store.json` — **50 synthetic
+entries** across the five real categories, and `tools/test_semantic_recall.py`
+rewired onto it. The store is synthetic on purpose: committing the real one would
+buy stability with Karim's birthday, city and family details in the repository,
+which is a worse trade than the flakiness it fixes. Live recall against his actual
+memory is still covered by board item 30b — the acceptance test no unit test can
+make.
+
+The corpus is 11 targets, 12 near-miss **traps**, and 27 filler entries, with
+`updated` and `access_count` held identical across all 50 so recency and
+popularity — tiebreakers in `score_memory_entry` — cannot influence the result.
+Nothing in it answers any of the 8 `UNANSWERABLE` queries, and a test enforces
+that by scanning the file for their topics, because an entry that quietly answers
+one turns the noise guard into a test that cannot fail.
+
+**The fixture was validated here, not just written.** Measured with
+`ERA_SEMANTIC_RECALL=0`:
+
+    words only:  top-1 5/12   top-3 10/12   noise 0/8
+
+and every trap fires exactly as designed — `"where do I live"` returns **only**
+`live_ui_feed_plan` (the original item-30 bug, reproduced synthetically),
+`"when is my birthday"` ranks `birthday_card_supplier` above `birthday`,
+`"what song does my kid like"` ranks `song_licensing_rules` above
+`son_favorite_song`, and `"what do I do for a living"` returns **nothing at all**
+— the case only meaning can rescue. The real store's words-only baseline was
+6/12, so this corpus is comparably hard rather than easier.
+
+**That produced a better split than planned: most of the measurement now needs no
+Ollama at all.** The lexical half is model-free and therefore reproducible in
+every gate on every machine, so `FIXTURE_LEXICAL_TOP1 = 5` /
+`FIXTURE_LEXICAL_TOP3 = 10` are **baked now, with proof**, and pinned by
+`test_the_fixture_is_hard_enough_without_a_model` plus `test_the_traps_actually_trap`.
+Only the two semantic floors need a model.
+
+**Those two are deliberately left as `None`.** The old 9/10 were measured against a
+different corpus; carrying them over would be fiction in the opposite direction
+from lowering them, which the brief rightly forbids. While they are `None` the
+measurement test **skips with the numbers it just observed in the skip reason**,
+so the gate stays green and the unmeasured state stays loud. `python
+tools/test_semantic_recall.py` prints the full table via the same `measure()` the
+test asserts with — so the numbers pasted back cannot disagree with the numbers
+baked in. That file is now both a pytest module and that script, which is why it
+carries a `sys.path` bootstrap: run directly it would otherwise fail on `from
+memory import ...` before reaching `__main__`, and asking for `PYTHONPATH=.` first
+is a step people forget on Windows.
+
+**Three things in the brief that the code already did**, reported rather than
+re-done:
+
+  * **`test_prompt_injection_never_embeds` already exists and means something
+    else.** Despite the name it is a PERFORMANCE invariant: "prompt injection" is
+    injecting MEMORY INTO THE PROMPT (`format_memory_for_prompt_ranked` runs in
+    every `_build_config()`, roughly every 2.5 minutes), and it guards that path
+    against triggering embeddings and stalling a prompt build behind seven Ollama
+    timeouts. It is untouched. The security-flavoured test the brief meant was
+    added beside it under a name that cannot be confused with it:
+    `test_injection_shaped_memory_is_data_not_instruction`, with an
+    injection-shaped entry in the fixture, asserting the text reaches the embedder
+    verbatim as a string (embedded, never interpreted) and never hijacks an
+    unrelated query.
+  * **Atomic cache replace already exists** — `semantic_recall._save_cache` writes
+    a `.tmp` and `os.replace`s it, and its docstring explains why it deliberately
+    avoids `safe_store` (one backup per write, forever, of recomputable data).
+  * **`ERA_SEMANTIC_RECALL=0` is already set suite-wide** in `conftest.py`.
+
+**Verification.**
+
+    tools/test_semantic_recall.py            22 passed, 3 skipped (model-gated)
+    era_gate.py --changed <the test file>     ruff format PASS, ruff lint PASS,
+                                              manifest PASS, tests PASS
+    python tools/test_semantic_recall.py      exits with a clear "start Ollama" message
+
+`era_doctor` is the gate's only red and reads NOT READY here for three
+environmental reasons only — no `config/api_keys.json`, no Cloudinary config, no
+OneDrive vault. Unchanged from the previous three sessions.
+
+**What is owed, and item 36 is NOT closed until it lands:** one run of
+`python tools/test_semantic_recall.py` on Windows with Ollama, then
+`FIXTURE_TOP1` / `FIXTURE_TOP3` baked from its output. The noise line matters as
+much as the recall lines: noise is 0/8 lexically here, but semantic scoring can
+only ADD candidates, so 0/8 with the model running is a claim this container
+cannot make.
+
+**A separate finding, from the log counts Karim pasted** — and it changes the next
+item rather than this one:
+
+    37  engine.network.blip        25  engine.crash          7  tool.claude_bridge.unauthorized
+     4  engine.upstream.error       1  engine.quota.exhausted
+
+**Quota fired once.** The approved quota ledger (shared, persisted, fingerprinted)
+is real work aimed at an event that has happened a single time, so it is NOT being
+built on this evidence — the board's own rule is measure first, and the
+measurement says no. The three defects behind it stand and are recorded for the
+day the counts change. Two other readings: `4 engine.upstream.error` against `25
+engine.crash` is item 37 working, since only post-pull drops classify as upstream;
+and `engine.network.blip` at 37 is now the most common event by a wide margin,
+which points at connection quality rather than anything in Era.
+
+---
+
 ### 2026-09-30 · Board item 22 — the turn-latency instrument, and the dial that was already there
 **Objectives:** 2 — "she listens and doesn't respond, it responds too late"
 

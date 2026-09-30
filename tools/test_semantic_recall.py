@@ -35,15 +35,30 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from memory import semantic_recall as sr
-from memory.memory_manager import _RETRIEVAL_MIN_SCORE, rank_memory_entries
+# This file is BOTH a pytest module and the one measurement script (see the
+# __main__ block at the end). Under pytest the repo root is already importable;
+# run directly as `python tools/test_semantic_recall.py` it is not, and the
+# imports below would fail before reaching that block. The repo's other
+# standalone tools ask for `PYTHONPATH=.` instead — this one is meant to be a
+# single copy-paste command, and on Windows setting an env var first is a
+# second step people forget.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# The 12 paraphrases, and the entry each must find. Keys are real entries of the
-# store conftest.py copies, so a renamed key breaks this loudly.
+from memory import semantic_recall as sr  # noqa: E402
+from memory.memory_manager import (  # noqa: E402
+    _RETRIEVAL_MIN_SCORE,
+    rank_memory_entries,
+)
+
+# The 12 paraphrases, and the entry each must find. The keys match the FROZEN
+# FIXTURE (tools/golden/semantic_recall_store.json); test_the_fixture_stays_clean
+# fails loudly if one is renamed or dropped.
 PARAPHRASES = [
     ("what team do I support", "favorite_football_team"),
     ("which football club am I a fan of", "favorite_football_team"),
@@ -72,9 +87,103 @@ UNANSWERABLE = [
     "the office wifi password",
 ]
 
-MEASURED_TOP1 = 9  # of 12, at COSINE_CUT 0.36 — see the sweep in the module docstring
-MEASURED_TOP3 = 10
-LEXICAL_TOP1 = 6  # what it was before, and the floor this must never fall back to
+# ── The corpus these numbers are measured against ───────────────────────────
+#
+# WHY A FROZEN FIXTURE AND NOT THE REAL STORE (board item 36)
+#   Until 2026-09-30 this measured against `load_memory()` — which conftest.py
+#   seeds from the REAL `memory/*.json`. That store is gitignored, personal, and
+#   changes every time Era learns something, so the one test carrying acceptance
+#   point 4's numbers could not be reproduced on another machine, could not be
+#   re-measured a year later, and went red on 2026-09-30 without a line of
+#   relevant code changing: entries added since the calibration had pushed one
+#   target out of the top 3. A measurement whose corpus drifts is not a
+#   measurement.
+#
+#   The fixture is SYNTHETIC on purpose. Committing the real store would make
+#   the test stable by putting Karim's birthday, city and family details in the
+#   repository, which is a worse trade than the flakiness it fixes.
+#
+#   Live recall against his ACTUAL memory is still covered — by board item 30b,
+#   the acceptance test a unit test cannot make: tell her on Monday, ask on
+#   Friday, after restarts.
+FIXTURE_PATH = Path(__file__).resolve().parent / "golden" / "semantic_recall_store.json"
+
+# The old live-store numbers, kept for the record. They are NOT carried over:
+# they were measured against a different corpus, so reusing them here would be
+# fiction in the opposite direction from lowering them.
+LIVE_STORE_TOP1_2026_09_29 = 9  # of 12, against the real store, at COSINE_CUT 0.36
+LIVE_STORE_TOP3_2026_09_29 = 10
+
+# Floors for the FIXTURE. None until measured once on a machine with Ollama —
+# see the __main__ block at the bottom of this file. The measurement test SKIPS
+# while these are None rather than asserting a number nobody has observed.
+FIXTURE_TOP1: int | None = None
+FIXTURE_TOP3: int | None = None
+
+LEXICAL_TOP1 = 6  # the REAL store's words-only baseline, kept for the record
+
+# The fixture's OWN words-only baseline. Measured 2026-09-30 in the cloud
+# container with ERA_SEMANTIC_RECALL=0 — no model, no Ollama, so unlike the two
+# floors above it this number is reproducible ANYWHERE and is pinned by
+# test_the_fixture_is_hard_enough_without_a_model below.
+#
+# It is the bar semantic recall has to beat, and it is the evidence the corpus
+# is hard in the right way: 5/12 by words alone, with every trap firing —
+# "where do I live" returns ONLY live_ui_feed_plan, "when is my birthday" ranks
+# birthday_card_supplier above birthday, and "what do I do for a living" returns
+# nothing at all. That last one is the case only meaning can rescue.
+FIXTURE_LEXICAL_TOP1 = 5
+FIXTURE_LEXICAL_TOP3 = 10
+
+
+def load_fixture() -> dict:
+    """The frozen synthetic store. Read fresh each call: a test that mutated a
+    shared dict would silently change every later measurement."""
+    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def measure(memory: dict) -> dict:
+    """Run the 12 paraphrases and the 8 unanswerable queries over `memory`.
+
+    One function so the pytest assertions and the __main__ report can never
+    measure different things — the numbers Karim pastes back are the numbers the
+    test will then assert.
+    """
+    top1 = top3 = 0
+    missed_top1: list[str] = []
+    missed_top3: list[str] = []
+    for query, want in PARAPHRASES:
+        keys = [
+            e["key"]
+            for e in rank_memory_entries(memory, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
+        ]
+        top1 += keys[:1] == [want]
+        top3 += want in keys[:3]
+        if keys[:1] != [want]:
+            missed_top1.append(f"{query!r} -> {keys[:5]} (wanted {want})")
+        if want not in keys[:3]:
+            missed_top3.append(f"{query!r} -> {keys[:5]} (wanted {want})")
+
+    noise = {}
+    for query in UNANSWERABLE:
+        ranked = rank_memory_entries(memory, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
+        if ranked:
+            noise[query] = [e["key"] for e in ranked]
+
+    return {
+        "entries": sum(
+            1
+            for items in memory.values()
+            if isinstance(items, dict)
+            for entry in items.values()
+            if isinstance(entry, dict) and "value" in entry
+        ),
+        "top1": top1,
+        "top3": top3,
+        "missed_top1": missed_top1,
+        "missed_top3": missed_top3,
+        "noise": noise,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -311,78 +420,56 @@ requires_model = pytest.mark.skipif(
 
 @requires_model
 def test_measured_recall_beats_the_lexical_baseline(enabled):
-    """THE acceptance-point-4 measurement. Numbers, not adjectives.
+    """THE acceptance-point-4 measurement, now against the frozen fixture.
 
-    Asserted as a floor rather than an equality: a better model or a richer
-    store may push it up, and that must not be a failure. Falling back to the
-    lexical baseline, however, means this feature has silently stopped working.
+    Asserted as a floor, not an equality: a better model may push it up and that
+    must not be a failure. Falling back to the lexical baseline, however, means
+    the feature has silently stopped working.
+
+    SKIPS while the fixture floors are unmeasured. Asserting a number nobody has
+    observed would be worse than measuring nothing — it is how the previous
+    floors ended up describing a corpus that no longer existed.
     """
-    from memory.memory_manager import load_memory
+    m = measure(load_fixture())
+    where = f"{m['entries']} entries in the frozen fixture ({FIXTURE_PATH.name})"
 
-    memory = load_memory()
-    # The store this measures is a COPY OF THE REAL ONE (see conftest.py: the temp
-    # memory dir is seeded from memory/*.json, which is gitignored). So these
-    # numbers are calibrated against whatever the store held on the day they were
-    # measured, and they drift as entries are added — a newer, semantically closer
-    # entry can push a target out of the top 3 with no code change at all. That is
-    # why every message below carries the store size and the actual ranking: a
-    # bare "fell to 9/12" cannot be told apart from a real regression, and the
-    # first time this failed it cost a full 12-minute run to learn nothing.
-    entry_count = sum(
-        1
-        for items in memory.values()
-        if isinstance(items, dict)
-        for entry in items.values()
-        if isinstance(entry, dict) and "value" in entry
+    assert m["top1"] > FIXTURE_LEXICAL_TOP1, (
+        f"top-1 recall is {m['top1']}/12, no better than this fixture's words-only "
+        f"baseline of {FIXTURE_LEXICAL_TOP1} — semantic recall has stopped "
+        f"contributing. {where}. Misses: {m['missed_top1']}"
     )
-    top1 = top3 = 0
-    missed_top1 = []
-    missed_top3 = []
-    for query, want in PARAPHRASES:
-        keys = [
-            e["key"]
-            for e in rank_memory_entries(memory, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
-        ]
-        top1 += keys[:1] == [want]
-        top3 += want in keys[:3]
-        if keys[:1] != [want]:
-            missed_top1.append(f"{query!r} -> {keys[:5]} (wanted {want})")
-        if want not in keys[:3]:
-            missed_top3.append(f"{query!r} -> {keys[:5]} (wanted {want})")
 
-    store = f"measured against {entry_count} entries in the seeded store copy"
+    if FIXTURE_TOP1 is None or FIXTURE_TOP3 is None:
+        pytest.skip(
+            f"fixture floors not measured yet — top-1 {m['top1']}/12, top-3 {m['top3']}/12 "
+            f"here. Run `python tools/test_semantic_recall.py` on a machine with Ollama "
+            f"and bake the numbers (board item 36)."
+        )
 
-    assert top1 > LEXICAL_TOP1, (
-        f"top-1 recall is {top1}/12, no better than the lexical baseline of "
-        f"{LEXICAL_TOP1} — semantic recall has stopped contributing. "
-        f"{store}. Misses: {missed_top1}"
+    assert m["top1"] >= FIXTURE_TOP1, (
+        f"top-1 recall fell to {m['top1']}/12 from {FIXTURE_TOP1}. {where}. "
+        f"The corpus is frozen, so unlike the old live-store measurement this IS a "
+        f"regression, not drift. Misses: {m['missed_top1']}"
     )
-    assert top1 >= MEASURED_TOP1, (
-        f"top-1 recall fell to {top1}/12 from {MEASURED_TOP1}. {store}. Misses: {missed_top1}"
-    )
-    assert top3 >= MEASURED_TOP3, (
-        f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}. {store}. "
-        f"Each line shows the top 5 actually returned, so a target sitting at 4 or 5 "
-        f"(pushed down by a newer entry) is visible as drift rather than a regression: "
-        f"{missed_top3}"
+    assert m["top3"] >= FIXTURE_TOP3, (
+        f"top-3 recall fell to {m['top3']}/12 from {FIXTURE_TOP3}. {where}. "
+        f"Each line shows the top 5 actually returned: {m['missed_top3']}"
     )
 
 
 @requires_model
 def test_an_unanswerable_query_still_returns_nothing(enabled):
     """The cost side of the same coin, and the reason the cut is 0.36 and not
-    0.25 (which scored 10/12 but returned noise for 3 of these 8)."""
-    from memory.memory_manager import load_memory
+    0.25 (which scored 10/12 but returned noise for 3 of these 8).
 
-    memory = load_memory()
-    noisy = {}
-    for query in UNANSWERABLE:
-        ranked = rank_memory_entries(memory, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
-        if ranked:
-            noisy[query] = [e["key"] for e in ranked]
-    assert not noisy, (
+    Against the fixture this is also a check ON THE FIXTURE: adding an entry that
+    happens to answer one of these eight would weaken the noise guard silently,
+    which is why test_the_fixture_stays_clean pins the topics out of the file.
+    """
+    noise = measure(load_fixture())["noise"]
+    assert not noise, (
         "unanswerable queries returned confident-looking noise, which is exactly "
-        f"what the pre-existing relevance floor was added to stop: {noisy}"
+        f"what the relevance floor was added to stop: {noise}"
     )
 
 
@@ -393,12 +480,174 @@ def test_recall_is_fast_enough_to_sit_in_a_conversation(enabled):
     lexical pass."""
     import time
 
-    from memory.memory_manager import load_memory
-
-    memory = load_memory()
+    memory = load_fixture()
     rank_memory_entries(memory, "warm the index", top_k=5)  # pay the one-time build
     start = time.monotonic()
     for query, _ in PARAPHRASES:
         rank_memory_entries(memory, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
     per_query = (time.monotonic() - start) / len(PARAPHRASES)
     assert per_query < 1.0, f"{per_query * 1000:.0f} ms per recall is too slow to speak over"
+
+
+# ── the fixture itself is under test (board item 36) ────────────────────────
+
+
+def test_the_fixture_stays_clean():
+    """The fixture is only worth freezing if it stays synthetic and complete.
+
+    Every rule here is one that, if broken, would quietly weaken a measurement
+    rather than fail loudly: real data creeping in makes the corpus personal
+    again, a missing target key makes a paraphrase unanswerable by construction,
+    and an entry that happens to answer one of the 8 UNANSWERABLE queries turns
+    the noise guard into a test that cannot fail.
+    """
+    store = load_fixture()
+    entries = {
+        (cat, key): entry
+        for cat, items in store.items()
+        for key, entry in items.items()
+        if isinstance(entry, dict)
+    }
+    assert len(entries) >= 40, "too small a corpus for top-3 to mean anything"
+
+    wanted_keys = {want for _q, want in PARAPHRASES}
+    present = {key for _cat, key in entries}
+    assert wanted_keys <= present, f"fixture is missing targets: {sorted(wanted_keys - present)}"
+
+    # The trap that made "where do I live" return a UI note before item 30.
+    assert "live_ui_feed_plan" in present, "the lexical trap is gone; the corpus got easier"
+
+    blob = json.dumps(store).lower()
+    for topic in ("showroom", "hud", "bank", "world cup", "dentist", "peru", "wine", "wifi"):
+        assert topic not in blob, (
+            f"fixture answers the UNANSWERABLE query about {topic!r}, which silently "
+            "weakens test_an_unanswerable_query_still_returns_nothing"
+        )
+
+    stamps = {e.get("updated") for e in entries.values()}
+    counts = {e.get("access_count") for e in entries.values()}
+    assert len(stamps) == 1 and counts == {0}, (
+        "recency and access_count are TIEBREAKERS in score_memory_entry; holding "
+        "them constant is what keeps this a measurement of relevance alone"
+    )
+
+
+def test_injection_shaped_memory_is_data_not_instruction(enabled, monkeypatch):
+    """A memory entry holding injection text must travel as DATA.
+
+    Distinct from test_prompt_injection_never_embeds above, which despite its
+    name is a PERFORMANCE invariant about the memory -> prompt path. This one is
+    about content: Era embeds whatever the user told her to remember, and some
+    of that could be hostile text copied from a web page or an email.
+
+    What is actually assertable without a model: the text reaches the embedder
+    verbatim as a string argument (so it is being embedded, never interpreted),
+    and it does not hijack an unrelated query.
+    """
+    store = load_fixture()
+    injection = store["notes"]["injection_probe"]["value"]
+    assert "IGNORE ALL PREVIOUS INSTRUCTIONS" in injection, "the probe lost its teeth"
+
+    # It is embedded as "<key>: <value>" and nothing else — no interpretation.
+    text = sr.entry_text("injection_probe", injection)
+    assert text == f"injection probe: {injection}"
+
+    seen: list[str] = []
+
+    def _capture(texts, **_kw):
+        seen.extend(texts)
+        return np.zeros((len(texts), 4), dtype=np.float32)
+
+    monkeypatch.setattr(sr, "embed", _capture)
+    sr.semantic_scores("anything at all", [("notes", "injection_probe", text)])
+    assert any(injection in s for s in seen), "the entry never reached the embedder as text"
+    assert all(isinstance(s, str) for s in seen), "something other than a string was embedded"
+
+    # And it does not hijack a query about something else entirely.
+    _stub_scores(monkeypatch, {})
+    ranked = rank_memory_entries(
+        store, "what should you call me", top_k=5, min_score=_RETRIEVAL_MIN_SCORE
+    )
+    assert "injection_probe" not in [e["key"] for e in ranked]
+
+
+if __name__ == "__main__":
+    # `python tools/test_semantic_recall.py` — the ONE measurement run.
+    #
+    # Prints what the pytest floors will assert, using the same measure()
+    # the test uses, so the numbers pasted back cannot disagree with the ones
+    # that get baked in. Needs Ollama running with the embedding model.
+    import tempfile
+
+    # Keep the fixture's embedding cache out of the real memory/ directory:
+    # get_memory_dir() reads this on every call (core/utils.py).
+    os.environ["ERA_MEMORY_DIR"] = tempfile.mkdtemp(prefix="era-fixture-measure-")
+    os.environ.pop("ERA_SEMANTIC_RECALL", None)
+    sr.reset_probe()
+
+    if not sr.available():
+        raise SystemExit(
+            f"the local embedding model {sr.MODEL!r} is not reachable — "
+            f"start Ollama and run: ollama pull {sr.MODEL}"
+        )
+
+    report = measure(load_fixture())
+    print(f"\nfixture      : {FIXTURE_PATH}")
+    print(f"entries      : {report['entries']}")
+    print(f"model        : {sr.MODEL}   cosine cut: {sr.COSINE_CUT}")
+    print(f"\ntop-1 recall : {report['top1']}/12")
+    print(f"top-3 recall : {report['top3']}/12")
+    print(f"noise        : {len(report['noise'])}/8 unanswerable queries returned something")
+    if report["missed_top1"]:
+        print("\ntop-1 misses:")
+        for line in report["missed_top1"]:
+            print(f"  {line}")
+    if report["noise"]:
+        print("\nNOISE (must be empty):")
+        for query, keys in report["noise"].items():
+            print(f"  {query!r} -> {keys}")
+    print(
+        f"\n--> paste these back: FIXTURE_TOP1 = {report['top1']}, "
+        f"FIXTURE_TOP3 = {report['top3']}, noise = {len(report['noise'])}/8\n"
+    )
+
+
+def test_the_fixture_is_hard_enough_without_a_model():
+    """The half of the measurement that needs NO Ollama, and therefore runs in
+    every gate on every machine.
+
+    conftest.py sets ERA_SEMANTIC_RECALL=0 suite-wide and this test deliberately
+    does NOT take the `enabled` fixture, so it measures words only. That makes it
+    deterministic everywhere — which is the whole point of freezing the corpus.
+
+    It pins the DIFFICULTY. If someone later adds an entry that hands a target
+    away lexically, the semantic floors would rise for a reason that has nothing
+    to do with semantic recall, and the measurement would quietly stop measuring
+    what it claims to.
+    """
+    m = measure(load_fixture())
+    assert (m["top1"], m["top3"]) == (FIXTURE_LEXICAL_TOP1, FIXTURE_LEXICAL_TOP3), (
+        f"the fixture's words-only difficulty moved: top-1 {m['top1']}/12, "
+        f"top-3 {m['top3']}/12. Misses: {m['missed_top1']}"
+    )
+    assert not m["noise"], f"the corpus answers an UNANSWERABLE query lexically: {m['noise']}"
+
+
+def test_the_traps_actually_trap():
+    """Named individually, because 5/12 could also be reached by a corpus that is
+    hard by accident. These are the specific failures item 30 was built to fix."""
+    store = load_fixture()
+
+    def keys(query):
+        return [
+            e["key"]
+            for e in rank_memory_entries(store, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
+        ]
+
+    # The original bug verbatim: a lexical hit on "live" beats the real answer.
+    assert keys("where do I live") == ["live_ui_feed_plan"]
+    # The decoy outranks the target on words alone.
+    assert keys("when is my birthday")[0] == "birthday_card_supplier"
+    assert keys("what song does my kid like")[0] == "song_licensing_rules"
+    # And the case words cannot reach at all.
+    assert keys("what do I do for a living") == []
