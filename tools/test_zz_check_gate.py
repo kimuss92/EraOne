@@ -136,6 +136,11 @@ def test_script_checks_all_passed(script: str) -> None:
     )
 
 
+# Above the 600s subprocess ceiling below, so the ceiling stays the thing that
+# bounds this test. Without the override, pytest.ini's 120s default (board item
+# 18) would kill the run here — this file alone can exceed all the others
+# combined — and report the suite's slowest legitimate test as a hang.
+@pytest.mark.timeout(660)
 @pytest.mark.parametrize("script", _SUBPROCESS_SCRIPTS)
 def test_script_passes_in_its_own_process(script: str) -> None:
     """Gate the scripts that must OWN the interpreter they run in.

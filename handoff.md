@@ -8,6 +8,162 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · Items 17c + 18, and a bug that silently ate whole reports
+**Objectives:** 10, 8 — the two items the board had queued next
+
+Three things, all in the auto-reporting path the board flagged as the next fix.
+
+**1. A bug found by running the suite: one bad event discarded the whole report.**
+
+`write_details()` read `ev["ts"]` directly. `_note()` wraps that call in a `try`
+whose exception `note_failure()` then swallows as `"ignored"` — so a single event
+without a timestamp threw away the **entire** sustained-failure report, silently,
+which is the one thing this module exists to deliver. A cosmetic defect in one
+line of a details file was costing the whole delivery.
+
+It was not hypothetical: `test_the_written_details_file_survives_giving_up` was
+**already red in the repo** (`KeyError: 'ts'`, pure stdlib, nothing to do with the
+platform) and had been passing nowhere. New `_event_ts()` falls back to now, and
+`build_report()` — which had the same two reads — uses it too.
+
+Worth saying plainly: the board recorded item 17c's evidence as green. It was not.
+The test existed and failed. Running it was the whole cost of finding that out.
+
+**2. Item 17c — the report is no longer thrown away.**
+
+The budget half of 17c was already done (`_unmark`, so giving up stops spending a
+6h cooldown and one of four daily slots). The headline defect stood: at
+`DEFER_MAX_S` the report text itself was **discarded**, and the user was told
+nothing but a `print` to stdout. That fires precisely when someone has been at the
+keyboard for 30 minutes — so the reports thrown away were the ones raised *while
+they were working*, and the one person who could act on it was the one person not
+told.
+
+Waiting longer is not the fix: the wait holds `_inflight`, so one busy user would
+block every other report. So the report stops **waiting** without being lost:
+
+  * `_queue_pending()` writes it to `runtime/claude_bridge/pending/`, deduplicated
+    by fingerprint (five copies of one failure is not five findings, and the newest
+    copy carries the freshest evidence);
+  * bounded on purpose — `PENDING_MAX` 8, `PENDING_MAX_AGE_S` 3 days,
+    `PENDING_MAX_ATTEMPTS` 5. A buffer, not a log: a failure nobody could be told
+    about for three days has been overtaken by events, and a report that will not
+    send after five tries is not going to start working;
+  * the user is now **told**, in a fixed phrase (no error text may enter the live
+    session): the report is being held and will go out when they are away;
+  * `flush_pending()` delivers **one** report when the moment allows — a single
+    idle check, never a wait, never a focus steal. One per call because
+    `ask_async` leaves the bridge busy, so draining in a loop would collide with
+    itself; at four reports a day, one per idle moment drains it many times over;
+  * delivery then spends the cooldown and the daily slot, which is the same rule
+    `_unmark` protects from the other side: **the budget is spent by reports that
+    arrive.** The file is removed on success only, so a crash mid-send retries.
+
+**The gate's invariants were re-checked across the new store, not assumed.** The
+queue is a new place a report is written to disk and later re-sent, so the module's
+central property — what reaches Claude's chat input holds only values Era's code
+controls — is asserted again after a round trip through it. The off switch
+(`ERA_CLAUDE_AUTOREPORT=0`, and never under pytest) gates the flush too, or the
+queue would have become a way around the off switch; it holds the report rather
+than discarding it.
+
+**Where the tick lives, and the dead end I nearly built.** A queue needs draining.
+The obvious host was `core/background_manager.py` — and it has **zero importers**
+outside its own tests, exactly like the `src/fast_local_vision.py` the board has
+open for Karim. A flush registered there would never have run, while passing its
+own unit tests forever. It is now on the board as a second instance of that
+pattern.
+
+The tick went instead into `_monitor_idle_state` (`app/era_live/reconnect_mixin.py`),
+the one loop Era genuinely runs on a timer — off-thread because the send blocks,
+throttled to 60s because that loop ticks every 5s, and `try`-wrapped because this
+task owns standby and a fault in error *reporting* must never be the thing that
+stops Era idling. It is called **twice**: at the top of the body, and inside the
+standby wait. The second is not redundant and is the case that matters most —
+standby means the user is provably away, and without it the queue would wait for
+them to come *back*, at which point they are at the keyboard again and the router
+rightly refuses to send.
+
+`notify` is deliberately `None` on that path: the user was already told the report
+was held, this fires when they are away, and speaking into an empty room is the
+exact thing the standby comment in that loop warns about.
+
+**3. Item 18 — `pytest-timeout`, with the one exception measured rather than guessed.**
+
+Installed (both requirements files) and wired in `pytest.ini` at `timeout = 120`.
+120s is headroom over a measured figure, not a preference: the slowest real test is
+19.0s and the 15 slowest are all deliberate-timeout paths under 20s.
+
+The naive wiring would have broken the suite. `tools/test_zz_check_gate.py`
+shells out with its own `timeout=600` and "alone can exceed the rest combined", so
+a flat 120s would have killed the suite's slowest *legitimate* test and reported it
+as a hang. It carries `@pytest.mark.timeout(660)` instead — above its own ceiling,
+so that ceiling stays the thing that bounds it — rather than lifting the limit for
+all 5,300 tests to suit one of them.
+
+**A wrong decision of my own, corrected before it landed.** I first set
+`timeout_method = thread`, on the reasoning that SIGALRM does not exist on Windows
+so `signal` would silently do nothing there. That reasoning is **false**, and
+reading `pytest_timeout` rather than trusting it is what showed so:
+`HAVE_SIGALRM = hasattr(signal, "SIGALRM")` already selects `signal` on Unix and
+`thread` on Windows by itself. Pinning `thread` for Windows' benefit would have
+thrown away the rest of the run everywhere else — `thread` ends the process,
+`signal` fails the one test and lets the other 5,300 finish. The setting is now
+deliberately absent, and the reason is written in `pytest.ini` so it is not
+"fixed" again.
+
+Both semantics the wiring depends on were verified rather than assumed: the ini
+ceiling is really in effect (`config.getini("timeout")` → 120.0), and a marker
+really does beat a tighter ceiling (a `@pytest.mark.timeout(30)` test survives
+`--timeout=1`). And the mechanism does what item 18 wanted: a hung test now dies
+and **names itself** — `Failed: Timeout (>3.0s) from pytest-timeout`.
+
+**Verification, and what this container could NOT prove.**
+
+    tools/test_claude_bridge.py                 53 passed  (35 + exactly the 18 added)
+    era_gate.py --changed <the three files>      ruff format PASS, ruff lint PASS,
+                                                 manifest PASS,
+                                                 928 passed, 15 skipped, 8 failed
+    ruff format --check .                        692 files already formatted
+    ruff check .                                 All checks passed
+
+**Every one of the 18 new tests was proven load-bearing** against the pre-fix code,
+which is the only thing that makes them worth having: the give-up path was reverted
+to dropping-and-silence and **11 failed**; the call site in the idle loop was
+deleted and the wire test failed. The `write_details` test was red in the repo
+before the fix, so it proved itself.
+
+**This session ran on Linux, and Era is a Windows program — so the gate's last two
+reds are the container, not the code, and that claim was tested rather than
+asserted.** All 8 failures were reproduced on a **clean stash** of this tree: five
+`test_file_candidates` cases asserting Windows paths (`'...\\app\\era_live\\audio.py'
+is not in the subpath`), `test_local_fallback` wanting local models, a
+`test_protocol_one` traceback frame, and `test_ads_dispatch`
+`test_route_order_is_each_profile_direct_then_the_gateway`. None is mine. Likewise
+`era_doctor` reads NOT READY here for 3 environmental errors only — no
+`C:\Users\nesri\.claude-freelance`, no OneDrive vault at
+`/root/OneDrive/.../era_brain` — where it reads READY on Karim's machine.
+
+So what is **owed on Windows**: one `era_gate.py --all` run. The per-test ceiling is
+the change that touches all 5,300 tests, and only a full Windows run can show that
+none of them sits between 20s and 120s where this container's 928 cannot see it.
+That is the single check left on both items.
+
+**Two things noticed in passing, written down rather than rediscovered.**
+
+  * `core/claude_error_router.py` is now **497 lines**, against this project's
+    500-line rule. It is under, but only just: the next addition to it has to split
+    it rather than extend it. The natural seam is the pending queue — `_queue_pending`
+    / `_list_pending` / `flush_pending` / `_flush_once` are a store with one job and
+    no dependency on the streak logic above them.
+  * `test_ads_dispatch::test_route_order_is_each_profile_direct_then_the_gateway`
+    fails on a plain `AssertionError`, not an import or a path — unlike the other
+    seven it is not obviously a platform artifact. It is pre-existing and outside
+    both items, so it was left alone, but it is the one of the eight worth a look
+    on Windows.
+
+---
+
 ### 2026-09-29 · Item 17 — measured first; the premise did not survive, so the scope changed
 **Objectives:** 8 — measured, then built to Karim's decision (read-only asks only)
 

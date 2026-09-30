@@ -484,7 +484,10 @@ def test_router_ignores_benign_and_itself(router):
         assert r.note_failure("claude_bridge", "ask", "Error", "no") is None
 
 
-def test_router_drops_report_when_user_never_goes_idle(monkeypatch, tmp_path):
+def test_router_never_steals_focus_from_a_busy_user(monkeypatch, tmp_path):
+    """Renamed from test_router_drops_report_when_user_never_goes_idle: the drop
+    was the defect (board 17c), the no-focus-stealing is the invariant. Their next
+    keystrokes would land in Claude's chat box, so this must never send here."""
     monkeypatch.setattr(router_mod, "DEFER_MAX_S", 0.2)
     monkeypatch.setattr(router_mod, "DEFER_POLL_S", 0.05)
     fb = FakeBridge()
@@ -576,3 +579,271 @@ def test_the_written_details_file_survives_giving_up(monkeypatch, tmp_path):
 
 def test_router_is_off_under_pytest_by_default():
     assert router_mod.enabled() is False
+
+
+# ── board item 17c: a report the user was too busy to see is HELD, not lost ───
+
+
+def _busy_router(monkeypatch, tmp_path, idle=0.0):
+    """A router whose defer window expires almost at once, so the give-up path
+    is reachable in a test instead of after 30 real minutes."""
+    monkeypatch.setattr(router_mod, "enabled", lambda: True)
+    monkeypatch.setattr(router_mod, "DEFER_MAX_S", 0.2)
+    monkeypatch.setattr(router_mod, "DEFER_POLL_S", 0.05)
+    fb = FakeBridge()
+    r = router_mod.ErrorRouter(bridge_factory=lambda: fb, state_dir=tmp_path, idle_fn=lambda: idle)
+    return r, fb
+
+
+def test_giving_up_queues_the_report_instead_of_dropping_it(monkeypatch, tmp_path):
+    """The headline defect of board item 17c. Waiting out DEFER_MAX_S used to
+    DISCARD the report, and that happens precisely when the user has been at the
+    keyboard for 30 minutes — so the reports thrown away were the ones raised
+    while they were working, which is when a sustained failure matters most."""
+    r, fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._dispatch("the report body", "open_app", None, "open_app|launch|Error")
+    assert fb.asked == [], "it stole focus from someone typing"
+    assert r.pending_count() == 1, "the report was dropped"
+    ((_path, data),) = r._list_pending()
+    assert data["report"] == "the report body"
+
+
+def test_giving_up_tells_the_user(monkeypatch, tmp_path):
+    """The other half of the silence: the give-up was announced only to stdout,
+    so the one person who could act on it — sitting right there at the keyboard —
+    was the one person not told."""
+    said: list[str] = []
+    r, _fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._dispatch("the report body", "open_app", said.append, "open_app|launch|Error")
+    assert said, "the user was told nothing"
+    assert "open_app" in said[0]
+    # A fixed phrase: this goes into the live session, so the report body (which
+    # quotes error text) must not ride along.
+    assert "the report body" not in said[0]
+
+
+def test_a_queued_report_is_delivered_once_the_user_is_away(monkeypatch, tmp_path):
+    """Holding it is only half a fix; it has to actually arrive."""
+    idle = [0.0]
+    monkeypatch.setattr(router_mod, "enabled", lambda: True)
+    monkeypatch.setattr(router_mod, "DEFER_MAX_S", 0.2)
+    monkeypatch.setattr(router_mod, "DEFER_POLL_S", 0.05)
+    fb = FakeBridge()
+    r = router_mod.ErrorRouter(
+        bridge_factory=lambda: fb, state_dir=tmp_path, idle_fn=lambda: idle[0]
+    )
+    r._dispatch("the report body", "open_app", None, "open_app|launch|Error")
+    assert r.pending_count() == 1 and fb.asked == []
+    assert r.flush_pending() is False, "sent while the user was still typing"
+    idle[0] = 999
+    assert r.flush_pending() is True
+    assert fb.asked == ["the report body"]
+    assert r.pending_count() == 0
+
+
+def test_delivering_a_queued_report_spends_its_budget(monkeypatch, tmp_path):
+    """The mirror of _unmark, and the reason the release is safe: the budget is
+    released while nothing has arrived, and spent the moment one does."""
+    key = "open_app|launch|Error"
+    r, _fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._mark(key, time.time())
+    r._dispatch("body", "open_app", None, key)
+    assert r._allowed(key, time.time()) is True, "nothing was delivered, yet it cost the cooldown"
+    r._idle_fn = lambda: 999
+    assert r.flush_pending() is True
+    assert r._allowed(key, time.time()) is False, "a delivered report must cost its cooldown"
+
+
+def test_the_queue_is_deduplicated_by_fingerprint(monkeypatch, tmp_path):
+    """Five copies of one failure is not five findings, and the newest copy has
+    the most recent evidence."""
+    r, _fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    for i in range(4):
+        r._dispatch(f"body {i}", "open_app", None, "open_app|launch|Error")
+    assert r.pending_count() == 1
+    ((_p, data),) = r._list_pending()
+    assert data["report"] == "body 3", "the newest evidence should win"
+
+
+def test_the_queue_is_bounded(monkeypatch, tmp_path):
+    """A buffer, not a log: an unbounded queue would turn a bad day into a
+    backlog Era delivers days later."""
+    r, _fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    for i in range(router_mod.PENDING_MAX + 4):
+        r._dispatch(f"body {i}", f"tool{i}", None, f"tool{i}|a|Error")
+    assert r.pending_count() == router_mod.PENDING_MAX
+
+
+def test_a_stale_queued_report_is_dropped(monkeypatch, tmp_path):
+    """A failure nobody could be told about for three days has been overtaken by
+    events; delivering it then is noise, not news."""
+    r, _fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._dispatch("body", "open_app", None, "open_app|launch|Error")
+    ((path, data),) = r._list_pending()
+    data["queued_at"] = time.time() - router_mod.PENDING_MAX_AGE_S - 1
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert r.pending_count() == 0 and not path.exists()
+
+
+def test_a_report_that_will_not_send_is_abandoned_after_a_few_tries(monkeypatch, tmp_path):
+    """Never a dead end, but never an infinite retry either."""
+    r, fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._dispatch("body", "open_app", None, "open_app|launch|Error")
+
+    def _boom(*_a, **_k):
+        raise cb.BridgeError("the window is gone")
+
+    fb.ask_async = _boom
+    r._idle_fn = lambda: 999
+    for _ in range(router_mod.PENDING_MAX_ATTEMPTS):
+        assert r.pending_count() == 1, "abandoned too early"
+        r.flush_pending()
+    assert r.pending_count() == 0, "a report that will not send must not retry forever"
+
+
+def test_a_failed_flush_keeps_the_report_for_the_next_try(monkeypatch, tmp_path):
+    """The file is removed on success only, so a crash mid-send retries."""
+    r, fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._dispatch("body", "open_app", None, "open_app|launch|Error")
+
+    def _boom(*_a, **_k):
+        raise cb.BridgeError("no window")
+
+    fb.ask_async = _boom
+    r._idle_fn = lambda: 999
+    r.flush_pending()
+    assert r.pending_count() == 1
+    ((_p, data),) = r._list_pending()
+    assert int(data["attempts"]) == 1
+
+
+def test_flush_does_nothing_when_the_queue_is_empty(monkeypatch, tmp_path):
+    r, fb = _busy_router(monkeypatch, tmp_path, idle=999)
+    assert r.flush_pending() is False and fb.asked == []
+
+
+def test_flush_respects_the_off_switch(monkeypatch, tmp_path):
+    """ERA_CLAUDE_AUTOREPORT=0 (and pytest) gates the queue too, or it would
+    become a way around the off switch. Held, not lost."""
+    r, fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    r._dispatch("body", "open_app", None, "open_app|launch|Error")
+    r._idle_fn = lambda: 999
+    monkeypatch.setattr(router_mod, "enabled", lambda: False)
+    assert r.flush_pending() is False and fb.asked == []
+    assert r.pending_count() == 1, "the off switch must hold the report, not discard it"
+
+
+def test_a_queued_report_never_carries_untrusted_text(monkeypatch, tmp_path):
+    """The queue is a new place a report is stored and later re-sent, so the
+    module's core invariant is re-checked across it: what reaches Claude's chat
+    input holds only values Era's code controls."""
+    r, fb = _busy_router(monkeypatch, tmp_path, idle=0)
+    fp = ("web_search", "search", "Error")
+    details = router_mod.write_details(tmp_path, fp, [{"ts": time.time(), "message": INJECTION}])
+    report = router_mod.build_report(fp, [{"ts": time.time()}], details)
+    assert INJECTION not in report
+    r._dispatch(report, "web_search", None, "web_search|search|Error")
+    r._idle_fn = lambda: 999
+    assert r.flush_pending() is True
+    assert INJECTION not in fb.asked[0]
+
+
+def test_write_details_survives_an_event_without_a_timestamp(tmp_path):
+    """`ev["ts"]` raised KeyError, and `_note` funnels that straight into
+    note_failure's catch-all ("ignored") — so ONE malformed event silently
+    discarded the whole sustained-failure report. A missing timestamp is a
+    cosmetic defect in one line of a file; it must never cost the report."""
+    fp = ("open_app", "launch", "Error")
+    path = router_mod.write_details(tmp_path, fp, [{"message": "boom"}])
+    assert path.is_file() and "boom" in path.read_text(encoding="utf-8")
+    assert "open_app" in router_mod.build_report(fp, [{"message": "x"}], path)
+
+
+# ── board item 17c: the tick that actually drains the queue ───────────────────
+
+
+def _ticker():
+    """The idle monitor's host object, with nothing else of EraLive attached."""
+    from app.era_live.reconnect_mixin import ReconnectMixin
+
+    class Ticker(ReconnectMixin):
+        pass
+
+    return Ticker()
+
+
+def test_the_idle_tick_delivers_a_held_report(monkeypatch):
+    """Queueing a report only helps if something later drains the queue. Without
+    this tick a held report would wait for the next STREAK of the same failure —
+    so a failure that had stopped recurring would never be reported at all."""
+    done = threading.Event()
+    monkeypatch.setattr(router_mod, "pending_count", lambda: 1)
+    monkeypatch.setattr(router_mod, "flush_pending", lambda *a, **k: done.set())
+    _ticker()._maybe_flush_error_reports()
+    assert done.wait(5), "a held report was never delivered"
+
+
+def test_the_idle_tick_is_throttled(monkeypatch):
+    """The idle monitor ticks every 5s. Reading the queue that often is waste."""
+    checks: list[int] = []
+    monkeypatch.setattr(router_mod, "pending_count", lambda: (checks.append(1), 0)[1])
+    t = _ticker()
+    for _ in range(4):
+        t._maybe_flush_error_reports()
+    assert len(checks) == 1
+
+
+def test_the_idle_tick_is_free_when_nothing_is_held(monkeypatch):
+    sent: list[int] = []
+    monkeypatch.setattr(router_mod, "pending_count", lambda: 0)
+    monkeypatch.setattr(router_mod, "flush_pending", lambda *a, **k: sent.append(1))
+    _ticker()._maybe_flush_error_reports()
+    assert sent == []
+
+
+def test_a_reporting_fault_never_stops_the_idle_monitor(monkeypatch):
+    """This task owns standby. A fault in error REPORTING must never be the thing
+    that stops Era idling — that would trade a missed report for a broken loop."""
+
+    def _boom():
+        raise RuntimeError("the ledger is unreadable")
+
+    monkeypatch.setattr(router_mod, "pending_count", _boom)
+    _ticker()._maybe_flush_error_reports()  # must not raise
+
+
+async def test_the_idle_loop_actually_calls_the_flush_tick(monkeypatch):
+    """The wire itself, not just the helper.
+
+    `core/background_manager.py` is the cautionary tale: it has no importers, so
+    a flush registered there would have been dead code that always passed its own
+    unit tests. This drives the real `_monitor_idle_state` and asserts the tick
+    is reached, so the queue provably drains in production and not only here.
+    """
+    import asyncio as _aio
+
+    t = _ticker()
+    t._go_away_event = threading.Event()
+    t._standby_active = True  # shortest path through the body, after the tick
+    called = threading.Event()
+    monkeypatch.setattr(t, "_maybe_flush_error_reports", called.set)
+
+    real_sleep = _aio.sleep
+
+    async def _nosleep(_seconds):
+        await real_sleep(0)  # still yields, so the loop cannot starve the test
+
+    monkeypatch.setattr(_aio, "sleep", _nosleep)
+    task = _aio.create_task(t._monitor_idle_state())
+    try:
+        for _ in range(500):
+            if called.is_set():
+                break
+            await real_sleep(0.002)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except _aio.CancelledError:
+            pass
+    assert called.is_set(), "the idle loop never reaches the flush tick"

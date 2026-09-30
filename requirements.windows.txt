@@ -37,6 +37,7 @@ keyboard
 spotipy
 vosk
 pytest
+pytest-timeout
 apscheduler
 ruamel.yaml
 # Gmail lane (core/gmail_service.py) — optional; Era runs without them.
