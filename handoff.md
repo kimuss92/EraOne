@@ -127,11 +127,21 @@ and **names itself** — `Failed: Timeout (>3.0s) from pytest-timeout`.
     ruff format --check .                        692 files already formatted
     ruff check .                                 All checks passed
 
-**Every one of the 18 new tests was proven load-bearing** against the pre-fix code,
-which is the only thing that makes them worth having: the give-up path was reverted
-to dropping-and-silence and **11 failed**; the call site in the idle loop was
-deleted and the wire test failed. The `write_details` test was red in the repo
-before the fix, so it proved itself.
+**13 of the 18 new tests were proven load-bearing** against the pre-fix code, which
+is the only thing that makes them worth having: the give-up path was reverted to
+dropping-and-silence and **11 failed**; the call site in the idle loop was deleted
+and the wire test failed; and the `write_details` test was red in the repo before
+the fix, so it proved itself.
+
+Being exact about the other five, because "18 of 18" is the kind of round number
+that hides a gap: they cover the tick's throttle, its empty-queue case, its
+try-wrapping, and the flush's empty-queue and off-switch cases. Those would all
+fail against pre-fix code too, but only with `AttributeError` — the methods did not
+exist — so they demonstrate nothing about behaviour. They are bounds on NEW code
+(don't hit the disk every 5s, don't raise into the loop that owns standby, don't
+become a way around the off switch), which is worth testing and is not the same
+claim. The first draft of this entry, and PR #1's description, both said "all 18";
+that was wrong in a way the arithmetic underneath it (11 + 1 + 1) already showed.
 
 **This session ran on Linux, and Era is a Windows program — so the gate's last two
 reds are the container, not the code, and that claim was tested rather than
