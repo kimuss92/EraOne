@@ -8,6 +8,63 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · The first fixture measurement, and the two mistakes it exposed
+**Objectives:** 11 — board item 36
+
+Karim ran the measurement. It worked, and it failed usefully:
+
+    entries 50   top-1 7/12   top-3 10/12   noise 1/8   ('showroom' -> ['job'])
+
+Both problems are the fixture's, not the feature's, and they are the same
+mistake seen from two sides.
+
+**1. Invented proper nouns are semantically empty.** `current_city` was
+"Rivermouth" and `favorite_football_team` was "Northgate Rovers". An embedding
+model has never seen either, so they embed as noise and semantic recall could
+never reach them — `"where do I live"` returned only the lexical trap
+(`live_ui_feed_plan`) and the real answer appeared nowhere in the top 5. The real
+store has **Tunis**, which the model knows IS a city, and that is exactly why
+recall worked there and not here. **Synthetic has to mean "not his", not "not
+real".** Now Bristol (a real city, deliberately not a capital, because "the
+capital of Peru" is one of the 8 queries that must return nothing) and Ajax (a
+real club, not a national team, because "who won the 1998 world cup" is another).
+
+**2. A value can be semantically adjacent to a banned topic without containing
+the word.** `job` was "runs a fitted-kitchen and wardrobe studio" — a business
+PREMISES, which sits almost on top of **"showroom"**. My guard scanned the file
+for the literal word and semantics walked straight past it. The telling detail is
+the inversion: `"showroom"` found `job`, while `"what do I do for a living"`
+returned nothing at all. The value was closer to the query that must fail than to
+the one that must succeed. Now "works as a secondary-school mathematics teacher"
+— phrased as an occupation and moved out of the interiors domain entirely so it
+cannot drift back.
+
+**Nothing mechanical can catch that second class.** `test_the_fixture_stays_clean`
+checks literal words; semantic proximity needs the model. So it is caught only by
+the measurement run, which is why the runner prints "NOISE (must be empty)"
+instead of folding it into a pass/fail. Both rules are now written into the test
+module's header so the next person does not rediscover them.
+
+**The lexical baseline did not move, and that was checked rather than assumed.**
+After the rewrite: top-1 **5/12**, top-3 **10/12**, noise **0/8**, with all seven
+lexical misses identical. The three values changed were semantically empty AND
+lexically irrelevant — no query token overlaps "Rivermouth", "Northgate Rovers"
+or "studio" — so `FIXTURE_LEXICAL_TOP1/TOP3` and `test_the_traps_actually_trap`
+needed no edit. Only the semantic half should move.
+
+**What the 7/12 already told us, and it is not bad news.** Against the old
+fixture, semantic recall lifted top-1 from 5 to 7 while two of the three targets
+it could not reach were unreachable BY CONSTRUCTION (meaningless values). The
+comparable figure on the real store is 6 -> 9. So the feature was working; the
+corpus was handicapping it.
+
+**Floors still unbaked.** `FIXTURE_TOP1` / `FIXTURE_TOP3` stay `None` until a run
+on the corrected fixture reports noise 0/8. Baking a floor off a run that also
+reported noise would be recording a number measured under a condition the test
+forbids.
+
+---
+
 ### 2026-09-30 · The item-36 measurement would not run, and the reason is a production defect
 **Objectives:** 11 — board items 36 (unblock) and 41 (new)
 

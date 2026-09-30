@@ -103,6 +103,25 @@ UNANSWERABLE = [
 #   the test stable by putting Karim's birthday, city and family details in the
 #   repository, which is a worse trade than the flakiness it fixes.
 #
+# SYNTHETIC MEANS "NOT HIS", NOT "NOT REAL" — learned the hard way, 2026-09-30
+#   The first version used invented proper nouns: current_city "Rivermouth",
+#   favorite_football_team "Northgate Rovers". An embedding model has never seen
+#   those, so they embed as noise and semantic recall could NEVER reach them —
+#   "where do I live" returned nothing but the lexical trap. The real store has
+#   "Tunis", which the model knows IS a city, and that is precisely why recall
+#   worked there. Values must therefore be real-world terms the model has seen,
+#   chosen so they are not Karim's: Bristol, not Rivermouth; Ajax, not a club he
+#   follows.
+#
+#   The same run showed the second half of the rule. `job` was "runs a
+#   fitted-kitchen and wardrobe studio" — a business PREMISES, which sits almost
+#   on top of "showroom", one of the 8 queries that must return NOTHING. It
+#   leaked noise 1/8 while still failing "what do I do for a living". The
+#   banned-topic scan in test_the_fixture_stays_clean only catches the literal
+#   WORD; nothing here can catch semantic proximity without a model, so a value
+#   near an UNANSWERABLE topic is caught only by the measurement run itself.
+#   That is why the runner prints "NOISE (must be empty)" rather than hiding it.
+#
 #   Live recall against his ACTUAL memory is still covered — by board item 30b,
 #   the acceptance test a unit test cannot make: tell her on Monday, ask on
 #   Friday, after restarts.
