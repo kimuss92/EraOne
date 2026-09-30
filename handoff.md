@@ -8,6 +8,136 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · "DEGRADED" was the threshold talking — Gemini's 5xx was being logged as an Era crash
+**Objectives:** 10, 1, 4 — board item 37, from Karim's `diag_20260930_150251.md`
+
+Self-diagnosis reported **DEGRADED / "system integrity appears degraded"** on six
+signatures: 18 `engine.crash` (Google GenAI internal errors during audio
+reception), 4 `file_controller` failures on non-existent paths, several
+`scheduled_task` not-found failures, and one unhandled `email` exception in OAuth.
+
+**The verdict was arithmetic, not a measurement.** `verdict_for`:
+
+    crashes = sum(... startswith(("engine.crash", "engine.reconnect_error")))
+    if crashes >= 5 or total >= 50:  return "DEGRADED"
+
+18 `engine.crash` forces DEGRADED with certainty, whether or not Era recovered
+from every one. It did recover from every one.
+
+**Root cause: recovery and severity are decided by different code, and only one
+of them knew about provider 5xx.** `_classify_disconnect` falls through to
+`"transient"` for anything unrecognised, so the reconnect loop handled these
+correctly all along. Severity is decided separately by `_is_network_blip`, whose
+marker list covers `1006`, `connection reset`, `winerror 64/1231/1232`,
+`getaddrinfo failed` — and **not** `internal error` or `500`. So a Google-side 500
+fell through to `log_crash(...)` and minted a CRITICAL `engine.crash` per
+occurrence.
+
+That this was an oversight rather than a decision is settled by the codebase
+disagreeing with itself: `core/ai_provider.py` already listed `"500"` AND
+`"internal error"` in `_TRANSIENT_MARKERS`, and `gemini_generate.py`,
+`claude_cli.py` (`500: "transient"`) and `openai_compat.py` (`_RETRY_CODES`) all
+agree. `_is_network_blip` was the only one that missed it — and its own docstring
+describes this exact failure mode for a flaky connection: *"a flaky connection
+produced a stream of fake crashes — which then drove Era's own self-diagnosis to a
+'Degraded' verdict with no real defect behind it."* The precedent at
+`self_diagnosis.py:275` is the same story for 1011s.
+
+**What changed.**
+
+  * `core/ai_provider.py` — the marker list and predicate are now **exported**
+    (`TRANSIENT_SERVER_MARKERS`, `QUOTA_MARKERS`, `is_transient_server_error`)
+    rather than copied. A second copy is exactly how `NETWORK_MARKERS` in
+    self_diagnosis drifted from its source and left `WinError 1231` mis-reported
+    for weeks. One list, three consumers.
+  * `ReconnectMixin._is_upstream_service_error` — severity only, same contract as
+    `_is_network_blip`. **Not** folded into it: a Wi-Fi drop is the user's network,
+    a 500 is Google's servers, and logging both as `engine.network.blip` would make
+    an upstream outage indistinguishable from a bad cable. EVERY leaf must match,
+    mirroring the existing rule that an ExceptionGroup also holding a
+    `PortAudioError` is a real audio fault and must stay loud.
+  * `audio.py` (`_receive_audio` — where Karim's 18 came from) and `main.py`
+    (`run_connect_loop`) — a new quiet branch logging `engine.upstream.error` at
+    WARNING instead of a CRITICAL crash.
+  * `self_diagnosis.py` — classifies both the new event and the `engine.crash`
+    lines **already in era.log** (tagging is not retroactive, the same reason
+    `NETWORK_MARKERS` exists), reusing the imported markers and inheriting their
+    quota veto, so a 429 can never be dismissed as a transient blip.
+
+**The dismissal is not a blind spot, which was the condition for making it.**
+18 recovered drops is still 18 interrupted conversations, so `verdict_for` now
+takes the suppressed list and reports the 24h upstream RATE: at
+`_UPSTREAM_RATE_NOTE` or above it returns HEALTHY WITH ISSUES naming the count and
+that every one recovered. Not DEGRADED — Era did its job each time. The threshold
+is **12, and it is a first cut, not a measurement**: the only data point is
+Karim's 18. It is a named constant for exactly that reason.
+
+**A bug I introduced and caught while implementing it, worth recording because the
+first version of this fix was wrong.** `phase_logs` runs `_classify` first and
+`_crash_echo` only when `_classify` returned None. That was safe while no
+`engine.crash` could be classified — but the moment one could, the crash set no
+`last_crash` marker, so its `engine.reconnect_error` echo 0.1s later was counted a
+SECOND time under the same benign class. Four drops would read as eight and the
+rate note would fire at half its intended threshold — the very double-count
+`_crash_echo` was written to stop, reappearing one level up. `_crash_echo` now runs
+unconditionally and its verdict wins. Proven load-bearing: reverting just that
+ordering fails `test_crash_and_its_reconnect_echo_count_once`.
+
+**The other three signatures, and why only one of them is a defect.**
+
+  * `file_controller`, non-existent paths (4) — **not a defect.** The board's own
+    `_ALREADY_IMPLEMENTED` note: *"`tool.execution.failed` covers ANY tool
+    returning a failure, including a user cancelling a confirmation or a file that
+    does not exist — not only bugs."* Era reporting honestly, counted as a fault.
+  * `scheduled_task` not found — **not a defect.** `ts.TaskError` is the designed
+    channel and `scheduled_task()` catches it into `_fail()`. Its own comment notes
+    the task name "is often one the model made up", which is the likely cause.
+  * **1 unhandled `email` exception in OAuth — the one real finding, and it is NOT
+    fixed here.** `core/gmail_service.py:12` states the module invariant:
+    *"Nothing raises. Every entry point returns a result dict"*, so an unhandled
+    exception violates its own contract. But every OAuth path reachable by reading
+    is already guarded — token load (`gmail_auth.py:175`), refresh (`:184`),
+    `InstalledAppFlow.run_local_server` (`:270`), and the watcher loop
+    (`gmail_watcher.py:126`, *"the loop must never die"*). It is escaping somewhere
+    the code does not show, and the report records the deepest repo frame as
+    `location`. Guessing at a fix without that line would be inventing one. On the
+    board as item 38.
+
+**Verification.**
+
+    tools/test_protocol_one.py                   50 passed, 1 failed (pre-existing)
+    era_gate.py --changed <the five modules>     ruff format PASS, ruff lint PASS,
+                                                 manifest PASS,
+                                                 1,592 passed, 15 skipped, 17 failed
+    ruff check .                                 All checks passed
+
+**All 17 gate failures are byte-identical before and after**, established by
+stashing the change and re-running the same files: `comm` on the two sorted lists
+is empty in both directions. Zero introduced, zero accidentally fixed. They are the
+container's Windows-path and local-model artifacts (`test_file_candidates`,
+`test_youtube_direct_play`, `test_file_processor_edit`, `test_browser_media_routing`,
+`test_local_fallback`, `test_ads_dispatch`, and the `test_protocol_one` traceback
+frame). `era_doctor` reads NOT READY here for the same 3 environmental reasons as
+before.
+
+**Being exact about load-bearing, since "all of them" was wrong last time:** of the
+10 tests added or changed, **5 fail against pre-fix code** — the two classification
+tests, the rate-signal-reads-what-phase_logs-writes test, and the echo-count test
+(which fails for two independent reasons, the classification and the ordering). The
+other 5 are negative controls that pass either way by design: quota is not
+dismissed, a group holding a real fault stays visible, a real engine fault is still
+a crash, a handful of upstream errors stays quiet, and the Live gate agrees with the
+classifier (that last one would fail pre-fix only with `AttributeError`, since the
+method did not exist).
+
+**What this cannot be verified against here.** No Windows, no live era.log with real
+Gemini 5xx text. The classification is pinned against the exact string from Karim's
+own logs (`"1011 None. Internal error encountered."`, already in the suite's
+fixture) and against `"APIError: 500 INTERNAL. Internal error encountered."`, but
+the proof that the verdict flips on his machine is his next `self_diagnosis` run.
+
+---
+
 ### 2026-09-30 · The first Windows `--all` after 34+35 — one red, and it is the test, not the code
 **Objectives:** 11, 1 — board item 36
 

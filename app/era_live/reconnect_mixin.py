@@ -465,6 +465,38 @@ class ReconnectMixin:
     #   and hand it straight back on the way up (_resume_after_disconnect).
 
     @classmethod
+    def _is_upstream_service_error(cls, exc: BaseException) -> bool:
+        """True if `exc` is Gemini failing on ITS side, not Era malfunctioning.
+
+        Severity only, exactly like `_is_network_blip` above: `_classify_disconnect`
+        still calls these "transient" and the reconnect loop handles them
+        unchanged. What changes is that they stop being logged as crashes.
+
+        WHY THIS EXISTS. A Google-side 500 ("Internal error encountered") arriving
+        mid-`receive()` fell through every branch and was logged as a CRITICAL
+        `engine.crash` with a full traceback. `verdict_for` in
+        actions/self_diagnosis.py reads `crashes >= 5` as DEGRADED, so 18 upstream
+        errors in 24h mechanically produced "system integrity degraded" with no
+        defect behind it (observed 2026-09-30). `_is_network_blip`'s own docstring
+        describes that failure mode for a flaky connection; the provider's own 5xx
+        was never added to it.
+
+        It is NOT folded into `_is_network_blip` because these are different
+        events: the network dropping is the user's Wi-Fi, a 500 is Google's
+        servers. Logging both as `engine.network.blip` would make an upstream
+        outage indistinguishable from a bad cable, and the rate of one says
+        nothing about the other.
+
+        EVERY leaf must be an upstream error, mirroring the same rule for network
+        blips in self_diagnosis: an ExceptionGroup that also holds a
+        PortAudioError is a real audio fault and must stay loud.
+        """
+        from core.ai_provider import is_transient_server_error
+
+        leaves = cls._flatten_exc(exc)
+        return bool(leaves) and all(is_transient_server_error(leaf) for leaf in leaves)
+
+    @classmethod
     def _is_resumption_rejection(cls, exc: BaseException) -> bool:
         """True if the server refused our RESUMPTION HANDLE specifically.
 

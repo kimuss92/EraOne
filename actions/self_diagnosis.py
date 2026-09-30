@@ -89,6 +89,53 @@ _SHUTDOWN_RACE_MARKER = "interpreter shutdown"
 
 _FRAME = re.compile(r'File "([^"]+)", line (\d+), in (\S+)')
 
+# The provider failing on its own side, matched on LOGGED TEXT — self-diagnosis
+# reads era.log, so it cannot use the exception-object predicate the Live session
+# uses (ReconnectMixin._is_upstream_service_error). The marker list is IMPORTED
+# rather than copied: NETWORK_MARKERS above is a copy, and keeping two in step is
+# how "WinError 1231" stayed mis-reported for weeks.
+_UPSTREAM_BENIGN_CLASS = "upstream_service_error"
+
+# How many recovered upstream errors in the 24h window stop being "expected" and
+# become worth saying out loud. A FIRST CUT, not a measurement: the only data
+# point is the 18 seen on 2026-09-30, all of which Era recovered from. It is a
+# named constant so it can be retuned once there is a baseline for a normal day.
+_UPSTREAM_RATE_NOTE = 12
+
+_SUPPRESSED_LINE = re.compile(r"^\s*(\d+)x\s+(\S+)")
+
+
+def _is_upstream_text(text: str) -> bool:
+    """True if this logged error text is the provider's own 5xx.
+
+    Shares `core.ai_provider`'s marker list so there is ONE definition of "the
+    service failed on its side", and inherits its quota veto — a 429 must not be
+    dismissed as a transient blip, because quota needs a key rotation or a long
+    cooldown, not a reconnect.
+    """
+    from core.ai_provider import QUOTA_MARKERS, TRANSIENT_SERVER_MARKERS
+
+    low = text.lower()
+    if any(m in low for m in QUOTA_MARKERS):
+        return False
+    return any(m in low for m in TRANSIENT_SERVER_MARKERS)
+
+
+def suppressed_count(suppressed: list[str] | None, klass: str) -> int:
+    """Total occurrences of one benign class in `phase_logs`' suppressed list.
+
+    Parses the `"{n}x  {cls} — why"` lines that `phase_logs` builds a few
+    functions below. Producer and consumer are both in this file, and
+    `test_the_rate_signal_reads_what_phase_logs_writes` pins them together so the
+    format cannot drift apart silently.
+    """
+    total = 0
+    for line in suppressed or []:
+        m = _SUPPRESSED_LINE.match(str(line))
+        if m and m.group(2) == klass:
+            total += int(m.group(1))
+    return total
+
 
 def _is_test_origin(rec: dict, raw: str) -> bool:
     path = str(rec.get("path", ""))
@@ -145,6 +192,18 @@ def _classify(event: str, level: str, rec: dict, raw: str) -> tuple[str, str] | 
                 "network_blip",
                 "Connection dropped (Wi-Fi/DNS); the reconnect loop restores the session automatically.",
             )
+        # The same all-leaves rule for the provider's own 5xx. These now log as
+        # engine.upstream.error at the source, but tagging is not retroactive —
+        # this is what reads the engine.crash lines already in era.log, exactly
+        # why NETWORK_MARKERS above exists.
+        if leaves and all(_is_upstream_text(str(x)) for x in leaves):
+            return (
+                "upstream_service_error",
+                "Gemini returned a server-side error (500 internal / 503 / overloaded); the "
+                "reconnect loop restores the session automatically. Not a defect in Era — but "
+                "the 24h RATE is checked separately in verdict_for, so a worsening upstream "
+                "is still surfaced rather than silently dismissed.",
+            )
 
     # A gate that held is the safety layer working. The router already dismisses
     # these; sharing its list keeps one source of truth, so a type added there is
@@ -163,6 +222,13 @@ def _classify(event: str, level: str, rec: dict, raw: str) -> tuple[str, str] | 
         return (
             "network_blip",
             "Connection dropped (Wi-Fi/DNS); the reconnect loop restores the session automatically.",
+        )
+
+    if event == "engine.upstream.error":
+        return (
+            "upstream_service_error",
+            "Gemini returned a server-side error (500 internal / 503 / overloaded); the reconnect "
+            "loop restores the session automatically. The 24h rate is checked in verdict_for.",
         )
 
     if _is_test_origin(rec, raw):
@@ -273,7 +339,10 @@ def _crash_echo(
     engine.reconnect_error from run_connect_loop as the SAME exception leaves the
     TaskGroup ~0.1s later. Counting both doubled every drop, so 4 upstream Gemini
     1011s read as 8 crashes and tipped the verdict to DEGRADED (2026-09-28).
-    Returns (benign verdict or None, updated last-crash marker)."""
+    Returns (benign verdict or None, updated last-crash marker).
+
+    Called for EVERY record, including crashes `_classify` has already explained,
+    so the marker is always current — see the note at the call site."""
     try:
         when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
@@ -338,8 +407,18 @@ def phase_logs(hours: int = _LOG_WINDOW_HOURS) -> tuple[list[dict], list[str]]:
         event = str(rec.get("event", ""))
         is_error = level in ("ERROR", "CRITICAL") or (not rec and _ERROR_LINE.search(raw))
         verdict = _classify(event, level, rec, raw)
-        if verdict is None and rec and ts:
-            verdict, last_crash = _crash_echo(event, rec, str(ts), last_crash)
+        if rec and ts:
+            # Run UNCONDITIONALLY, and let the echo verdict win. It used to run
+            # only for crashes _classify had not already explained, which was
+            # fine while every suppressed class was rare — but once an
+            # engine.crash could be classified (upstream_service_error, 2026-09-30)
+            # the crash set no `last_crash` marker, so its echo 0.1s later was
+            # counted a SECOND time under that same class. That is the very
+            # double-count this function exists to stop, reappearing one level up:
+            # 4 drops would read as 8, and the upstream rate note would fire at
+            # half its intended threshold.
+            echo, last_crash = _crash_echo(event, rec, str(ts), last_crash)
+            verdict = echo or verdict
         if verdict is not None:
             benign[verdict[0]] += 1
             reasons[verdict[0]] = verdict[1]
@@ -369,8 +448,19 @@ def phase_logs(hours: int = _LOG_WINDOW_HOURS) -> tuple[list[dict], list[str]]:
     return real_out, benign_out
 
 
-def verdict_for(syntax: list[str], doctor_verdict: str, logs: list[dict]) -> str:
-    """Computed, never model-written. A handful of tool failures is not 'critical'."""
+def verdict_for(
+    syntax: list[str],
+    doctor_verdict: str,
+    logs: list[dict],
+    suppressed: list[str] | None = None,
+) -> str:
+    """Computed, never model-written. A handful of tool failures is not 'critical'.
+
+    `suppressed` is optional so existing callers keep working, but passing it is
+    what stops a dismissal from becoming a blind spot: upstream 5xx no longer
+    count as crashes (they are not Era failing), and without the rate check below
+    a provider getting steadily worse would read as a clean bill of health.
+    """
     if syntax or doctor_verdict.startswith("NOT READY"):
         return "BROKEN — Era may not start or a core check fails"
     crashes = sum(
@@ -379,8 +469,22 @@ def verdict_for(syntax: list[str], doctor_verdict: str, logs: list[dict]) -> str
     total = sum(i["count"] for i in logs)
     if crashes >= 5 or total >= 50:
         return "DEGRADED — recurring engine or tool faults"
+
+    notes = []
+    upstream = suppressed_count(suppressed, _UPSTREAM_BENIGN_CLASS)
+    if upstream >= _UPSTREAM_RATE_NOTE:
+        # Recovered, so not DEGRADED — Era did its job every time. But 18 of these
+        # is 18 interrupted conversations, and saying nothing would trade one false
+        # alarm for one blind spot.
+        notes.append(
+            f"{upstream} upstream provider errors in {_LOG_WINDOW_HOURS}h, every one "
+            "recovered by the reconnect loop — not an Era fault, but that rate is "
+            "worth a look (network, region, or the Live model)"
+        )
     if total:
-        return "HEALTHY WITH ISSUES — isolated failures worth a look"
+        notes.append("isolated failures worth a look")
+    if notes:
+        return "HEALTHY WITH ISSUES — " + "; ".join(notes)
     return "HEALTHY — no unexplained errors"
 
 
@@ -474,7 +578,7 @@ def run_self_diagnosis(parameters: dict | None = None, player=None, speak=None) 
     syntax = phase_syntax()
     doctor_verdict, doctor = phase_doctor()
     logs, suppressed = phase_logs()
-    verdict = verdict_for(syntax, doctor_verdict, logs)
+    verdict = verdict_for(syntax, doctor_verdict, logs, suppressed)
     analysis: list[dict] = []
     if deep:
         try:

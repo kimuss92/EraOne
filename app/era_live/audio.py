@@ -863,6 +863,24 @@ class AudioIOMixin:
                     error_type=type(e).__name__,
                     error=str(e)[:200],
                 )
+            elif self._is_upstream_service_error(e):
+                # Gemini failed on its own side (500 "Internal error encountered",
+                # 503, overloaded). run()'s handler reconnects exactly as it does
+                # for a rotation or a blip, so this was never a crash — but it
+                # fell through to log_crash below and minted a CRITICAL
+                # engine.crash per occurrence, which is what drove self-diagnosis
+                # to DEGRADED on 2026-09-30 with nothing wrong. Kept as its own
+                # event, NOT engine.network.blip: an upstream outage and a bad
+                # Wi-Fi connection need to stay countable apart.
+                print(f"[era] [UPSTREAM] Recv: Gemini service error ({e}); reconnecting.")
+                log_event(
+                    main_logger,
+                    "engine.upstream.error",
+                    "WARNING",
+                    source="receive_audio",
+                    error_type=type(e).__name__,
+                    error=str(e)[:200],
+                )
             else:
                 print(f"[era] [ERROR] Recv: {e}")
                 traceback.print_exc()

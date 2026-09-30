@@ -79,6 +79,32 @@ def _is_transient_server_error(exc: BaseException) -> bool:
     return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
+# ── Shared with the Live session's SEVERITY gate ────────────────────────────
+#
+# The same upstream conditions are classified in three places: this retry loop,
+# the Live session's crash-vs-quiet decision (app/era_live/reconnect_mixin.py)
+# and self-diagnosis's benign classifier (actions/self_diagnosis.py). Until
+# 2026-09-30 only this one knew that "internal error" and "500" are the service
+# being busy, so a Gemini 500 during audio reception was logged as a CRITICAL
+# engine.crash — and 18 of them in 24h drove the DEGRADED verdict with no defect
+# behind it. That is the same false alarm _is_network_blip was written to stop.
+#
+# These are exported rather than copied because a second copy is exactly how
+# NETWORK_MARKERS in self_diagnosis.py drifted from its source. One list.
+TRANSIENT_SERVER_MARKERS = _TRANSIENT_MARKERS
+QUOTA_MARKERS = _QUOTA_MARKERS
+
+
+def is_transient_server_error(exc: BaseException) -> bool:
+    """Public name for `_is_transient_server_error`: the service is busy or
+    broken on its side, and the same call usually succeeds moments later.
+
+    Quota is excluded deliberately (see `_QUOTA_MARKERS`): it needs a key
+    rotation or a long cooldown, not a retry, and callers handle it separately.
+    """
+    return _is_transient_server_error(exc)
+
+
 class GeminiModel:
     """Small compatibility wrapper around google-genai."""
 

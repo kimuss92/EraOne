@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**289 source modules** · 108,920 lines · 167 test modules · 53 declared tools · 57 registered actions
+**289 source modules** · 109,121 lines · 167 test modules · 53 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
@@ -102,7 +102,7 @@ Most-imported first. A change here has the widest blast radius.
 | `core.llm.types` | 23 | Provider-neutral request/response types for Era's LLM layer. |
 | `core.llm.registry` | 20 | Alias registry — the one place that maps Era's internal model aliases to a provider and a  |
 | `actions.browser_control` | 19 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
-| `core.ai_provider` | 18 | Unified Gemini provider for Era One. |
+| `core.ai_provider` | 19 | Unified Gemini provider for Era One. |
 | `app.era_live.tool_dispatch` | 17 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
 | `app.text_intents` | 17 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
 | `core.llm` | 17 | Provider-neutral LLM layer for Era One. |
@@ -128,7 +128,7 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `app/era_live/__init__.py` | 2 | EraLive behavioral mixins (extracted from main.py). |
-| `app/era_live/audio.py` | 1221 | Audio I/O loops for EraLive (extracted from main.py). |
+| `app/era_live/audio.py` | 1239 | Audio I/O loops for EraLive (extracted from main.py). |
 | `app/era_live/audio_output.py` | 292 | Self-healing speaker output for Era's Live voice. |
 | `app/era_live/cascade.py` | 183 | Cascade voice mode — Era WITHOUT the Gemini Live session. |
 | `app/era_live/cm_flow.py` | 575 | Community-management flow mixin for EraLive (extracted from main.py). |
@@ -138,7 +138,7 @@ Every source module, its size, and what it is for.
 | `app/era_live/mic_mute.py` | 274 | Voice-controlled microphone mute for EraLive (see core/mic_mute.py for the model). |
 | `app/era_live/model_route.py` | 322 | Era's session-scoped model preference, and the routing decision it feeds. |
 | `app/era_live/panic.py` | 150 | Runtime half of "abort mission" for EraLive (model in core/panic_stop.py). |
-| `app/era_live/reconnect_mixin.py` | 747 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
+| `app/era_live/reconnect_mixin.py` | 779 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
 | `app/era_live/speech_out.py` | 336 | Speech output — turns the model's text into audio, sentence by sentence. |
 | `app/era_live/tool_batch.py` | 281 | One-response-per-call execution of a model's tool-call batch. |
 | `app/era_live/tool_dispatch.py` | 3240 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
@@ -271,7 +271,7 @@ Every source module, its size, and what it is for.
 | `actions/reminder.py` | 325 |  |
 | `actions/scheduled_task.py` | 425 | actions/scheduled_task.py — the `scheduled_task` tool: create, list, modify, cancel, approve and waive the use |
 | `actions/screen_processor.py` | 933 |  |
-| `actions/self_diagnosis.py` | 529 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
+| `actions/self_diagnosis.py` | 633 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
 | `actions/self_heal.py` | 52 | actions/self_heal.py — the `self_heal` tool: Era's view of her own healing loop. |
 | `actions/self_improve.py` | 665 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
 | `actions/self_improve_targets.py` | 136 | actions/self_improve_targets.py — feature → file resolution for self_improve. |
@@ -333,7 +333,7 @@ Every source module, its size, and what it is for.
 
 | File | Lines | Purpose |
 |---|---:|---|
-| `actions/self_diagnosis.py` | 529 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
+| `actions/self_diagnosis.py` | 633 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
 | `actions/self_heal.py` | 52 | actions/self_heal.py — the `self_heal` tool: Era's view of her own healing loop. |
 | `actions/self_improve.py` | 665 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
 | `actions/self_improve_targets.py` | 136 | actions/self_improve_targets.py — feature → file resolution for self_improve. |

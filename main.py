@@ -1863,6 +1863,27 @@ class EraLive(
                             error_type=type(leaves[0]).__name__ if leaves else type(e).__name__,
                             error=detail[:200],
                         )
+                    elif self._is_upstream_service_error(e):
+                        # Gemini's own 5xx. Recovery is unchanged (still a
+                        # "transient" kind on the normal backoff) — but the
+                        # service failing is not Era crashing, and logging it as
+                        # engine.reconnect_error made self-diagnosis read an
+                        # upstream bad patch as degraded integrity. The leaf
+                        # message is extracted for the same reason as above: an
+                        # ExceptionGroup only ever str()s as its sub-exception
+                        # count.
+                        leaves = self._flatten_exc(e)
+                        detail = str(leaves[0]) if leaves else str(e)
+                        print(f"[era] [UPSTREAM] Gemini service error ({detail}) — reconnecting.")
+                        log_event(
+                            main_logger,
+                            "engine.upstream.error",
+                            "WARNING",
+                            source="run_connect_loop",
+                            standby=self._standby_active,
+                            error_type=type(leaves[0]).__name__ if leaves else type(e).__name__,
+                            error=detail[:200],
+                        )
                     else:
                         print(f"[era] [WARN] {e}")
                         traceback.print_exc()
