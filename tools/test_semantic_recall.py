@@ -320,8 +320,24 @@ def test_measured_recall_beats_the_lexical_baseline(enabled):
     from memory.memory_manager import load_memory
 
     memory = load_memory()
+    # The store this measures is a COPY OF THE REAL ONE (see conftest.py: the temp
+    # memory dir is seeded from memory/*.json, which is gitignored). So these
+    # numbers are calibrated against whatever the store held on the day they were
+    # measured, and they drift as entries are added — a newer, semantically closer
+    # entry can push a target out of the top 3 with no code change at all. That is
+    # why every message below carries the store size and the actual ranking: a
+    # bare "fell to 9/12" cannot be told apart from a real regression, and the
+    # first time this failed it cost a full 12-minute run to learn nothing.
+    entry_count = sum(
+        1
+        for items in memory.values()
+        if isinstance(items, dict)
+        for entry in items.values()
+        if isinstance(entry, dict) and "value" in entry
+    )
     top1 = top3 = 0
-    misses = []
+    missed_top1 = []
+    missed_top3 = []
     for query, want in PARAPHRASES:
         keys = [
             e["key"]
@@ -330,14 +346,26 @@ def test_measured_recall_beats_the_lexical_baseline(enabled):
         top1 += keys[:1] == [want]
         top3 += want in keys[:3]
         if keys[:1] != [want]:
-            misses.append(f"{query!r} -> {keys[:3]} (wanted {want})")
+            missed_top1.append(f"{query!r} -> {keys[:5]} (wanted {want})")
+        if want not in keys[:3]:
+            missed_top3.append(f"{query!r} -> {keys[:5]} (wanted {want})")
+
+    store = f"measured against {entry_count} entries in the seeded store copy"
 
     assert top1 > LEXICAL_TOP1, (
         f"top-1 recall is {top1}/12, no better than the lexical baseline of "
-        f"{LEXICAL_TOP1} — semantic recall has stopped contributing. Misses: {misses}"
+        f"{LEXICAL_TOP1} — semantic recall has stopped contributing. "
+        f"{store}. Misses: {missed_top1}"
     )
-    assert top1 >= MEASURED_TOP1, f"top-1 recall fell to {top1}/12 from {MEASURED_TOP1}: {misses}"
-    assert top3 >= MEASURED_TOP3, f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}"
+    assert top1 >= MEASURED_TOP1, (
+        f"top-1 recall fell to {top1}/12 from {MEASURED_TOP1}. {store}. Misses: {missed_top1}"
+    )
+    assert top3 >= MEASURED_TOP3, (
+        f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}. {store}. "
+        f"Each line shows the top 5 actually returned, so a target sitting at 4 or 5 "
+        f"(pushed down by a newer entry) is visible as drift rather than a regression: "
+        f"{missed_top3}"
+    )
 
 
 @requires_model

@@ -8,6 +8,83 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-09-30 · The first Windows `--all` after 34+35 — one red, and it is the test, not the code
+**Objectives:** 11, 1 — board item 36
+
+Karim ran the owed full gate (item 35b). Result:
+
+    5,315 passed, 1 skipped, 1 failed in 747.08s (12:27)
+    ruff format PASS · ruff lint PASS · manifest PASS · era_doctor PASS
+    FAILED tools/test_semantic_recall.py::test_measured_recall_beats_the_lexical_baseline
+           AssertionError: top-3 recall fell to 9/12 from 10
+
+**First question, answered before touching anything: is this mine?** No, and it was
+settled with the repo's own instrument rather than an opinion. `era_gate.py --list
+--changed core/claude_error_router.py app/era_live/reconnect_mixin.py` selects **30
+test files** through the import graph, and `tools/test_semantic_recall.py` is not
+among them — it cannot reach a line either commit touched. The other candidate was
+item 35's new per-test ceiling, and that is ruled out by the failure's own shape: a
+timeout kill reports `Failed: Timeout (>120.0s) from pytest-timeout`, not an
+`AssertionError` about a recall count.
+
+**What it actually is.** `conftest.py:55-67`:
+
+    # The temp directory is SEEDED with a copy of the real store rather than left
+    # empty, because several tests expect realistic content to be present.
+
+So the one test holding acceptance point 4's numbers calls `load_memory()` on a copy
+of Karim's **live `memory/long_term.json`** — a gitignored file that is not in the
+repo at all (it does not exist in the cloud container; `era_doctor` reports it
+missing there). `MEASURED_TOP3 = 10` was calibrated against that store as it stood
+on 2026-09-29. He has used Era since; every entry added is a new competitor in a
+top-5 ranking, and one paraphrase's target has slipped to position 4 or 5. No code
+had to change for this to go red, and none did.
+
+The irony is on the record already: this file's own docstring explains that a test
+depending on whether a *service* is running "is a test that fails for reasons
+unrelated to what it asserts (the suite already learned this from live browsers and
+the real vault)", and gates the Ollama dependency accordingly. The live *data*
+underneath it was never gated by the same reasoning.
+
+**What was changed here, and what deliberately was not.**
+
+Changed: the assertions now report the store size and, for each miss, **the top 5
+actually returned** rather than a bare count. The top-3 assertion previously carried
+no miss list at all, so its failure message could not distinguish drift (target at
+position 4) from a real regression (target gone entirely) — and finding that out
+cost a 12-minute run that taught nothing. Verified the entry count agrees with
+`rank_memory_entries`'s own notion of an entry (`isinstance(entry, dict) and
+"value" in entry`), including a malformed entry and a non-dict category.
+
+NOT changed: `MEASURED_TOP3` stays at 10. Lowering it to 9 would make the red go
+away by fitting the assertion to the result, and would mask the regression the test
+exists to catch. The real fix is a **decision**, now on the board under Open
+decisions, and one branch of it concerns Karim's own data: the right answer is a
+synthetic frozen fixture under `tools/golden/`, because committing the real store to
+make a test stable would put his birthday, city and family details in the repo. That
+is not a call to make on his behalf, and it needs one re-measurement on a machine
+with Ollama to bank new floors.
+
+**One number in that run is unexplained, and is written down rather than smoothed
+over.** 5,315 + 1 failed + 1 skipped = **5,317 collected**, where 5,294 (item 32)
+plus exactly the 18 added should give 5,312. That is **5 tests more than accounted
+for**. Two readings: the GitHub baseline commit was taken on 09-30 from a tree that
+had already moved past the 09-29 full run, or Karim's local tree carries uncommitted
+work. It cannot be settled from the cloud container, because the 09-29 tree is not
+in git — `git status` on his machine distinguishes them. Until it is settled, "no
+code changed but mine" is an inference from the single-commit history, not a
+measurement, and the diagnosis above does not rest on it: the import-graph
+reachability result holds either way.
+
+**Verification.** `tools/test_semantic_recall.py` → **18 passed, 3 skipped** (the
+three `@requires_model` tests skip without Ollama, as designed, which is also why
+the measurement itself cannot be reproduced in this container). `ruff check .` and
+`ruff format` clean. The changed assertions cannot be exercised here without the
+store and the model, so the counting expression was verified directly against the
+ranker's own entry predicate instead of being taken on trust.
+
+---
+
 ### 2026-09-30 · Items 17c + 18, and a bug that silently ate whole reports
 **Objectives:** 10, 8 — the two items the board had queued next
 

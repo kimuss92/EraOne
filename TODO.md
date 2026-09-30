@@ -59,6 +59,7 @@ proved it. "Written" is not "done".
 | 30b | **Live** proof of memory recall | 11 | Acceptance point 4 is *"tell her Monday, ask Friday after restarts"*. Saving, persistence and paraphrase recall each verify (9/12, 0/8 noise), but the acceptance test is a **user** doing it across days. Needs Ollama up for the semantic half; it degrades to lexical silently if not. |
 | 31b | **Live** proof of the truthful self-model | 3, 4 | Acceptance point 3 is closed when Karim asks *"what can you actually do?"* and she answers from `capability_check`, **including declining something absent**. The mechanism removes the means to invent; it cannot force the model to call the tool. |
 | 35b | **Windows `era_gate.py --all` owed for 34 + 35** | 10, 1 | This session ran on **Linux**, and Era is a Windows program. Targeted verification is green (53 in the changed file; 928 passed / 15 skipped across what this container can collect) and the gate's 8 reds were each reproduced on a **clean stash**, so none is mine — five `test_file_candidates` Windows-path cases, `test_local_fallback` (local models), a `test_protocol_one` frame, and `test_ads_dispatch::test_route_order_is_each_profile_direct_then_the_gateway`. `era_doctor` reads NOT READY here for 3 environmental errors only (no `.claude-freelance`, no OneDrive vault). What is left is ONE full Windows run: the per-test ceiling touches all 5,300 tests, and only that run shows none sits between 20s and 120s where 928 cannot see it. |
+| 36 | **RED on main: `test_semantic_recall` measures against the LIVE store** | 11, 1 | The first Windows `--all` after 34+35 came back **5,315 passed, 1 skipped, 1 failed in 12:27** — `test_measured_recall_beats_the_lexical_baseline`, *top-3 recall fell to 9/12 from 10*. **Not a regression from 34/35:** the repo's own import graph selects 30 test files for those changes and this is not one of them, and the failure is an `AssertionError` about a count, not a timeout. The cause is the test's data source — `conftest.py` seeds the temp memory dir from the REAL `memory/*.json`, which is gitignored, so `MEASURED_TOP3 = 10` is calibrated against whatever the store held on 2026-09-29. Entries added since compete in the top 5, and one target has slipped to position 4 or 5. The file's own docstring already banked this lesson for a live *service*; the live *data* underneath it was not guarded. Assertion messages now carry the store size and the top 5 actually returned, so a re-run says which paraphrase slipped instead of costing another 12 minutes to learn nothing. **The fix is a decision — see Open decisions.** |
 
 ---
 
@@ -106,6 +107,29 @@ actually runs. Note the trap for whoever picks this up: `tools/test_background_l
 passes either way, so the tests are no evidence that the manager runs. Same call
 as above — rewire (boot it from `main.py` and move the timer loops into it) or
 retire. Until then, treat it as a decoy when looking for somewhere to put a loop.
+
+**A third decision, opened 2026-09-30 by board item 36:**
+`tools/test_semantic_recall.py`'s measured numbers (`MEASURED_TOP1 = 9`,
+`MEASURED_TOP3 = 10`) are asserted against a copy of Karim's **live, gitignored**
+`memory/long_term.json`. That makes the one test carrying acceptance point 4's
+numbers unreproducible: it drifts as he uses Era, it cannot be re-measured on any
+other machine, and it has now gone red without a line of relevant code changing.
+Two ways out, and the choice is his because one of them concerns his own data:
+
+  * **Freeze a fixture.** Give this test a committed store under `tools/golden/`
+    and calibrate against that; live drift then cannot break it, and the numbers
+    mean something a year from now. It needs ONE re-measurement on a machine with
+    Ollama to bank the new floors. **Do not simply commit the real store** — it
+    holds his birthday, city and family details, so the fixture must be synthetic
+    entries in the same shape, not a copy. That is the recommendation.
+  * **Keep it live and accept the drift**, treating the floors as a rolling
+    measurement to be re-banked whenever the store grows. Honest, but it means a
+    red gate is sometimes just news about the store, which is exactly the signal
+    a gate is supposed not to send.
+
+What must NOT happen is lowering `MEASURED_TOP3` to 9 to make the red go away:
+that is fitting the assertion to the result, and it would mask the real
+regression this test exists to catch.
 
 ---
 
