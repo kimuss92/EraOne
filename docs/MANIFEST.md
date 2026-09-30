@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**289 source modules** · 108,589 lines · 167 test modules · 53 declared tools · 57 registered actions
+**289 source modules** · 108,920 lines · 167 test modules · 53 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
@@ -138,7 +138,7 @@ Every source module, its size, and what it is for.
 | `app/era_live/mic_mute.py` | 274 | Voice-controlled microphone mute for EraLive (see core/mic_mute.py for the model). |
 | `app/era_live/model_route.py` | 322 | Era's session-scoped model preference, and the routing decision it feeds. |
 | `app/era_live/panic.py` | 150 | Runtime half of "abort mission" for EraLive (model in core/panic_stop.py). |
-| `app/era_live/reconnect_mixin.py` | 700 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
+| `app/era_live/reconnect_mixin.py` | 747 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
 | `app/era_live/speech_out.py` | 336 | Speech output — turns the model's text into audio, sentence by sentence. |
 | `app/era_live/tool_batch.py` | 281 | One-response-per-call execution of a model's tool-call batch. |
 | `app/era_live/tool_dispatch.py` | 3240 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |

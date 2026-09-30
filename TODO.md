@@ -45,6 +45,9 @@ proved it. "Written" is not "done".
 | 31 | **Runtime grounding — acceptance point 3** | 3, 4 | Protocol Zero fixed the *prompt*; nothing made her **refuse**. New `core/capability_index.py` + `capability_check` tool (53rd) + one prompt rule: the answer is **computed** from `load_declarations()` — the gated list the model is actually handed, which is why it isn't the raw literal (that once reported 53 where 52 were offered). Three verdicts; the middle one says "RELATED TOOLS FOUND — NOT confirmation", because `file_processor` really declares `document`/`translate` actions and she can neither print nor translate speech. Measured **13/13 can-do reached, 0/10 cannot-do confirmed**. Two bugs found by measuring: a name weighted like prose denied `flight_finder`, and pluralisation let one word count twice. 42 tests. **GATE PASSED 101.6s**, then **`--all` GATE PASSED 828.8s** — 5,261 passed, 1 skipped (5,220 + exactly the 42 added) |
 
 | 32 | **Headless Claude transport for read-only asks** | 8 | Item 17, scoped by Karim after measurement: `claude -p` costs **~$0.64/message** (63.5K tokens of context reloaded each time; `--resume` cost MORE) and is invisible, so it is NOT a full replacement. New `core/claude_headless.py`: plain `ask` goes headless **read-only** (`--permission-mode plan` + a tool denylist, neither reachable from a tool argument); `reply`/`new_chat` stay in Karim's visible window. Every failure falls back to the window — never a dead end. **The gate caught that routing `ask` here made the TEST SUITE invoke the paid CLI**; `available()` now refuses under pytest (`ERA_CLAUDE_HEADLESS=0` to disable). Confirmation gates asserted unchanged. 32 tests. **GATE PASSED 24.4s**, then **`--all` GATE PASSED 1438.5s** — 5,293 passed, 1 skipped (5,262 + exactly the 32 added). Two odd things in that run were both chased and **neither was real**: the 23:48 suite time was contention (clean re-run **12:10**, faster than the 13:36 baseline) and the new thread warning did not recur when escalated to an error. See `handoff.md` |
+| 33 | **Bug fixed:** one malformed event discarded the WHOLE report | 10, 8 | `write_details` read `ev["ts"]` directly, and `_note` funnels that KeyError into `note_failure`'s catch-all ("ignored") — so one event without a timestamp silently threw away the entire sustained-failure report, the one thing the module exists to deliver. Found by RUNNING the suite: `test_the_written_details_file_survives_giving_up` was **already red in this repo** (pure stdlib, not a platform artifact), so item 17c's recorded evidence was not green. New `_event_ts()`; `build_report` had the same two reads |
+| 34 | **Item 17c complete — the report is no longer thrown away** | 10, 8 | The budget half was already done (`_unmark`); the drop was not. At `DEFER_MAX_S` the report text was **discarded** and the user told nothing but a stdout `print` — and that fires precisely when they have been at the keyboard for 30 minutes, so the reports lost were the ones raised while they worked. Waiting longer is not the fix (the wait holds `_inflight` and would block every other report), so it now stops WAITING without being lost: `_queue_pending` → `runtime/claude_bridge/pending/`, deduped by fingerprint, bounded (8 / 3 days / 5 attempts), the user is TOLD in a fixed phrase, and `flush_pending()` delivers one when idle — spending the budget only then. Tick wired into `_monitor_idle_state`, incl. **inside the standby wait** (the case that matters: standby means the user is provably away). 18 tests, **13 proven load-bearing** — reverting the give-up failed 11, deleting the call site failed the wire test, and the `write_details` test was already red; the other 5 bound NEW code (throttle, off switch, no-raise) and would only fail pre-fix with `AttributeError`. 53 passed in that file; ruff clean |
+| 35 | **Item 18 complete — `pytest-timeout` installed and wired** | 10 | `timeout = 120` in `pytest.ini`, headroom over a MEASURED 19.0s slowest real test. The naive wiring would have broken the suite: `tools/test_zz_check_gate.py` shells out with its own `timeout=600` and alone can exceed the rest combined, so it carries `@pytest.mark.timeout(660)` rather than lifting the ceiling for all 5,300 tests to suit one. **A wrong decision of mine, corrected before it landed:** I first pinned `timeout_method = thread` believing `signal` does nothing on Windows — false, `pytest_timeout` already picks `signal`/`thread` per platform, and pinning `thread` would end the whole run on Linux instead of failing one test. Both semantics verified, not assumed (ini really 120.0; a marker really beats `--timeout=1`). Proven: `Failed: Timeout (>3.0s) from pytest-timeout` names the hung test |
 ---
 
 ## 🔴 In progress
@@ -55,6 +58,7 @@ proved it. "Written" is not "done".
 | 17b | **Acceptance point 1 fired LIVE 2026-09-29 15:45** | 8 | `relaunch.requested source="self_improve"` is in `logs/era_lifecycle.jsonl`. The path is real. It exposed 4 defects, **all four now fixed and gated (24–27)**. Not closed until a live run logs `relaunch.performed` with `forced: false`. |
 | 30b | **Live** proof of memory recall | 11 | Acceptance point 4 is *"tell her Monday, ask Friday after restarts"*. Saving, persistence and paraphrase recall each verify (9/12, 0/8 noise), but the acceptance test is a **user** doing it across days. Needs Ollama up for the semantic half; it degrades to lexical silently if not. |
 | 31b | **Live** proof of the truthful self-model | 3, 4 | Acceptance point 3 is closed when Karim asks *"what can you actually do?"* and she answers from `capability_check`, **including declining something absent**. The mechanism removes the means to invent; it cannot force the model to call the tool. |
+| 35b | **Windows `era_gate.py --all` owed for 34 + 35** | 10, 1 | This session ran on **Linux**, and Era is a Windows program. Targeted verification is green (53 in the changed file; 928 passed / 15 skipped across what this container can collect) and the gate's 8 reds were each reproduced on a **clean stash**, so none is mine — five `test_file_candidates` Windows-path cases, `test_local_fallback` (local models), a `test_protocol_one` frame, and `test_ads_dispatch::test_route_order_is_each_profile_direct_then_the_gateway`. `era_doctor` reads NOT READY here for 3 environmental errors only (no `.claude-freelance`, no OneDrive vault). What is left is ONE full Windows run: the per-test ceiling touches all 5,300 tests, and only that run shows none sits between 20s and 120s where 928 cannot see it. |
 
 ---
 
@@ -62,7 +66,8 @@ proved it. "Written" is not "done".
 
 All four defects from the 2026-09-29 live test (24–27) are fixed and gated, and
 **#15 (memory + RAG) and #16 (runtime grounding) are built and measured** —
-evidence in `handoff.md`. Next is **#17, the Claude bridge**.
+evidence in `handoff.md`. **#17 (the Claude bridge, item 32), #17c and #18 are now
+done too** — so the next unstarted item is **#19, the intelligent fallback protocol**.
 
 Two of those four were misdiagnosed on this board until the logged tool
 arguments were replayed against the running code — do that first, every time.
@@ -73,8 +78,6 @@ check no unit test can make (see "In progress").
 
 | # | Item | Objective | Why this order |
 |---|------|-----------|----------------|
-| 17c | Auto error reports are DROPPED when Karim is at the keyboard | 10, 8 | Found while measuring 17. `core/claude_error_router.py` waits `IDLE_S` because a GUI send steals focus, then **discards** the report after `DEFER_MAX_S` — so the reports that matter most are the ones lost. Left on the GUI path deliberately (it sends without confirmation, and Karim seeing it IS the safety property). Fix the dropping, not the transport. |
-| 18 | Install + wire `pytest-timeout` | 10 | Not installed, so a hung test is indistinguishable from a slow one — which is **exactly** why the 2026-09-29 suite-time jump (13:36 → 23:48) could not be diagnosed from the run itself. Promoted by that. |
 | 19 | Intelligent fallback protocol (try workarounds before asking) | 6 | — |
 | 20 | Continuous learning pipeline (web + RLHF + error logs) | 5, 7 | Feeds on 15 |
 | 21 | Watchdog / self-maintenance routines | 10 | `era_supervisor.py` exists; audit before extending. Note it behaved correctly on 09-29 — the hang check is what caught 24 |
@@ -91,6 +94,18 @@ check no unit test can make (see "In progress").
 `src/fast_local_vision.py` has **zero importers** — a working local-vision path
 nothing can reach. Left in place deliberately rather than deleted as a side
 effect of a lint pass. Rewire or retire is a product call.
+
+**A second instance of the same pattern, found 2026-09-30:**
+`core/background_manager.py` also has **zero importers** outside its own tests.
+It reads like the obvious home for any long-lived loop — `start_all()` /
+`stop_all()`, two Windows sync loops, a non-Windows fallback — and nothing ever
+calls it, so `BackgroundManager` starts nothing. Item 34's flush tick was very
+nearly registered there, which would have been dead code that passed its own
+unit tests forever; it went into `_monitor_idle_state` instead, because that loop
+actually runs. Note the trap for whoever picks this up: `tools/test_background_loops.py`
+passes either way, so the tests are no evidence that the manager runs. Same call
+as above — rewire (boot it from `main.py` and move the timer loops into it) or
+retire. Until then, treat it as a decoy when looking for somewhere to put a loop.
 
 ---
 

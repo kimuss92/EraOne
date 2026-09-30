@@ -39,6 +39,7 @@ spotipy
 watchdog
 websockets
 pytest
+pytest-timeout
 pytest-asyncio
 pytest-cov
 apscheduler
