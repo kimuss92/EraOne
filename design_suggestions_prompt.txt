@@ -1,0 +1,1 @@
+Act as an expert UI/UX designer. Analyze the interface presented. Suggest specific, actionable rectifications to improve modern visual styling, clarity, and usability. Focus on layout balance, visual hierarchy, element separation within dark mode themes, bold typography for key metrics, and intuitive iconography. Provide constructive criticisms and design solutions.

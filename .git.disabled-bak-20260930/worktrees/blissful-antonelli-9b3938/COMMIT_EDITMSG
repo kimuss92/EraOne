@@ -1,0 +1,17 @@
+Require the user's own "yes" to confirm a pending HIGH-risk action
+
+confirm_pending_confirmation is LOW risk and its handler consumed the pending
+slot and ran the armed tool unconditionally, so the model could approve its
+own action: [risky_tool, confirm_pending_confirmation] in one batch, a confirm
+in a later round, or re-calling the tool with confirmed=true and the id it
+was shown -- including when steered by injected tool output.
+
+- tool_dispatch: shared _user_approved_pending(). The latest user utterance
+  (the in-flight voice buffer if present) must be begun at/after arming and
+  be a whole-reply yes. Enforced in the confirm handler (peek, check, then
+  confirm by that exact id) and on the confirmed=true re-call path. Refusal
+  is a BlockedAction and leaves the action pending for the real answer.
+- tool_batch: refuse a confirm in the same batch that armed the action.
+- local_guards.user_approved delegates to the shared rule; bare waivers
+  ("always", "stop asking") no longer count as a yes.
+- tools/test_confirm_self_approval.py: 22 tests.

@@ -1,0 +1,4 @@
+#!/bin/sh
+# EraOne must never leave this machine (user's rule, 2026-09-25).
+echo "[EraOne] push blocked: this project is never published to GitHub." >&2
+exit 1

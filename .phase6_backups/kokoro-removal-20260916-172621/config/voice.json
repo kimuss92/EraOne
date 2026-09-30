@@ -1,0 +1,8 @@
+{
+  "mode": "fish_audio",
+  "kokoro_voice": "bm_george",
+  "profile_name": "Era LuxTTS",
+  "engine": "luxtts",
+  "clone_sample_path": "C:\\Users\\nesri\\OneDrive\\Documents\\EraOne\\assets\\voice\\jarvis_reference.wav",
+  "clone_reference_text": "Allow me to introduce myself. I am Jarvis, a virtual artificial intelligence, and I'm here to assist you with a variety of tasks as best I can. 24 hours a day, seven days a week."
+}

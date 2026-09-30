@@ -1,0 +1,20 @@
+{
+  "wake_word": "shazam",
+  "aliases": [],
+  "decoys": [
+    "error",
+    "her",
+    "area",
+    "here",
+    "hey",
+    "wait",
+    "way",
+    "week",
+    "walk",
+    "work",
+    "woke",
+    "wake up",
+    "uh huh"
+  ],
+  "min_confidence": 0.9
+}

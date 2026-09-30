@@ -1,0 +1,392 @@
+@import "tailwindcss";
+
+/* ── PREMIUM TYPE SYSTEM ─────────────────────────────────────────────────
+   Inter for UI text, JetBrains Mono for technical labels. Only the latin
+   variable subsets are embedded (~90KB raw); vite-plugin-singlefile inlines
+   them as base64 so the app stays a single self-contained offline file. */
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html, body, #root {
+    @apply h-full w-full overflow-hidden;
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text-1);
+  }
+
+  /* ── DESIGN TOKENS ────────────────────────────────────────────────────
+     Two layers:
+       1. EMOTION ACCENT — --ah (hue) / --as (saturation) set once on the
+          root div from Era's activity state (App.tsx). Unchanged system.
+       2. THEME — semantic surface/text/line tokens plus an accent
+          LIGHTNESS scale (--al-*). Dark is the default on :root; light
+          mode overrides via [data-theme="light"] on <html>. Every ac-*
+          utility derives from BOTH layers, so a theme flip (manual or
+          voice) repaints the whole UI through the style system with zero
+          React re-renders — same trick as the mood tint. */
+  :root {
+    --ah: 48;
+    --as: 45%;
+
+    /* dark (default) — deep navy-blue "AI operating system" base.
+       APPLE-GLASS PASS: panels are now translucent WHITE films (visionOS /
+       macOS material) instead of opaque navy slabs — the frost + the inset
+       top highlight in .glass are what sell "sheet of glass", so the fill
+       itself must stay barely-there. Depth comes from blur and shadow, not
+       from opacity. */
+    --bg: #050b12;
+    /* Panels are FULLY transparent by request — the glass look is carried
+       entirely by the backdrop blur, the hairline border and the inset top
+       highlight. No grey film. */
+    --panel: transparent;
+    --panel-2: transparent;
+    --field: rgba(255, 255, 255, 0.05);
+    --text-1: #e8f2f8;
+    --text-2: #9db4c4;
+    --text-3: #64798b;
+    --line: rgba(255, 255, 255, 0.12);
+    --line-soft: rgba(255, 255, 255, 0.07);
+    --grid-line: rgba(110, 190, 255, 0.04);
+    --veil: rgba(2, 6, 12, 0.62);
+    --track: rgba(255, 255, 255, 0.09);
+    --panel-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    --glass-highlight: rgba(255, 255, 255, 0.10);
+
+    /* accent lightness scale (dark: bright accents on dark glass) */
+    --al-strong: 84%;
+    --al-text: 74%;
+    --al-dim: 62%;
+    --al-label: 55%;
+    --al-border: 60%;
+    --al-fill: 60%;
+
+    /* glow strength (dimmed heavily in light mode) — pushed up so borders,
+       bars and the title read as neon HUD, matching the core */
+    --glow-a: 0.55;
+    --glow-b: 0.28;
+    --glow-ta: 0.85;
+    --glow-tb: 0.45;
+  }
+
+  [data-theme="light"] {
+    /* pale gray-blue — same layout, cyan/teal highlights survive via the
+       darker accent-lightness scale below */
+    --bg: #dfe9ee;
+    --panel: rgba(255, 255, 255, 0.55);
+    --panel-2: rgba(255, 255, 255, 0.45);
+    --field: rgba(255, 255, 255, 0.72);
+    --text-1: #12343c;
+    --text-2: #46626c;
+    --text-3: #74898f;
+    --line: rgba(20, 60, 75, 0.14);
+    --line-soft: rgba(20, 60, 75, 0.08);
+    --grid-line: rgba(45, 90, 105, 0.05);
+    --veil: rgba(223, 233, 238, 0.5);
+    --track: rgba(45, 90, 105, 0.12);
+    --panel-shadow: 0 16px 40px rgba(45, 81, 90, 0.14);
+    --glass-highlight: rgba(255, 255, 255, 0.85);
+
+    /* darker accents so text stays ≥4.5:1 on light surfaces */
+    --al-strong: 28%;
+    --al-text: 34%;
+    --al-dim: 40%;
+    --al-label: 44%;
+    --al-border: 46%;
+    --al-fill: 46%;
+
+    --glow-a: 0.14;
+    --glow-b: 0.05;
+    --glow-ta: 0.2;
+    --glow-tb: 0.08;
+  }
+}
+
+@layer utilities {
+  /* Semantic text/surface shortcuts */
+  .t1 { color: var(--text-1); }
+  .t2 { color: var(--text-2); }
+  .t3 { color: var(--text-3); }
+  .bg-field { background: var(--field); }
+  .border-line { border-color: var(--line); }
+  .border-line-soft { border-color: var(--line-soft); }
+
+  /* APPLE GLASS — the visionOS/macOS material recipe, three parts:
+       1. heavy blur + saturate on whatever is behind (the frost),
+       2. a barely-there white film (--panel),
+       3. an INSET 1px top highlight — the light catching the sheet's top
+          edge. That highlight is the single strongest "this is glass" cue;
+       the accent-hued outer border stays, whisper-faint, so the mood tint
+       still reaches the chrome. Blur is expensive; only a handful of panels
+       exist, so 24px is affordable here. */
+  .glass {
+    background: var(--panel);
+    backdrop-filter: blur(24px) saturate(170%);
+    -webkit-backdrop-filter: blur(24px) saturate(170%);
+    border: 1px solid var(--line);
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      0 0 0 0.5px hsl(var(--ah) var(--as) var(--al-border) / 0.18),
+      var(--panel-shadow);
+    transition: border-color 0.9s ease, background-color 0.4s ease, box-shadow 0.9s ease;
+  }
+
+  .glass-panel {
+    background: var(--panel-2);
+    backdrop-filter: blur(18px) saturate(160%);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    border: 1px solid var(--line-soft);
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      var(--panel-shadow);
+    transition: border-color 0.9s ease, background-color 0.4s ease;
+  }
+
+  /* ── Accent-driven color utilities ──────────────────────────────────── */
+  .ac-text        { color: hsl(var(--ah) var(--as) var(--al-text)); transition: color 0.9s ease; }
+  .ac-text-strong { color: hsl(var(--ah) calc(var(--as) + 20%) var(--al-strong)); transition: color 0.9s ease; }
+  .ac-text-dim    { color: hsl(var(--ah) var(--as) var(--al-dim) / 0.8); transition: color 0.9s ease; }
+  .ac-label       { color: hsl(var(--ah) calc(var(--as) - 10%) var(--al-label) / 0.9); transition: color 0.9s ease; }
+
+  .ac-border      { border-color: hsl(var(--ah) var(--as) var(--al-border) / 0.34); transition: border-color 0.9s ease; }
+  .ac-border-soft { border-color: hsl(var(--ah) var(--as) var(--al-border) / 0.16); transition: border-color 0.9s ease; }
+
+  .ac-bg-soft { background-color: hsl(var(--ah) var(--as) var(--al-fill) / 0.12); transition: background-color 0.9s ease; }
+  .ac-dot     { background-color: hsl(var(--ah) calc(var(--as) + 15%) var(--al-fill)); transition: background-color 0.9s ease; }
+  .ac-fill    { background-color: hsl(var(--ah) var(--as) var(--al-fill)); transition: background-color 0.9s ease; }
+
+  .ac-bar      { background-color: hsl(var(--ah) var(--as) var(--al-fill)); box-shadow: 0 0 6px hsl(var(--ah) var(--as) 55% / var(--glow-a)); }
+  .ac-bar-peak { background-color: hsl(var(--ah) calc(var(--as) + 20%) var(--al-text)); box-shadow: 0 0 10px hsl(var(--ah) var(--as) 65% / var(--glow-ta)); }
+
+  .ac-glow {
+    box-shadow: 0 0 24px hsl(var(--ah) var(--as) 52% / var(--glow-a)), 0 0 48px hsl(var(--ah) var(--as) 52% / var(--glow-b));
+    transition: box-shadow 0.9s ease;
+  }
+  .ac-glow-text {
+    text-shadow: 0 0 18px hsl(var(--ah) var(--as) 58% / var(--glow-ta)), 0 0 36px hsl(var(--ah) var(--as) 58% / var(--glow-tb));
+    transition: color 0.9s ease, text-shadow 0.9s ease;
+  }
+
+  /* Interactive chips / buttons */
+  .ac-chip {
+    border: 1px solid hsl(var(--ah) var(--as) var(--al-border) / 0.22);
+    color: hsl(var(--ah) var(--as) var(--al-text) / 0.9);
+    background: var(--field);
+    cursor: pointer;
+    transition: color 0.5s ease, border-color 0.5s ease, background-color 0.5s ease;
+  }
+  .ac-chip:hover:not(:disabled) {
+    border-color: hsl(var(--ah) var(--as) var(--al-border) / 0.55);
+    background-color: hsl(var(--ah) var(--as) var(--al-fill) / 0.1);
+    color: hsl(var(--ah) calc(var(--as) + 15%) var(--al-strong));
+  }
+
+  /* (The old .hud-frame corner brackets are gone — mitred sci-fi corners
+     contradict the continuous rounded edge that makes glass read as glass.) */
+
+  /* Slow horizon sweep under the title bar — transform/opacity only, runs on
+     the compositor thread (no layout, no paint). Disabled for reduced motion. */
+  .scan-sweep {
+    background: linear-gradient(90deg, transparent, hsl(var(--ah) var(--as) var(--al-border) / 0.35), transparent);
+    opacity: 0;
+    animation: scan-sweep 9s ease-in-out infinite;
+    will-change: transform, opacity;
+  }
+
+  /* Orbit rings around the core — one dashed halo and a counter-rotating
+     satellite dot. transform-only animations on two small layers; the
+     compositor handles them without repainting anything. */
+  .orbit-ring {
+    border: 1px dashed hsl(var(--ah) var(--as) var(--al-border) / 0.2);
+    animation: orbit 90s linear infinite;
+    will-change: transform;
+    transition: border-color 0.9s ease;
+  }
+  .orbit-carrier {
+    animation: orbit-rev 24s linear infinite;
+    will-change: transform;
+  }
+  .orbit-sat {
+    background: hsl(var(--ah) calc(var(--as) + 15%) var(--al-fill));
+    box-shadow: 0 0 8px hsl(var(--ah) var(--as) 60% / var(--glow-ta));
+    transition: background-color 0.9s ease, box-shadow 0.9s ease;
+  }
+
+  /* ── Core geometry: ONE source of truth for the sphere's size ─────────
+     --R is the sphere's radius as CSS sees it, and it is the exact mirror of
+     the R formula in NeuralCore's rAF loop. The HUD tags, the orbit rings and
+     the floor glow all position off it, so they ride the sphere at every size.
+
+     TWO TIERS, because one radius cannot serve both. At full size the sphere
+     is 250px and the tags sit clear of it. In a normal-size window the centre
+     column is only ~470px wide: a 0.42 radius left ~38px of margin, far too
+     little to seat a tag, which is why the HUD used to just switch itself OFF
+     below 880px and every readout around the sphere vanished. The compact tier
+     shrinks the sphere instead, opening a band wide enough for the (shortened)
+     labels — so the information survives the resize rather than disappearing.
+
+     Keep --R and NeuralCore's `rCap`/`rFrac` in step if either changes. */
+  .core-geom {
+    --R: min(170px, 30cqmin);
+    --gap: 10px;
+  }
+  @container (min-width: 880px) {
+    .core-geom {
+      --R: min(250px, 42cqmin);
+      --gap: 24px;
+    }
+  }
+
+  /* ── Central HUD dressing (inspiration-image chrome) ─────────────────── */
+
+  /* Vertical connector from the brain down to the command bar, with a node
+     dot at its foot — static gradients + one opacity pulse on the dot. */
+  .hud-connector {
+    background: linear-gradient(
+      to bottom,
+      transparent,
+      hsl(var(--ah) var(--as) var(--al-border) / 0.45) 30%,
+      hsl(var(--ah) var(--as) var(--al-border) / 0.45) 100%
+    );
+    transition: background 0.9s ease;
+  }
+  .hud-connector-node {
+    border: 1px solid hsl(var(--ah) var(--as) var(--al-border) / 0.7);
+    background: var(--bg);
+    box-shadow: 0 0 10px hsl(var(--ah) var(--as) 60% / var(--glow-ta));
+    animation: node-pulse 2.8s ease-in-out infinite;
+  }
+
+  /* Floor platform glow under the brain — pure radial gradient, breathing. */
+  .hud-floor {
+    background: radial-gradient(
+      ellipse at center,
+      hsl(var(--ah) var(--as) 55% / 0.22) 0%,
+      hsl(var(--ah) var(--as) 50% / 0.07) 42%,
+      transparent 70%
+    );
+    animation: floor-breathe 6s ease-in-out infinite;
+    transition: background 0.9s ease;
+  }
+  .hud-floor-ring {
+    border: 1px solid hsl(var(--ah) var(--as) var(--al-border) / 0.28);
+    transition: border-color 0.9s ease;
+  }
+
+  /* Floating micro-labels around the core */
+  .hud-tag {
+    border: 1px solid hsl(var(--ah) var(--as) var(--al-border) / 0.24);
+    background: var(--panel-2);
+    color: hsl(var(--ah) var(--as) var(--al-text) / 0.95);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: color 0.9s ease, border-color 0.9s ease;
+  }
+  .hud-tick {
+    background: hsl(var(--ah) var(--as) var(--al-border) / 0.4);
+    transition: background-color 0.9s ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scan-sweep, .orbit-ring, .orbit-carrier,
+    .hud-connector-node, .hud-floor { animation: none; }
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--track);
+    border-radius: 999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--line);
+  }
+
+  /* Geo map marker ping — transform/opacity only. transform-box makes the
+     scale originate from the marker circle itself inside the SVG. */
+  .geo-ping {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: geo-ping 2.4s ease-out infinite;
+  }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.92); opacity: 0.6; }
+  50% { transform: scale(1.05); opacity: 0.2; }
+  100% { transform: scale(0.92); opacity: 0.6; }
+}
+
+@keyframes processing-ring {
+  0%   { transform: scale(0.85); opacity: 0.7; }
+  50%  { transform: scale(1.15); opacity: 0.2; }
+  100% { transform: scale(0.85); opacity: 0.7; }
+}
+
+@keyframes thinking-dot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+  40%           { transform: scale(1.2); opacity: 1; }
+}
+
+@keyframes scan-sweep {
+  0%, 12%   { transform: translateY(0); opacity: 0; }
+  18%       { opacity: 0.55; }
+  46%       { transform: translateY(38vh); opacity: 0.25; }
+  60%, 100% { transform: translateY(62vh); opacity: 0; }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes orbit-rev {
+  from { transform: rotate(360deg); }
+  to   { transform: rotate(0deg); }
+}
+
+@keyframes node-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.25); }
+}
+
+@keyframes floor-breathe {
+  0%, 100% { opacity: 0.7; transform: scaleX(1); }
+  50%      { opacity: 1; transform: scaleX(1.06); }
+}
+
+@keyframes geo-ping {
+  0%   { transform: scale(0.5); opacity: 0.9; }
+  70%  { transform: scale(2.4); opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.35s ease-out forwards;
+}

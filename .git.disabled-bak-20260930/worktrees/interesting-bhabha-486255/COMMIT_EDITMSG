@@ -1,0 +1,20 @@
+Fix hook commands for Git Bash: %CLAUDE_PROJECT_DIR% never expands
+
+Follow-up to the previous hook fix. On this machine Claude Code runs hook
+commands through Git Bash, not cmd.exe, so the %CLAUDE_PROJECT_DIR% syntax
+from the previous commit stayed literal: python/node could not find the
+helper scripts. guard_protected_paths.py then exited 2 on every Write/Edit,
+which Claude Code treats as "block", so ALL edits were blocked. (The earlier
+cmd.exe-based verification was invalid because it forced `cmd /c` rather than
+replicating the Git Bash path the harness actually uses.)
+
+Rewrite every hook to a bash-portable form that resolves the helpers dir at
+run time and falls back to a relative path when the env var is unset:
+
+  h="$CLAUDE_PROJECT_DIR/.claude/helpers"; [ -d "$h" ] || h=.claude/helpers; \
+  <node|python> "$h/<script>" [subcmd]
+
+Verified live in Git Bash: a normal Write/Edit succeeds (guard exit 0) and
+creates no 0-byte junk file; a protected path (config/api_keys.json, .env*,
+memory/long_term.json) is blocked (guard exit 2); the fallback works with
+CLAUDE_PROJECT_DIR unset. No other hook behaviour changed.

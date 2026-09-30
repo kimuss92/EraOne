@@ -1,0 +1,8 @@
+Legacy HUD archived 2026-09-26 during the localhost-HUD migration (git is disabled in this repo).
+
+ui_dist/index.html        the previously compiled Qt-window UI (load it in the Qt window to roll back the look)
+ui_src/src/components/*   components replaced by the new HUD, moved here as they were
+ui_src/src/hooks/*        useEra/useAudioInput, replaced by src/lib/transport.ts + store.ts
+App.tsx, index.css, NeuralCore.tsx, ModelIndicator.tsx, app/websocket_server.py, ui.py
+                          pre-migration versions, copied from the .claude worktree snapshot
+                          (2026-09-23); line counts and spot-checked lines match the originals.

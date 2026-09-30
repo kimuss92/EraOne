@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@claude-flow/aidefence": "^3.0.3",
+    "agentic-flow": "^2.1.0"
+  }
+}

@@ -1,0 +1,498 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# config/llm.yaml — Era's model alias registry.
+#
+# WHY ALIASES AND NOT MODEL IDS
+#   Code and prompts refer to `era.reason`, never `claude-sonnet-5`. Provider
+#   model ids change (and get retired) far more often than Era's intent does, so
+#   a rename becomes an edit here instead of a grep across the repo. The four
+#   places that currently hardcode an id — main.py's LIVE_MODEL,
+#   core/ai_provider.py's two defaults, core/vision_service.py — are what this
+#   replaces.
+#
+# NOT IN config/api_keys.json ON PURPOSE
+#   That file is secrets-only and is blocked at two layers (a `deny` rule in
+#   .claude/settings.json plus the guard_protected_paths.py PreToolUse hook).
+#   Routing policy is not a secret and needs to be readable and reviewable.
+#   Also not in brands.yaml: that file is the brand-lock seatbelt, and mixing
+#   routing policy into it endangers the isolation invariant it exists to hold.
+#
+# COSTS AND LATENCIES BELOW ARE MEASURED, NOT ESTIMATED
+#   Every claude_cli number came from a real probe on 2026-07-30 (see the
+#   comments per alias). They are recorded because the CLI's per-call overhead
+#   is the single biggest routing input, and it is not something you would guess
+#   correctly: a trivial one-line prompt costs ~$0.058 because the Claude Code
+#   harness reloads on every invocation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+# The alias used when nothing else selects one. era.voice, because the live
+# Gemini session is the only thing that can serve Era's voice loop, and voice is
+# the default way she is used.
+default: era.voice
+
+# Alias resolved for a request that needs realtime audio. Kept separate from
+# `default` so changing the everyday default can never accidentally point the
+# voice loop at something that cannot hear.
+voice_default: era.voice
+
+providers:
+  gemini:
+    # Keys come from core/utils.py (get_api_keys / get_vision_api_key), which
+    # already handles the multi-key failover. Nothing credential-shaped here.
+    key_source: config/api_keys.json
+    reports_cost: false # Gemini returns no usage/cost today; ours is derived.
+
+  claude_cli:
+    # Subscription `claude -p` subprocess, the same mechanism era_dispatch.py
+    # already uses for the CM lane. No API key, no `anthropic` package.
+    key_source: subscription (CLAUDE_CONFIG_DIR)
+    config_dir: C:\Users\nesri\.claude-freelance
+    # Tried in order after `config_dir` when — and only when — the primary
+    # fails in a way the next account could survive: out of usage, rate
+    # limited, signed out, credentials rejected. A refusal or a malformed reply
+    # is NOT retried elsewhere; it would fail identically and cost another call.
+    #
+    # Karim, 2026-09-25: "use both claude profiles for Era — if one fails use
+    # the other and vice versa". That already held for the CM lane inside
+    # era_dispatch.py; listing the profile here extends the same behaviour to
+    # every other Claude path (reasoning, planning, Gemini quota failover).
+    #
+    # A failed account is skipped for 15 min (ERA_CLAUDE_ACCOUNT_COOLDOWN_S),
+    # in memory only, so a restart always re-probes. Status and ordering:
+    #   python -m core.llm.claude_accounts
+    # Override the whole list with ERA_CLAUDE_ACCOUNTS (';'-separated).
+    fallback_config_dirs:
+      - C:\Users\nesri\.claude-delta
+    reports_cost: true # --output-format json returns real total_cost_usd
+    # MEASURED 2026-07-30: running from Era's repo costs ~11K extra tokens and
+    # 2-5s per call, because Claude Code loads this project's CLAUDE.md and
+    # skills. Running from an empty directory halves both. Adapters MUST use a
+    # scratch cwd; this flag is the reminder, not a preference.
+    use_minimal_cwd: true
+    # Tools are disabled on this path. Claude is a reasoning ORACLE here: it
+    # returns text or JSON, and Era's own gated layer executes everything. That
+    # is a stronger guarantee than the API design would have given, because the
+    # model has no tool surface to misuse at all.
+    allowed_tools: ""
+
+  ollama:
+    key_source: none (local)
+    base_url_env: OLLAMA_BASE_URL
+    reports_cost: true # always zero — local
+
+aliases:
+  # ── Voice / realtime ──────────────────────────────────────────────────────
+  era.voice:
+    provider: gemini
+    model: models/gemini-3.1-flash-live-preview
+    role: The brain. Hearing, speaking, intent, and tool selection in one
+      bidirectional session. The ONLY alias that can serve the voice loop.
+    capabilities:
+      realtime_audio: true
+      tools: true
+      streaming: true
+      vision: true
+      json_schema: false
+      cost_reporting: false
+    # Era sends raw 16 kHz PCM straight into the session (no STT stage), so
+    # first-audible latency is the metric that matters, not first token.
+    measured:
+      note: In-session tool calls need no new connection; this is why media and
+        volume commands stay here.
+
+  # ── Gemini generate (non-voice) ───────────────────────────────────────────
+  era.fast:
+    provider: gemini
+    model: gemini-2.5-flash-lite
+    role: Cheap, quick text and JSON. Today's core/ai_provider DEFAULT_FAST_MODEL.
+    capabilities:
+      tools: false
+      json_schema: true
+      streaming: true
+      vision: true
+      cost_reporting: false
+    # BENCHMARKED 2026-07-30 (tools/llm_bench.py, n=6, one call per task).
+    # The speed half of the routing hypothesis, confirmed: ~4x faster than
+    # era.reason. The failures are both REASONING tasks — it answered the
+    # ordering puzzle 'C' (correct: B) and the schedule count '10' (correct:
+    # 11). That split is the evidence for the current policy: short commands
+    # stay here, planning does not.
+    measured:
+      bench_date: 2026-07-30
+      bench_n: 6
+      bench_pass_rate: 0.67
+      p50_ms: 682
+      worst_ms: 2600
+      # NO PRICE BLOCK ON PURPOSE: Gemini reports no cost and no rate card is
+      # recorded here, so the benchmark shows "-" rather than a number. Left
+      # blank rather than guessed — an invented price would silently become
+      # the input to a routing decision.
+
+  era.smart:
+    provider: gemini
+    model: gemini-2.5-flash
+    role: Heavier Gemini text and the vision path. Today's DEFAULT_SMART_MODEL
+      and core/vision_service's _VISION_TEXT_MODEL.
+    capabilities:
+      tools: false
+      json_schema: true
+      streaming: true
+      vision: true
+      cost_reporting: false
+
+  # ── Local classifier ──────────────────────────────────────────────────────
+  era.classify:
+    provider: ollama
+    model: qwen2.5-coder:7b
+    role: Free local classification. hermes_router already prefers this over
+      Gemini precisely so routing cannot burn metered quota — a 20/day free
+      tier was silently exhausting and forcing the heuristic fallback on every
+      utterance. Keep routing off metered models.
+    capabilities:
+      json_schema: true
+      cost_reporting: true # always 0.0
+    price:
+      input_per_mtok: 0.0
+      output_per_mtok: 0.0
+
+  # ── Local brain (offline fallback) ────────────────────────────────────────
+  era.local:
+    provider: ollama
+    # gemma4:e4b, chosen by measurement (2026-09-23, same 8 tool prompts, all
+    # 51 tools offered, thinking disabled):
+    #   qwen2.5-coder:7b  0.2-1.2 s, but wrote tool calls as TEXT and answered
+    #                     "Done, sir." with no tool at all — unusable for acting.
+    #   gemma4:e4b        2-7 s warm, 7/8 actions correct, correct dates, good
+    #                     French. Runs 100% GPU at 3.2 GB despite 9.6 GB on disk.
+    # Cold start (loading the ~8.4k-token tool prefix) is ~20 s, which is why
+    # the fallback pre-warms it while announcing the switch.
+    model: gemma4:e4b
+    role: The floor under everything. Serves the voice loop, typed and Telegram
+      commands, and generate_content calls whenever Gemini is out of quota or
+      unreachable. Free, local, works with the network down.
+    capabilities:
+      tools: true # returned as ToolCalls; Era's safety gate executes them
+      json_schema: true
+      streaming: true
+      cost_reporting: true
+    # A num_ctx change forces a ~10 s reload, hence core/text_ollama.SHARED_NUM_CTX.
+    measured:
+      first_token_ms: 2800 # warm, one tool call + confirmation
+      cold_start_ms: 20000
+      bench_pass_rate: 0.875 # 7/8
+      probe_date: 2026-09-23
+    price:
+      input_per_mtok: 0.0
+      output_per_mtok: 0.0
+
+  # ── Claude reasoning tier (CLI) ───────────────────────────────────────────
+  era.reason:
+    provider: claude_cli
+    model: sonnet # --model sonnet -> claude-sonnet-5
+    role: Complex planning, multi-step reasoning, research synthesis, and
+      long-context analysis. The everyday Claude tier.
+    capabilities:
+      tools: false # deliberately: reasoning oracle, see providers.claude_cli
+      json_schema: true # via prompt + schema, validated on Era's side
+      streaming: false # `claude -p` returns one complete result
+      vision: false # no image input over this path
+      long_context: true
+      cost_reporting: true
+    # MEASURED 2026-07-30, minimal cwd, trivial prompt. This is the FLOOR — the
+    # price of asking at all, before any real work.
+    measured:
+      call_overhead_usd: 0.058
+      first_token_ms: 2690
+      total_ms: 2756
+      cache_write_tokens: 8578
+      resolved_model: claude-sonnet-5
+      probe_date: 2026-07-30
+      # BENCHMARKED 2026-07-30 (tools/llm_bench.py, n=6). Got BOTH reasoning
+      # tasks right that era.fast got wrong, at ~4x the latency and $0.059 a
+      # call — the measured cost matches the $0.058 floor above, which is the
+      # independent confirmation that the figure is real.
+      #
+      # It failed the TRIVIAL extraction ("gigabytes free" -> answered the
+      # "used" figure), reproducibly, 3 runs out of 3. Recorded because it is
+      # the kind of result a benchmark exists to surface: the expensive tier is
+      # not uniformly better, so "route everything hard to Claude" is not the
+      # lesson. Narrow finding — one task, one phrasing — not a claim about the
+      # model in general.
+      bench_date: 2026-07-30
+      bench_n: 6
+      bench_pass_rate: 0.83
+      bench_cost_per_call_usd: 0.0589
+      p50_ms: 2934
+      worst_ms: 5310
+
+  era.deep:
+    provider: claude_cli
+    model: opus # --model opus -> claude-opus-5
+    role: Highest-capability tier. Advanced creative work and the hardest
+      reasoning. Route here rarely — it is 3x era.reason's floor cost.
+    capabilities:
+      tools: false
+      json_schema: true
+      streaming: false
+      vision: false
+      long_context: true
+      cost_reporting: true
+    measured:
+      call_overhead_usd: 0.184
+      first_token_ms: 2538
+      total_ms: 2583
+      cache_write_tokens: 18417
+      resolved_model: claude-opus-5
+      probe_date: 2026-07-30
+
+  era.cheap:
+    provider: claude_cli
+    model: haiku
+    role: Would be the cheap Claude tier for short classification.
+    # AVAILABLE as of 2026-07-30. It was blocked by a persistent Windows User
+    # env var, ANTHROPIC_DEFAULT_HAIKU_MODEL=moonshotai/kimi-k2.6, which made
+    # `--model haiku` ask the Anthropic API for a model it does not serve — every
+    # call 404'd. The variable has been deleted (see
+    # runtime/env_backup_ANTHROPIC_DEFAULT_HAIKU_MODEL.txt to restore it).
+    #
+    # Verified after removal: `claude -p --model haiku` returns
+    # claude-haiku-4-5-20251001 and succeeds.
+    #
+    # NOTE ON PROCESS ENVIRONMENT: deleting the variable only affects processes
+    # started AFTERWARDS. Anything launched from a shell that predates the
+    # change still carries the old value and will still 404 — which is why this
+    # looked unfixed for a while even after the registry was clean.
+    available: true
+    # MEASURED 2026-07-31, two probes, minimal cwd, trivial prompt. Recorded
+    # because an alias with no measured cost lets the router treat it as FREE —
+    # and this one is not: the CLI's harness reload dominates, so haiku's floor
+    # is only ~4x cheaper than sonnet's despite the model being far cheaper per
+    # token. That is exactly the kind of thing a rate card would have got wrong.
+    #
+    # The two runs came out $0.0163 and $0.0079; the spread is cache-write
+    # variance (6871 vs 2433 cache_creation tokens), not noise in the model.
+    # The higher figure is recorded — a routing budget should assume the worse
+    # case, not the luckier one.
+    measured:
+      call_overhead_usd: 0.0163
+      first_token_ms: 2828
+      total_ms: 2364
+      resolved_model: claude-haiku-4-5-20251001
+      probe_date: 2026-07-31
+      probe_runs: 2
+    capabilities:
+      tools: false
+      json_schema: true
+      streaming: false
+      cost_reporting: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routing policy lives here too, so the table and the costs it depends on stay
+# in one reviewable place. The router (phase 7) reads it; nothing does yet.
+#
+# The categories mirror the agreed policy. Media, volume, navigation and short
+# routine commands stay on era.voice — and the measured numbers above are the
+# independent argument for it: era.reason cannot beat a 2.7s floor, so "pause"
+# was never going there on latency grounds alone.
+# ─────────────────────────────────────────────────────────────────────────────
+routing:
+  # Deterministic task class -> alias. Consulted before any classifier runs.
+  by_task:
+    media_playback: era.voice
+    device_adjustment: era.voice
+    navigation_status: era.voice
+    short_command: era.voice
+    complex_planning: era.reason
+    research_synthesis: era.reason
+    long_context: era.reason
+    creative_advanced: era.deep
+    # Community management is not a model choice — it is a separate lane
+    # (hermes_router category "cm" -> era_dispatch). Named here only so nobody
+    # adds it as an alias and splits the CM pipeline in two.
+    community_management: LANE:cm
+
+  # Fallback when a chosen alias is unavailable. era.voice is the floor because
+  # it is the one that must always work for Era to be usable at all.
+  availability_fallback: era.voice
+
+  # Default-off, pending the benchmark. A regex bypass for "volume up" would
+  # skip the live session's eight OS-vision routing rules (Spotify is the
+  # absolute default media app, never auto-route to YouTube...) and would also
+  # skip _note_user_utterance, which feeds the window authorising save_memory.
+  # Measure it before believing it is free.
+  deterministic_media_bypass:
+    enabled: false
+    env_override: ERA_DETERMINISTIC_MEDIA_BYPASS
+
+  # A per-day ceiling on metered spend. ENFORCED as of phase 10 by
+  # core/llm/spend.py, which checks the PROJECTED total before each call and
+  # persists the running figure to runtime/llm_spend.json so a restart does not
+  # hand back a fresh budget. Set from the measured floors above: 20 era.reason
+  # calls is ~$1.16.
+  daily_budget_usd: 2.00
+
+  # ── Claude dispatch (phase 10) ────────────────────────────────────────────
+  # DEFAULT OFF. This is the switch that lets a request actually be ANSWERED by
+  # Claude instead of merely routed to it on paper. Everything up to phase 9
+  # selected and displayed a model; nothing changed who replied.
+  #
+  # Even switched on, it is deliberately not a classifier deciding to spend your
+  # money. It fires only when you have explicitly pinned a Claude alias ("use
+  # Claude", "think harder") — two opt-ins, one persistent and one per-session,
+  # before a single paid call happens. Automatic by-task dispatch is phase 11's
+  # canary, where it can be measured against the shadow first.
+  claude_dispatch:
+    # ENABLED. This is the master switch over the pinned path AND autopilot
+    # below — with it false, neither can act, so leaving it off while autopilot
+    # said "true" produced a config that looked live and routed nothing.
+    #
+    # What makes this safe to ship on, in order of how much each one bounds:
+    #   * the $2.00/day ceiling, checked against the PROJECTED total before
+    #     every call and persisted across restarts (core/llm/spend.py);
+    #   * autopilot's 25-call daily cap, which trips long before the money does;
+    #   * an allowlist of three task classes, all with measured evidence;
+    #   * fast commands (media/volume/status/short) never leaving the live
+    #     session — measured 682ms vs 2934ms;
+    #   * ERA_CLAUDE_DISPATCH=0 as a kill switch that needs no config edit.
+    enabled: true
+    env_override: ERA_CLAUDE_DISPATCH
+    # Hard ceiling on one call. The measured p50 is ~2.9s and the worst
+    # observed was 5.3s, so 45s is "something is wrong", not "be patient".
+    timeout_s: 45
+
+  # ── Shadow mode (phase 11) ────────────────────────────────────────────────
+  # Records what AUTOMATIC routing would have decided, without acting on it.
+  # Costs nothing and changes nothing: the classifier is a regex pass and the
+  # router is pure. Read it with `python -m core.llm.shadow`.
+  #
+  # Safe to leave on — it exists so the canary below can be argued from
+  # observations rather than from opinion. It deliberately does NOT record what
+  # was said, only how it classified; see core/llm/shadow.py.
+  shadow:
+    enabled: true
+    env_override: ERA_LLM_SHADOW
+
+  # ── Autopilot (phase 12) ──────────────────────────────────────────────────
+  # Era picks the model herself, per task, with no pin. This is the "autopilot"
+  # layer: `by_task` above is the map, core/llm/taskclass.py is the classifier,
+  # and this block decides how much of that map is allowed to act.
+  #
+  # ENABLED, because the evidence for the listed classes is in hand:
+  #   long_context      — an utterance over 900 chars is a pasted document. The
+  #                       live voice session is the wrong tool for it whatever
+  #                       model reasons better. Unambiguous.
+  #   complex_planning  — benchmarked 2026-07-30: Claude got BOTH reasoning
+  #                       tasks right that Gemini got wrong.
+  #   research_synthesis— same tier, same measured evidence.
+  #
+  # DELIBERATELY ABSENT, and this is the important half:
+  #   media_playback / device_adjustment / navigation_status / short_command
+  #   all stay on era.voice. They already route there in by_task, so listing
+  #   them would be a no-op at best — and the measured 682ms vs 2934ms gap is
+  #   the reason they must never move. "Pause" cannot afford a 2.9s floor.
+  #
+  # The phase 9 benchmark also found Claude failing a TRIVIAL extraction 3 runs
+  # of 3. That is why extraction-shaped work is not on this list and why the
+  # classifier is deliberately allowed to return "no opinion" — an unclassified
+  # utterance stays on the voice model rather than guessing.
+  #
+  # Turn the whole thing off with ERA_LLM_AUTOPILOT=0, or by setting enabled
+  # false here. `claude_dispatch.enabled` above is still the master switch.
+  autopilot:
+    enabled: true
+    env_override: ERA_LLM_AUTOPILOT
+    tasks: [long_context, complex_planning, research_synthesis]
+    # Skip guesses the classifier itself flagged as thin ("refactor this").
+    require_confident: true
+    # Per-day cap on automatic calls, independent of the dollar budget: a
+    # misfiring classifier is caught by a count long before a ceiling that also
+    # has to accommodate deliberate use. 25 x ~$0.06 is ~$1.50, inside the
+    # $2.00 budget with room for pinned calls on top.
+    max_per_day: 25
+    # Say which model took an autopiloted request the first time it happens in
+    # a session. Silent substitution is the thing the whole indicator exists to
+    # prevent; a one-off spoken note costs a sentence and removes the surprise.
+    announce_first: true
+
+  # ── Quota failover ────────────────────────────────────────────────────────
+  # When a Gemini generate_content call fails with RESOURCE_EXHAUSTED, Era
+  # recovers silently instead of dead-ending the tool: first a spare Gemini key
+  # (quota is per key, so this is free and keeps Gemini primary), then the SAME
+  # text request on Claude via the tool-free CLI. Implemented by wrapping the
+  # SDK once, so every action's own genai.Client is covered — see
+  # core/llm/quota_failover.py (`python -m core.llm.quota_failover` for status).
+  #
+  # Never failed over: image/file/audio input (no vision on the Claude path),
+  # tool/search-grounded calls (Claude would invent results), cached content.
+  # Those re-raise the original quota error, so existing handling is unchanged.
+  # The Live voice session is not covered — Claude cannot serve realtime audio.
+  #
+  # Bounded by the shared daily_budget_usd above AND max_per_day below.
+  # 80 x era.cheap's $0.0163 floor is ~$1.30. Kill switch: ERA_QUOTA_FAILOVER=0.
+  quota_failover:
+    enabled: true
+    env_override: ERA_QUOTA_FAILOVER
+    alias: era.cheap # haiku: ~4x cheaper floor than era.reason, same latency
+    max_per_day: 80
+    timeout_s: 45
+    # How long an exhausted (key, model) pair is skipped before Gemini is
+    # retried first again. Short on purpose: Gemini is the primary.
+    latch_seconds: 300
+    rotate_keys: true
+    # Step 3a, BEFORE Claude: CodeCraft (claude-sonnet-5 via CODECRAFT_* in
+    # api_keys.json). Already-paid subscription, ~3 s per call, text only —
+    # same eligibility as Claude. Skipped silently if CodeCraft isn't configured.
+    # See core/llm/codecraft_failover.py.
+    # OFF (2026-09-25, user's decision): Era runs without CodeCraft. A quota
+    # hit goes spare Gemini key -> Claude -> local, as before 2026-09-24.
+    codecraft: false
+    # Step 4, after Claude: the local model. Free and needs no network, so it
+    # is also where a text call lands when Claude is capped, over budget, or
+    # fails. Same eligibility rules as Claude (no images, no tools/grounding).
+    local_alias: era.local
+    # A Gemini call that fails because the network is DOWN (DNS, refused,
+    # timed out) goes straight to local — Claude cannot help without network.
+    offline_failover: true
+
+  # ── Local fallback voice loop ─────────────────────────────────────────────
+  # While the Gemini Live session is down (quota exhausted on every key, bad
+  # key, rejected config, or no network) Era keeps hearing and answering with
+  # local models instead of sleeping deaf for 15 min - 2 h:
+  #   mic -> Silero VAD -> Whisper-small (FR/EN) -> era.local -> Fish, or Piper
+  #   when offline -> speaker.
+  # Tool calls go through the SAME gate as Gemini's (EraLive._execute_tool).
+  # Kill switch: ERA_LOCAL_FALLBACK=0. See app/era_live/local_fallback.py.
+  local_fallback:
+    enabled: true
+    env_override: ERA_LOCAL_FALLBACK
+    alias: era.local
+    tools: true
+    max_tool_rounds: 4
+    history_turns: 8
+    probe_gemini_every_s: 300
+
+  # ── Cascade voice mode (replaces the Gemini Live session) ─────────────────
+  # mic -> Silero VAD -> Whisper-small int8 (CPU) -> CodeCraft (streamed, with
+  # Era's gated tools) -> Fish, or Piper when Fish fails or is switched off.
+  # No long-lived session, so nothing to drop: each turn is one HTTP request.
+  # Everything local runs on the CPU; the GPU stays free for Adobe.
+  #
+  # Taken ONLY when CodeCraft is configured: CODECRAFT_BASE_URL,
+  # CODECRAFT_MODEL and CODECRAFT_API_KEY (env, or a `codecraft` block in
+  # config/api_keys.json). Until then Era stays on Gemini Live, unchanged.
+  # Kill switch: ERA_CASCADE=0. Saying "reconnect" in this mode goes back to
+  # Gemini Live until the next launch. See app/era_live/cascade.py.
+  # OFF (2026-09-24, user's decision): measured CodeCraft buffers every reply
+  # (fake streaming, 4-22 s to first token with Era's tools), so Gemini Live
+  # stays the voice. Flip to true only with a brain that truly streams.
+  cascade:
+    enabled: false
+    env_override: ERA_CASCADE
+    history_turns: 5 # turns, not messages: a turn keeps its tool calls + results
+    max_tool_rounds: 4
+    timeout_s: 45
+    fallback_alias: "" # "era.local" = Ollama backup brain (runs on the GPU)
+    low_priority: true # BELOW_NORMAL process priority so Premiere never lags
+    stt_threads: 4
+    cycle_s: 3600

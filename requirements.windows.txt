@@ -1,0 +1,54 @@
+# MARK-XXXIX Windows requirements
+# Recommended: Python 3.10 or 3.11 on Windows
+
+sounddevice
+google-genai
+google-generativeai
+pillow
+requests
+beautifulsoup4
+ddgs
+playwright
+pyautogui
+pyperclip
+pygetwindow
+pywinctl
+opencv-python
+numpy
+mss
+psutil
+nvidia-ml-py
+comtypes
+pycaw
+win10toast
+send2trash
+youtube-transcript-api
+pywinauto
+python-pptx
+python-docx
+pandas
+PyQt6
+PyQt6-WebEngine
+mcp
+openai
+flask
+aiohttp
+keyboard
+spotipy
+vosk
+pytest
+apscheduler
+ruamel.yaml
+# Gmail lane (core/gmail_service.py) — optional; Era runs without them.
+google-api-python-client
+google-auth
+google-auth-oauthlib
+pywin32; platform_system == "Windows"
+winsdk; platform_system == "Windows"
+
+watchdog
+websockets
+
+# Optional, install only if needed:
+# pyaudio
+# python-vlc

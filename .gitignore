@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+.env.*
+
+# Secrets / local config
+config/api_keys.json
+config/media_host.json
+# Gmail OAuth client identity. The refresh token itself is never written here —
+# it lives under ~/.eraone/gmail/ — but the client file still identifies the app.
+config/gmail_client_secret.json
+config/gmail_credentials.json
+.cache
+*.cache
+
+# Runtime data
+logs/
+!logs/.gitkeep
+memory/long_term.json
+memory/runtime_intent.json
+memory/backups/
+
+# Test/cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large local models
+models/
+
+# Added 2026-09-23 with the local git baseline (migration-voice-v2)
+node_modules/
+runtime/
+saved_live/
+graphify-out/
+scratchpad/
+*.db
+*.log
+# Biometric voice enrollment + personal profile: never versioned
+config/speaker_enrollment.pth
+config/speaker_profile.json*
+memory/*.json
+memory/*.json.bak*
+.claude-flow/
+
+# Added 2026-09-30 for GitHub publish: local worktrees + backup snapshots, not source
+.claude/worktrees/
+.phase1_backups/
+**/.phase1_backups/
+.git.disabled-bak-*/

@@ -1,0 +1,7 @@
+Record Era feedback memory and restore main.py's UTF-8 BOM
+
+- feedback_memory.jsonl: six entries from 2026-09-23 21:11-21:12 UTC
+  (verify playback state before naming what is playing; 'prepare' a video
+  or song means ready it paused, not play it).
+- main.py: the byte-order mark the original file had is back; an earlier
+  reformat had dropped it. No code change.

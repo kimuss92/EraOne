@@ -1,0 +1,56 @@
+# Ruff config for EraOne (see CLAUDE.md → "Lint & Format").
+# Format runs automatically on every Python edit via the PostToolUse hook.
+# Full lint: `python -m ruff check .`   Autofix: `python -m ruff check --fix .`
+target-version = "py312"
+line-length = 100
+
+extend-exclude = [
+    "graphify-out",
+    "models",
+    "runtime",
+    "logs",
+    ".swarm",
+    ".claude-flow",
+    # Point-in-time copies of project files kept because there is no VCS here.
+    # Linting them doubles every count and invites "fixing" a frozen snapshot.
+    ".phase1_backups",
+    ".phase5_backups",
+    ".phase6_backups",
+    # Throwaway patch drafts, never imported (they reference `self` at module level).
+    "scratchpad",
+    # Vendored skill/plugin scripts — not ours to restyle.
+    ".claude/skills",
+    # Same reasoning, found 2026-09-29: ruff also formats Python code blocks
+    # INSIDE Markdown, and was rewriting quotes and line breaks in vendored
+    # agent definitions and in dated design specs. Those documents are a record
+    # of what was decided at the time; restyling their examples changes history
+    # to satisfy a linter and makes `ruff format --check .` permanently red for
+    # something that is not Era's code.
+    ".claude/agents",
+    "docs/superpowers",
+    "skills",
+    "node_modules",
+    "source_code_folder",
+    "ui_src",
+]
+
+[lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+    "B008",  # function call in argument default (common pattern here)
+]
+
+[lint.per-file-ignores]
+# Tests: fixtures / re-imports, plus the sys.path bootstrap every test file
+# performs before importing project modules (that IS the import-not-at-top).
+"**/test_*.py" = ["F401", "F811", "E402"]
+"conftest.py" = ["F401"]
+# main.py must set the Qt scaling env vars and reconfigure stdout/stderr to
+# UTF-8 BEFORE the rest of the imports run — Qt reads those at import time, and
+# any import that prints would mojibake first. The late imports are the point.
+"main.py" = ["E402"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

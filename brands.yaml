@@ -1,0 +1,1283 @@
+# ============================================================================
+# BRAND REGISTRY — single source of truth for routing.
+# Era One resolves a brand key from what you say; Claude reads THIS FILE (never
+# its memory) to decide handles, account IDs, folders, and posting times.
+# A wrong value here is the ONLY way a post can reach the wrong page — so treat
+# this file as the seatbelt. Fill EVERY field before a brand goes live.
+# ============================================================================
+
+# ---- Global defaults (a brand can override any of these) -------------------
+defaults:
+  timezone: "Africa/Tunis"          # UTC+1
+  language: "fr"                    # caption language
+  encoding: "utf-8"                 # ALWAYS utf-8 (é è à ç û î ô œ « » — ')
+  hashtag_max: 5
+  approval_required: true           # two gates: plan + assets. never auto-publish.
+  cleanup_after_days: 7             # unapproved files older than this -> trash
+
+  # publishing tools (shared across brands) — all through Composio.
+  # TikTok is live for Delta Cuisine (verified 2026-07-08, see brand override
+  # below) — Ceram Quartz's TikTok is NOT connected yet, so it stays excluded
+  # from that brand's routing until it is (see each brand's routing override).
+  facebook_tool: "composio"
+  gmail_tool: "composio"
+  instagram_tool: "composio"
+  tiktok_tool: "composio"           # overridden off only where a brand excludes tiktok from routing
+
+  # content routing matrix
+  routing:
+    reel: [instagram, tiktok, facebook]
+    carousel: [instagram, facebook]          # NEVER tiktok
+
+  # --- Meta Ads (paid) — shared across every brand ---
+  # facebook-ads MCP's OAuth token lives in ONE account (the freelance one),
+  # verified live 2026-07-20 headless (mcp__facebook-ads__* tools including
+  # ads_create_ad_set/ads_activate_entity confirmed reachable from a `claude -p`
+  # run under this config dir). era_dispatch.run_task() overrides
+  # claude_config_dir to THIS value for every task_type=="ads" run, regardless
+  # of which brand — never a brand's own claude_config_dir, which was never
+  # authorized for facebook-ads.
+  ads_claude_config_dir: "C:\\Users\\nesri\\.claude-freelance"
+
+  # --- Global (non-brand) schedules ---
+  # These run ONCE, not once per brand. era_scheduler.GLOBAL_TASK_MAP is the
+  # allow-list; an unknown key here is ignored rather than obeyed.
+  schedules:
+    vault_maintenance:
+      # 03:10 daily. Overnight because the pass rewrites two Era-owned notes in
+      # the Obsidian vault, and Obsidian syncing a file out from under you while
+      # you have it open is a merge conflict nobody asked for.
+      cron: "10 3 * * *"
+      enabled: true
+
+# ============================================================================
+# BRANDS
+# ============================================================================
+brands:
+
+  # -------------------------------------------------------------------------
+  # DELTA CUISINE  (fully configured — use as the template)
+  # -------------------------------------------------------------------------
+  delta_cuisine:
+    display_name: "Delta Cuisine"
+    status: "active"
+    aliases: ["delta", "delta cuisine", "dc"]   # how Era One recognizes it by voice
+
+    # --- which Claude account + context this brand runs under ---
+    # Era sets CLAUDE_CONFIG_DIR to claude_config_dir to select the account,
+    # and runs Claude Code with cwd = project_dir. No API key involved.
+    claude_config_dir: "C:\\Users\\nesri\\.claude-delta"   # DELTA CUISINE Claude account
+    project_dir: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation"
+    browser_profile: "Brave/Profile 1 (Delta Cuisine)"     # for manual review only
+    working_dir: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation"
+    charter_file: "MASTER_CONTENT_BLUEPRINT.md"
+    # NOTE 2026-07-20: memory_dir is DEAD CONFIG — nothing reads it, and the
+    # folder has never existed in either brand's project_dir. It was the intended
+    # home for a per-brand recommendations/perf log that was never built. The
+    # role it describes is now filled by two things that DO exist:
+    #   • the Obsidian vault  (obsidian_era\era_brain) — read by core/cm_vault.py
+    #   • memory/cm_lessons.json — written by core/cm_learning.py
+    # Kept only so the key doesn't silently vanish; delete it once nothing refers
+    # to it. Do not treat it as a live path.
+    memory_dir: "memory"                         # DEAD — see note above
+    texture_folder: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation\\textures"
+
+    # --- notifications ---
+    notify_email: "kimuss92@gmail.com"
+
+    # --- localization ---
+    timezone: "Africa/Tunis"
+    language: "fr"
+
+    # --- AI visual production ---
+    # UPDATED 2026-07-20 from D:\my workflow\CLAUDE.md (dated 2026-07-19, newer
+    # than the value that was here). That file names "master space for kitchen DC"
+    # as THE space to generate into going forward, and explicitly lists the older
+    # experimental spaces ("DC space", "wardrobe space", "dressing") as superseded.
+    # The previous value here was a2245eb7-45a7-45c1-b0e9-85d2ccc3d031 — one of
+    # those older spaces. Restore it if this ever generates into the wrong place.
+    magnific_space: "https://www.magnific.com/app/spaces/a243e483-a215-4f17-895c-0896895bc3f3"
+    magnific_space_name: "master space for kitchen DC"
+
+    # MAGNIFIC FLOWS + AD-CREATIVE (added 2026-07-29, for the `adcreative` lane).
+    #
+    # WHAT THIS IS NOT: Magnific's "Agent" and "Brand Kit" features are NOT
+    # reachable from MCP. Verified live 2026-07-29: library_list(type="agent")
+    # returns 0 and there is no agent_create/agent_run; brand_kit_list and
+    # brand_kit_get are not exposed at all, which makes images_generate's
+    # brandKitId / templateSlug / validationRunId / validationScenarioKey
+    # UNUSABLE — there is no way to obtain an id for them. Brand compliance
+    # therefore comes from design_rules below + the charter, never from Magnific.
+    # Re-check on any Magnific MCP update: if brand_kit_get appears, a real Brand
+    # Kit per brand becomes the better enforcement point and this comment is stale.
+    #
+    # COST: the account is Premium+ "unlimited", but unlimitedAppliesHere is
+    # FALSE for MCP sessions — every generation really bills. 6927 credits left
+    # as of 2026-07-29. Hence the ceiling and the mandatory free simulate.
+    magnific:
+      credit_ceiling_per_run: 600        # ~4 cheap flows; above this the run reports and stops
+      require_simulate: true             # simulate_flows / simulate_cost are FREE — always preflight
+      # Ad/format fan-out targets for design_auto_resize. 16:9 is DC-only (no CQ
+      # landscape placement); 9:16 covers reels + TikTok, which this brand has.
+      ad_ratios: ["1:1", "4:5", "9:16", "16:9"]
+      # Verified public flows (ids + credit costs read from flows_list 2026-07-29).
+      # These are the ONLY flows the adcreative lane may run for this brand.
+      approved_flows:
+      - {id: "X5DBfolnSW", name: "Multi-format resizer", credits: 150, use: "one approved
+          visual -> every ad ratio"}
+      - {id: "eqpdqL9Ptk", name: "Localize ads and images", credits: 75, use: "translate
+          a finished banner, design untouched"}
+      - {id: "DKTpclpxKi", name: "Audience-driven ads", credits: 200, use: "ad variants
+          per audience, one claim each"}
+      - {id: "otqh829FPM", name: "Lifestyle interior scene", credits: 75, use: "put
+          a kitchen/wardrobe render in a styled room"}
+      - {id: "sG1l8e2GTt", name: "Multi-angle coverage", credits: 75, use: "one image
+          -> 4 camera angles"}
+      - {id: "wVZ7EIQVNR", name: "Render to photoreal", credits: 75, use: "lift a
+          CGI-looking render to photoreal"}
+      banned_flows:
+      - {id: "1RDr4rEVPs", reason: "Product ad spot — 3360 credits. Explicit spoken
+          order only."}
+      - {id: "lUh9gv9EVU", reason: "Multishot brand story — 4200 credits. Explicit
+          order only."}
+      - {id: "19cr4rEVPs", reason: "UGC unboxing — 10621 credits, EXCEEDS the whole
+          balance."}
+      - {id: "aLUfShW4BA", reason: "UGC tutorial — 10621 credits, EXCEEDS the whole
+          balance."}
+      # HARD INVARIANT — flows must NEVER replace the wardrobe pipeline.
+      # Flows are single-shot input->output: they cannot hold wardrobe identity
+      # across shots, which is the exact drift design_rules.wardrobe.generation_method
+      # and the wardrobe-reel-workflow skill exist to prevent. Wardrobe Reels stay
+      # master-anchored (generate ONE master, DERIVE every other shot from it).
+      # Flows apply to STILL ad creative and format fan-out only.
+      never: "use a flow to generate a wardrobe Reel shot, or any multi-shot set that
+        must keep one product identical across shots — that is the master-anchored
+        pipeline's job, and a flow will silently produce a different wardrobe per
+        shot"
+
+    # --- publishing accounts (THE routing table) ---
+    # TikTok connected via Composio — verified 2026-07-08 via
+    # COMPOSIO_MANAGE_CONNECTIONS(list): account "tiktok_swale-kevel" (alias
+    # delta.cuisine.gro, display name "Delta Cuisine group") is status active.
+    routing:
+      reel: [instagram, facebook, tiktok]  # tiktok re-enabled — see note above
+      carousel: [instagram, facebook]      # NEVER tiktok (global rule)
+    platforms:
+      instagram:
+        handle: "@delta_cuisine_group"
+        # Re-verified 2026-07-15 via COMPOSIO_MANAGE_CONNECTIONS(list): the
+        # connection was re-authorized since the 2026-07-03 check, so the id
+        # rotated from "instagram_noon-droit" to "instagram_jert-entity" — same
+        # underlying account confirmed by user_info (id 27229763346650203,
+        # username delta_cuisine_group) still matching this brand's handle.
+        composio_connected_account_id: "instagram_jert-entity"
+        # Numeric IG Business user id — REQUIRED by INSTAGRAM_POST_IG_USER_MEDIA.
+        # Verified 2026-07-15: instagram_jert-entity -> @delta_cuisine_group.
+        composio_ig_user_id: "27229763346650203"
+      tiktok:
+        handle: "@delta.cuisine.gro"
+        # Verified 2026-07-08 via Composio COMPOSIO_MANAGE_CONNECTIONS(list) —
+        # connected account alias "delta.cuisine.gro" (display name "Delta
+        # Cuisine group") is status active and is_default true.
+        composio_connected_account_id: "tiktok_swale-kevel"
+      facebook:
+        page_name: "DELTA CUISINE"
+        # VERIFIED 2026-07-03: a dedicated Composio Facebook connection (alias
+        # "delta cuisine", separate from Ceram Quartz's "CQ" connection) was
+        # authorized with the DELTA CUISINE page granted. FACEBOOK_LIST_MANAGED_PAGES
+        # under this connection returns "DELTA CUISINE" at exactly this ID.
+        composio_page_id: "115558078454323"
+
+    # --- strategy ---
+    content_mix:
+      reels_per_week: [5, 6]
+      mandatory_weekly:
+      - "at least 1 wardrobe reel"
+      - "at least 1 wardrobe carousel"
+
+    # --- interior-design rules (HARD constraints on every kitchen/wardrobe render) ---
+    # These are the material/harmony laws for Delta Cuisine creations. The
+    # interior-design skill (.claude/skills/interior-design/SKILL.md) runs these as a
+    # pre-generation checklist; a render that violates ANY of them is wrong and
+    # must be reworked BEFORE it counts as an asset.
+    #
+    # MATERIALS ARE THE CM'S DECISION (changed 2026-07-09). The CM has everything it
+    # needs to choose: the swatch library (texture_folder), the harmony laws below,
+    # the wardrobe conception references, and the brand's past posts. It PICKS the
+    # material family + exact swatch name itself, STATES the pick and the reason in
+    # the plan, and never asks the user "quartz or ceramic?". The user corrects a
+    # pick at plan review ("change reel 1's texture") — that is the control, not a
+    # question mid-run.
+    design_rules:
+      material_selection:
+        decide: "autonomous — the CM picks the material family and the exact swatch
+          name from texture_folder. NEVER ask the user which material to use."
+        must_state: "the plan names the chosen family + exact swatch (e.g. 'Quartz
+          — Nero Stellar') and one line on why it fits the concept"
+        vary_across_week: "do not repeat the same swatch twice in one week's assets"
+        never: "invent a material name, or use a swatch that is not a real file in
+          texture_folder"
+      kitchen:
+        # REPLACED 2026-07-20 with the exact build formula from
+        # D:\my workflow\CLAUDE.md (2026-07-19), recorded there as "Karim's fixed
+        # build rule — every future kitchen visual must follow this exactly".
+        # The previous wording here ("one or two textures maximum", "tall glass
+        # present in most kitchens") said roughly the same thing far more loosely
+        # and left the CM to guess WHICH surface got WHICH material. The formula
+        # below assigns every surface explicitly, so a render can be checked
+        # against it instead of argued about.
+        #
+        # THE THREE-MATERIAL FORMULA — exactly one swatch in each of three roles:
+        composition_formula:
+          stone: "ONE quartz OR ceramic texture — used ONLY on the island countertop,
+            its waterfall edges, and the backsplash. Nowhere else."
+          wood: "ONE wood-grain finish — ALL lower cabinetry facades, matched exactly
+            across every lower unit."
+          plain: "ONE solid lacquer colour — ALL upper cabinetry facades."
+        material_family: "one stone family per kitchen — either céramique OR quartz,
+          NEVER both in the same kitchen"
+        # These are fixed brand furniture, NOT part of the three-material count.
+        tall_cabinetry: "ALWAYS dark glass. Fixed — does not count as one of the three
+          materials above."
+        plinth: "kitchen base/plinth is ALWAYS black matte aluminium"
+        appliances: "ALWAYS Whirlpool or Rosières branded — never generic, never any
+          other brand"
+        # SINK + FAUCET (HARD constraint, added 2026-07-21, Karim). The faucet is
+        # a metal fixture, NOT part of the stone/wood/plain material count and it
+        # must NEVER be rendered in the worktop's stone material (no quartz/ceramic
+        # faucet). It is always a metal finish — inox (stainless), matte black, or
+        # silver/chrome — and the CM picks whichever of those best complements the
+        # chosen worktop swatch's colour and the kitchen's palette. Same logic for
+        # the sink where a metal sink is shown.
+        sink_faucet: "the faucet is ALWAYS a metal finish — inox (brushed stainless),
+          matte black, or silver/chrome — NEVER the worktop's stone material and never
+          a painted/coloured novelty finish. CHOOSE the metal that best complements
+          the chosen worktop swatch and the kitchen palette (e.g. matte black against
+          a warm/pale quartz, brushed inox against a dark or veined stone), and STATE
+          the chosen faucet finish in the plan with a one-line reason. An undermount/inset
+          metal sink follows the same finish logic."
+        harmony: "the stone/wood/plain combination must be harmonious — no clashing
+          finishes"
+        never: "a fourth material, a second stone texture, mismatched lower cabinet
+          facades, an unbranded/other-brand appliance, or a faucet rendered in the
+          worktop's stone material"
+      wardrobe:
+        # CORRECTED 2026-07-20 from D:\my workflow\CLAUDE.md (rule set 2026-07-19).
+        # The list here had "one texture, lacquered or laminated" AND "one texture
+        # only" — a near-duplicate pair — and was MISSING the third real option,
+        # the combination. Karim's actual rule is these three; pick exactly ONE.
+        # RE-CONFIRMED 2026-07-20 (same day) against Karim's own "MASTER PROMPT —
+        # Modern Modular Wardrobe Render" (CONFIG_A/B/C) — the two describe the
+        # same three configurations in different words. Full prompt template,
+        # variable table and negative prompt: vault
+        # Resources/Delta_Cuisine_Wardrobe_Master_Prompt.md.
+        allowed_configurations:
+        - "one texture, lacquered or laminated"          # = CONFIG_A (no glass)
+        - "all glass doors with a laminated-wood interior"  # = CONFIG_B
+        - "combination: one lacquered/laminated texture PLUS glass doors with a laminated-wood
+          interior"                                      # = CONFIG_C
+
+        # --- SHOT VARIETY (HARD constraint, added 2026-07-20) ---
+        # Karim's correction after the first test Reel: shots repeated each other.
+        # Every shot in a Reel must be a DIFFERENT camera treatment — the set
+        # below is the approved vocabulary, one shot per type, never two of the
+        # same type in one Reel. They must work as complementary B-roll, i.e.
+        # they cut together as one sequence rather than reading as variants of
+        # the same photo.
+        shot_variety:
+          required_distinct_types:
+          - "hero / commercial clean establishing (full wardrobe, straight-on)"
+          - "medium three-quarter"
+          - "close-up (door line, handle, shadow gap)"
+          - "macro (material grain / finish texture, very tight)"
+          - "low angle (down-top, looking up the vertical)"
+          - "top-down / high angle (looking down into an open module or drawer)"
+          - "artistic (moody editorial light, dramatic composition)"
+          never: "two shots of the same type in one Reel, or any shot that reads as
+            a near-duplicate of another — every clip must earn its place"
+
+          # --- ORDERED SLOT MAP (added 2026-07-21, Karim) ---
+          # The v4 Reel still repeated angles: the close-up and the macro were
+          # both prompted onto the same subject (handle + door edge + shadow
+          # gap), so they read as one shot twice. Naming a shot type is NOT
+          # enough — each slot must be locked to a DIFFERENT SUBJECT as well as
+          # a different camera position, and the slots must alternate scale so
+          # the montage breathes. This is the running order of the Reel.
+          ordered_slots:
+          # RESOLVED 2026-07-21 by Karim: the hero IS fully closed. The earlier
+          # note here said it could not be, because `accessories.required` reads
+          # as per-image. Karim's call: accessory visibility is satisfied ACROSS
+          # THE REEL, not in every frame — the closed hero shows off the
+          # uninterrupted tall facades, and the supporting shots open doors to
+          # reveal the accessories. See accessories.visibility below.
+          - "1 WIDE  — hero establishing, full unit straight-on, ALL DOORS CLOSED:
+            the uninterrupted tall facades are the beauty shot"
+          - "2 CLOSE — door line / handle / shadow gap, tight on the vertical"
+          - "3 WIDE  — medium three-quarter with ONE door visibly OPEN on its hinge
+            (door panel in frame), revealing the couple's hanging section"
+          - "4 CLOSE — a PULL-OUT ACCESSORY in motion (shoe rack, tie/belt rack, trouser
+            rack gliding out) — a different subject from slot 2"
+          - "5 WIDE  — low angle, down-top up the vertical, floor-to-ceiling height"
+          - "6 CLOSE — top-down into an open drawer, its front edge and dividers in
+            frame"
+          rhythm_rule: "WIDE / CLOSE / WIDE / CLOSE / WIDE / CLOSE — never two wides
+            or two closes back to back"
+          subject_rule: "no two slots may share a subject. Two different close-ups
+            of the same door edge are ONE shot rendered twice, however differently
+            they are described."
+
+        # --- REFERENCE LOCK (HARD constraint, added 2026-07-21, Karim) ---
+        # Zero drift: every shot in a Reel is the SAME wardrobe, in the SAME room,
+        # in the same light. The hero image is the single source of truth for all
+        # five supporting shots; the conception reference governs the hero.
+        reference_lock:
+          rule: "The hero image is the master. Every supporting shot must depict the
+            SAME physical wardrobe in the SAME room: identical finish and colour,
+            identical module layout, identical door division and count, identical
+            handle profile, identical accessory type in the identical module position,
+            identical wall/floor finish, identical light direction and colour temperature."
+          may_vary: "camera position, focal length, framing, depth of field, and which
+            door or drawer is open — nothing else"
+          never: "a re-imagined or 'inspired by' version of the wardrobe, a different
+            room, a relit scene, an extra or missing module, a changed handle, or
+            a swapped accessory. Any drift from the hero is a rejected shot — re-render
+            it, do not accept it as a variation."
+          # ADDED 2026-07-21 (Karim, v5 still review). Three drifts he caught:
+          # a shot opened a two-door swing bay the hero does not have; another
+          # shot's door panel was a different shape from the hero's; and the
+          # room props appeared in some shots and vanished in others.
+          door_identity: "the NUMBER, WIDTH, PROPORTION and POSITION of the doors
+            are fixed by the hero and identical in every shot. When a shot opens a
+            module it opens exactly ONE of the hero's actual single tall door panels.
+            NEVER invent a two-door swing bay, a double-door opening, a pair of doors
+            opening together, or a door of a different width or shape from the hero's.
+            Count the hero's doors and honour that count."
+          set_dressing: "the room is a FIXED SET. The same furniture and props — bench,
+            lamp, rug, bed, plant — appear in the SAME positions, at the same scale,
+            in every shot where the room is visible. A prop must never appear in one
+            shot and vanish in the next; if a shot's framing excludes a prop it must
+            be because the crop excludes it, not because the room was redressed."
+          unobstructed: "NOTHING stands in front of the wardrobe. The product is entirely
+            visible from plinth to ceiling — no bench, lamp, chair, plant or bed between
+            the camera and the fronts. Props sit to the SIDE of the wardrobe or behind
+            the camera. An obstructed product is a rejected shot."
+
+        # --- GENERATION METHOD (HARD constraint, added 2026-07-21, Karim) ---
+        # Root cause of every drift Karim reported (layout changes between shots,
+        # missing doors, swapped/generic accessories, "a different wardrobe" in
+        # shots 2-3, unreal renders): the old workflow generated each of the six
+        # shots from its OWN text prompt, so every shot was an independent roll and
+        # identity could not hold. No prompt, however detailed, makes two separate
+        # generations identical. The fix is MASTER-ANCHORED generation — full
+        # procedure in `.claude/skills/wardrobe-reel-workflow/SKILL.md`.
+        generation_method:
+          principle: "A wardrobe Reel is SIX VIEWS OF ONE WARDROBE, not six wardrobes.
+            Generate the wardrobe ONCE (the master image), then DERIVE every other
+            shot FROM that image. Nothing after the master is generated from text
+            alone — identity is inherited, never re-rolled."
+          step_1_master: "Generate the MASTER first with images_generate (9:16): the
+            FULLY-OPEN wardrobe, doors open on visible hinges, hanging section, drawers,
+            and the chosen accessories (starax hanger lift mid-travel + 2 others)
+            in their stated modules. INPUTS ARE SEPARATE, NEVER FUSED, and each is
+            @-mentioned by name in the prompt-generator (Karim 2026-07-22): (a) the
+            conception_reference is the ONLY source of layout/module division/proportions
+            — do NOT take layout from accessory or texture images; (b) the material
+            is ONE named swatch from texture_folder, attached as its own @TEXTURE
+            node (e.g. tobbaco walnut laminate for a walnut interior); (c) EACH accessory
+            is its own @-named reference photo (@starax hanger lift, @belt tie rack,
+            @pull-out shoe rack) so it renders true to the real product — the starax
+            lift was previously ruined by a fused montage; separate + @named fixes
+            it. HARD LOOK RULES: glass doors in SLIM BLACK MATTE aluminium frames,
+            NO handles (push-to-open, never bronze/chrome); accessories sit INSIDE
+            their modules, NEVER mounted on the doors. QC the master HARD before spending
+            on anything else — every other shot inherits it, so a flawed master multiplies
+            the flaw."
+          step_2_derive: "Derive each supporting shot FROM the master, never from
+            a fresh text prompt: ANGLE shots (three-quarter, low angle, top-down,
+            tight door line) via images_change_camera on the master (rotate / vertical
+            / closeup); DOOR-OPEN and ACCESSORY-IN-MOTION shots via images_generate
+            with the master as an image reference. images_variations mode=angles on
+            the master gives several identity-locked angles at once. EVERY shot keeps
+            the EXACT same lighting as the master — same warm-white LED setup, same
+            colour temperature, same mood; never let a shot drift cooler/darker (Karim
+            2026-07-22). QC each derived shot against the master (reference_lock):
+            identical finish, door count/width, black matte frames, accessory, room,
+            lighting. Any drift = re-derive that ONE shot, never accept it as a variation."
+          step_3_video: "Animate each APPROVED image with video_generate, keyframe
+            start = that image's creation identifier (never a webUrl). CAMERA-ONLY
+            MOTION: nothing in the shot moves — only the camera. The scene stays frozen
+            exactly as the still; the sole motion is a slow camera push/pull/ orbit/glide
+            matching the one chosen reel_style. QC the frames — a wardrobe that warps/melts/grows
+            a door or where any object moves is rejected; re-generate with a calmer,
+            purely-camera move."
+          step_4_combine: "video_concatenate in ordered_slots order, then apply the
+            reel-art-director self-critique bar to the whole Reel."
+          # MODEL + RESOLUTION POLICY (Karim, 2026-07-22) — cost split. The master
+          # is the identity anchor and the only 2K image; the six derived shots run
+          # on the cheaper Flash model at 1K, which is covered by the account's
+          # unlimited plan (Nano Banana Pro is not). This keeps a full Reel almost
+          # free once unlimited is active, spending real credits only on the master.
+          model_policy: "MASTER image: model `imagen-nano-banana-2` (Nano Banana Pro)
+            at 2K — high fidelity, it is what every other shot inherits. DERIVED shots
+            1-6 (images_generate for door-open/accessory/closed-hero; change-camera
+            has no model choice): model `imagen-nano-banana-2-flash` (Nano Banana
+            2 Flash) at 1K — unlimited-friendly. Never spend 2K / Nano Banana Pro
+            on a derived shot."
+          # VIDEO POLICY (Karim, 2026-07-22). Validated: Kling holds the still's
+          # identity with no morphing. 720p on Kling needs a START keyframe (the
+          # shot image) and forbids an end keyframe — which is exactly our flow.
+          video_policy: "Animate EVERY shot with model `kling-25` (Kling 2.5), duration
+            5s, aspectRatio 9:16, resolution 720p, keyframes.start = that shot's image
+            creation identifier (never a webUrl, no end keyframe at 720p). This is
+            unlimited-friendly. CAMERA-ONLY MOTION (Karim, hard rule 2026-07-22):
+            NOTHING in the shot may move — the wardrobe, doors, drawers, clothes and
+            accessories stay perfectly still, frozen exactly as the master image.
+            The ONLY motion is a slow cinematic CAMERA move (pushIn / pullOut / orbit
+            / glide / tilt) matching the chosen reel_style. Write the prompt as a
+            camera instruction ('camera slowly pushes in, everything in the scene
+            stays static'), never as an action ('door opens', 'drawer glides'). PROVEN
+            PHRASING (validated 2026-07-22, fixed the object motion Kling was adding):
+            open each prompt with 'treat the input as a STILL PHOTOGRAPH; animate
+            it ONLY as a slow camera move over a frozen photo — a Ken Burns effect.
+            The wardrobe and everything in it is 100 percent rigid and motionless
+            like a printed photograph. NOTHING opens, closes, slides, sways or shifts.
+            The ONLY motion is the camera <move>. No object motion whatsoever.' A
+            clip where anything in the scene animates, morphs, warps, or grows/loses
+            a part is REJECTED and re-generated with a calmer, purely-camera move.
+            OPTIONAL (art-director's call, not the default): a day-to-night light
+            time-lapse is allowed ONLY at the very END of a clip, and even then only
+            the LIGHT may change, never the wardrobe geometry."
+          # MUSIC POLICY (Karim, 2026-07-22). Magnific audio_music_generate is
+          # BANNED for reels — it costs a lot. Reel music comes from the brand's
+          # own FREE pipeline: `music_generate.py` (Google Lyria RealTime on the
+          # dedicated gemini_music_api_key). Match the track to the chosen
+          # reel_style, then ffmpeg-mux it under the concatenated video.
+          music_policy: "NEVER use Magnific audio_music_generate for reel music —
+            it is expensive. Generate the background track with the repo's free `music_generate.py`
+            (Google Lyria), matched to the chosen reel_style, and mux it under the
+            final concatenated Reel with ffmpeg."
+          never: "generating the six shots as six independent text-to-image nodes
+            (the old Space method) — that is the drift at the source. Do not fire
+            the whole Space graph at once and hope; drive the master-anchored pipeline
+            step by step with a QC gate between each step."
+
+        # --- MONTAGE & TRANSITIONS (added 2026-07-21, Karim) ---
+        # The v4 clips cut together as six separate videos rather than one piece.
+        montage:
+          motion_handoff: "each clip must END on motion that the next clip can CONTINUE.
+            Direction and energy carry across the cut: if a clip ends pushing in,
+            the next begins already moving inward or glides in the same screen direction.
+            Never end on a hard stop followed by a move starting from stillness —
+            that is the jarring cut."
+          match_cut_targets: "cut on a shared graphic element wherever possible —
+            a vertical door line, the handle axis, the LED strip line — so the eye
+            lands in the same place across the cut"
+          speed: "each clip holds a constant, unhurried speed within itself; the style
+            (1 or 2) sets the overall pace, not per-clip variation"
+          never: "a jump cut between two framings of the same subject, a cut that
+            reverses screen direction, or a clip that starts and ends static"
+
+        # --- REEL ANIMATION STYLE (pick exactly ONE per Reel) ---
+        # The CM picks per Reel and states which; the camera motion AND the
+        # generated music must both match the SAME choice. Mixing them (e.g.
+        # slow-motion camera with electronic montage music) is wrong.
+        reel_styles:
+          style_1_cinematic_slow:
+            camera: "slow motion, fluid push-in / push-out, smooth glides, long unhurried
+              takes"
+            music: "cinematic score with a soft underlying beat"
+          style_2_modern_montage:
+            camera: "speed ramps, snappier multi-shot montage cutting, modern commercial
+              pacing"
+            music: "electronic beats, montage-driven"
+          rule: "state the chosen style in the plan; camera and music must match the
+            same style number"
+
+        # --- WHAT GOES INSIDE EACH MODULE (HARD constraint, added 2026-07-20) ---
+        # Karim's correction after reviewing the first test Reel: the renders
+        # were filling the TOP/upper cabinets with hanging clothes, which is
+        # wrong for the real product. Upper cabinets are the linen/storage tier,
+        # not a wardrobe tier. Any render showing an open upper cabinet with
+        # clothes in it is wrong at the source and must be reworked.
+        module_contents:
+          upper_cabinets: "ONLY folded pillows, bedspreads, duvets, blankets and neatly
+            stacked linen — this tier is bedding STORAGE. NEVER hanging clothes, NEVER
+            garments on rails, NEVER shoes, in an upper cabinet."
+          # UPGRADED 2026-07-20 (Karim): the hanging section was reading empty or
+          # generic. It must look like a REAL, LIVED-IN wardrobe for a couple —
+          # men's AND women's pieces together, not one gender, not a styled void.
+          main_hanging_section: "a real couple's wardrobe, visibly BOTH men's and
+            women's: men's shirts, suit jackets, trousers; women's dresses, blouses,
+            coats, knitwear. Matched slim hangers, evenly spaced, realistic fabric
+            drape. Folded garments and knitwear on the illuminated shelves. It must
+            read lived-in and premium, never empty and never a single-gender rail."
+          # CORRECTED 2026-07-21 (Karim): drawers were missing/misplaced in
+          # renders. Real reference photos
+          # (D:\DC Ref\modular wardrobe references\Sans titre-2_0029_DSC_1558.jpg
+          # and others) show the actual layout: a stack of 2 to 4 drawers sits
+          # at the BOTTOM of a module's INTERIOR, directly on the module floor,
+          # under a shelf or the hanging zone above it (the pull-down lift or a
+          # fixed rail). The drawers are wide, full-module-width, flush fronts
+          # in the same finish as the doors, revealed only when that module's
+          # door is opened — not a separate exterior drawer facade section.
+          lower_modules: "shoes (men's and women's) in the lower shoe modules, and
+            — inside whichever module is shown open — a stack of 2 to 4 drawers at
+            the BOTTOM of that module's interior, directly on the module floor, below
+            the hanging rail/lift zone above. Drawer fronts match the door's finish
+            exactly. Plus the chosen premium accessory from the accessories folder."
+          accessories_must_be_real: "the visible hardware must be the brand's REAL
+            premium accessories from `Wardrobe premium accessories/` — pull-out shoe
+            racks, tie/belt racks, pull-out trouser racks, sliding shelf dividers.
+            Never invent generic organiser hardware."
+          rule: "If a render shows an upper cabinet open or visible through glass,
+            its contents MUST read as bedding/linen storage. This is checked at QC
+            like any material law."
+
+        # --- FACADE RULE (HARD constraint, added 2026-07-20) ---
+        # Karim's correction: renders were showing large open carcasses with no
+        # doors, which is not the product — Delta Cuisine sells fronted modular
+        # wardrobes. Every module has a facade. The ONLY permitted open volume is
+        # a deliberate, designed decorative niche.
+        facades:
+          rule: "EVERY module has a facade (a door/front). Never render a large open
+            carcass, an entire facade-less bay, or a wall of exposed shelving as if
+            that were the product."
+          open_volumes_allowed: "only as a deliberate DECORATIVE NICHE — a small,
+            intentional recessed display opening (LED-lit, framed, styled with a couple
+            of objects), clearly designed rather than a missing door."
+          showing_interiors: "to show the inside, OPEN a door or PULL OUT a drawer/rack
+            so the facade is visibly present and open — never simply omit the front."
+          # ADDED 2026-07-21 (Karim, after the v4 Reel): the renders were showing
+          # interiors as if the door had vanished. An "open" module still has its
+          # door — it is hinged/slid aside, IN FRAME. This is the difference
+          # between a photo of our product and a photo of a shelving unit.
+          door_visible_when_open: "when a module is shown OPEN, its door MUST be visibly
+            present in the frame, still attached on its hinges or slid aside on its
+            track — the door panel, its edge thickness, its handle and its inner face
+            are part of the shot. NEVER render an open module whose door has simply
+            disappeared. An interior with no door in frame is a rejected render, not
+            a styling choice."
+          never: "a facade-less module presented as a finished wardrobe, or an open
+            module whose door is absent from frame"
+          # ADDED 2026-07-21 (Karim, same review): the fronts were coming back
+          # chopped into stacked upper/lower panels, which reads as budget
+          # cabinetry. The product's signature is the uninterrupted tall front.
+          # ADDED 2026-07-21 (Karim): "the wardrobe must not look weird, it must
+          # look like real life with right proportions."
+          buildable_realism: "the wardrobe must look like a REAL, BUILDABLE piece
+            of furniture at true human scale, not an AI approximation. Door widths
+            in a believable 40-60cm range and consistent with each other; hanging
+            rails at a reachable height; drawers of realistic depth; shelves thick
+            enough to be real board; hardware sized to a human hand. Garments, shoes
+            and accessories must be correctly scaled against the module that holds
+            them."
+          never_weird: "no impossible or nonsensical construction — a rail with no
+            clearance to hang from, a drawer that could not open, a shelf floating
+            unsupported, a module too shallow for the clothes in it, a door too narrow
+            or too wide for its opening, or hardware at the wrong scale. If a detail
+            could not be manufactured and installed, it is wrong."
+          swing_doors: "doors are HINGED SWING doors unless a sliding system is explicitly
+            specified for that concept. Show the hinge side and let the panel stand
+            proud of the facade when open. Never render a door sliding on a track,
+            overlapping in front of a neighbouring panel, or recessed into a pocket,
+            when a swing door was intended."
+          tall_doors: "in MOST cases the fronts are FULL-HEIGHT TALL DOORS — one continuous
+            door panel running the module's whole height, floor to ceiling. NOT a
+            module divided horizontally into separate stacked upper and lower door
+            panels. The uninterrupted vertical front is the product's signature; a
+            horizontally split facade is the exception, never the default."
+          drawer_facades: "a drawer front is the SAME material, colour, finish and
+            texture as the main door facades — it reads as a continuous part of the
+            same front. NEVER a contrasting, different-texture or different-colour
+            drawer facade."
+          # ADDED 2026-07-21 (Karim): Shots 2 and 3 were rendering a DIFFERENT
+          # wardrobe from the hero — wider modules than the hero's actual panel
+          # rhythm, and exposed hinge hardware the hero's design does not have.
+          # CORRECTED 2026-07-21 (Karim): the "concealed hinges" rule below was
+          # WRONG — it was inferred from the hero image alone, without checking
+          # real product photography. Karim's own branded reference photo
+          # (D:\DC Ref\modular wardrobe references\Sans titre-2_0008_DSC_1600.jpg,
+          # visible "dc delta cuisine" logo on the hinge arm) and several others
+          # in that folder show the REAL product uses standard visible chrome/
+          # nickel European cup hinges on every opening door. Do not fight this
+          # with negative prompts — it is correct, expected, and matches the
+          # brand's actual hardware.
+          hinge_visibility: "every opening door uses a REAL, VISIBLE European cup
+            hinge in polished chrome or brushed nickel — the standard hardware visible
+            on the door's inner edge whenever it stands open. This is correct and
+            must be shown, not hidden. It is small, precise hardware (a hinge cup
+            + arm), never oversized, never a decorative or ornate hinge. Do not render
+            a bare hinge-free edge."
+          module_width_match: "the hero's doors are NARROW and UNIFORM — count and
+            measure them before opening one. An opened door must be the SAME WIDTH
+            as its closed neighbours in the hero, never a wider merged opening. If
+            a supporting shot's opening reads wider than one of the hero's actual
+            panels, the render is wrong at the source: it shows a different wardrobe
+            with fewer, wider modules, not this product."
+          # ADDED 2026-07-21 (Karim): the whole wardrobe is ONE continuous run of
+          # full-height doors — never a separate smaller box/cabinet unit (its
+          # own shorter doors, its own frame, sitting above or beside the main
+          # run) bolted onto the design. That reads as two different pieces of
+          # furniture stacked together, not one built-in wardrobe.
+          single_continuous_run: "EVERY door in the wardrobe runs the FULL height
+            from floor to ceiling — no exceptions, no added box. Never render a separate
+            smaller cabinet, overhead box, bridging unit or shorter-door module stacked
+            above or beside the main run with its own distinct doors/frame. One wardrobe,
+            one continuous facade, one door height throughout. If the concept shows
+            anything that reads as a second, separate unit, it is wrong and must be
+            reworked before it counts as an asset."
+        # DEDICATED Magnific space for wardrobe generation — added 2026-07-20,
+        # REBUILT same day as a real node-graph workflow ("Modular wardrobe
+        # claude" — see .claude/skills/magnific-space-expert/SKILL.md for how
+        # to read/run/edit it). SEPARATE from the brand's kitchen space above
+        # (magnific_space / "master space for kitchen DC"). Every wardrobe
+        # render — image or video — goes into THIS space; every kitchen render
+        # goes into the brand's main magnific_space. Mixing them puts wardrobe
+        # generations in the wrong Magnific project and must never happen.
+        #
+        # This space's own node graph now encodes the hard rules directly
+        # (conception-reference anchoring, max-2-materials, mandatory 1-3
+        # accessories, negative prompt, hero-2K/supporting-1K cost split) —
+        # not just this brands.yaml block. If they ever disagree, this file
+        # still wins; fix the space's nodes to match, not the other way round.
+        magnific_space: "https://www.magnific.com/app/spaces/a24e4d72-2ef9-4d1a-9e55-2de12fad843a"
+        magnific_space_name: "Modular wardrobe claude"
+        # SUPERSEDED 2026-07-20, reference only, NOT a real key (a real key
+        # here gets auto-rendered into every brief by _render_design_rules —
+        # this historical pointer must never appear next to the live space
+        # above where it could read as a second valid option). The original
+        # manually-provided wardrobe space, "DC wardrobe space", was:
+        # https://www.magnific.com/app/spaces/a24c8e62-db51-4a1e-90da-635767148b7e?page=1
+        #
+        # NEW master-anchored TEST space (built 2026-07-22, "Wardrobe
+        # Master-Anchored (Claude)") — encodes the full fixed pipeline as a
+        # node graph: master (Nano Banana Pro 2K) -> 6 derived shots (Flash 1K,
+        # each inherits the master via image reference) -> 6 camera-only Kling
+        # 2.5 720p clips -> combine. Karim is live-testing it manually before it
+        # replaces the CM's live space above. Commented (reference only) so it is
+        # NOT auto-rendered as a second live pointer. Before running, fill the
+        # CONCEPTION REFERENCE + ACCESSORY PHOTOS nodes and the CONFIG material.
+        # When validated, promote it into `magnific_space` above.
+        # https://www.magnific.com/app/spaces/a251c2a9-b6f2-4440-a3aa-e1dc0298d26f
+
+        # --- CONCEPTION REFERENCE PROTOCOL (HARD constraint, weekly planning) ---
+        # Added 2026-07-09. Past CM wardrobe concepts drifted away from the real
+        # Delta Cuisine product line — they invented layouts we do not build.
+        # Every new wardrobe conception MUST be anchored to the reference images
+        # below: keep their GLOBAL CONCEPTION (module layout, proportions, door
+        # division, structure). Only the texture, the ambiance and the setting
+        # may change. Do not invent a new wardrobe form.
+        conception_reference:
+          # Folder is relative to project_dir; the CM runs with cwd = project_dir,
+          # so "modular wardrobe references/..." resolves directly.
+          reference_dir: "modular wardrobe references"
+          reference_images:
+          - "modular wardrobe references/modular wardrobe ref.png"
+          - "modular wardrobe references/modular wardrobe ref2.png"
+          - "modular wardrobe references/modular wardrobe ref3.png"
+          - "modular wardrobe references/modular wardrobe ref4.png"
+          - "modular wardrobe references/modular wardrobe ref5.png"
+          - "modular wardrobe references/modular wardrobe ref6.png"
+          must_match: "module layout, proportions, door division, overall structure"
+          may_vary: "texture, colour, ambiance, lighting, scene/setting"
+          materials_from: "texture_folder"     # pick materials ONLY from the swatch
+                                               # library (bois/, Ceramique/, Quartz/) —
+                                               # never invent a material name
+          rule: "Before concepting any wardrobe, OPEN the reference images and reproduce
+            their global conception. The concept must state WHICH reference it follows.
+            A wardrobe whose layout does not correspond to one of these references
+            is wrong and must be reworked BEFORE it counts as an asset — same gate
+            as the material-harmony laws above."
+
+        # --- PREMIUM ACCESSORIES (MANDATORY, HARD constraint) ---
+        # Added 2026-07-12. Upgraded from optional to MANDATORY 2026-07-20:
+        # D:\my workflow\CLAUDE.md (2026-07-19) states as a cross-cutting rule for
+        # ALL THREE wardrobe configurations that accessories are ALWAYS shown, with
+        # interior fittings visible in or through the wardrobe. This file had them
+        # as optional add-ons, so wardrobe renders could legitimately ship with
+        # none — which is not what the brand actually sells.
+        #
+        # Mandatory PRESENCE, disciplined QUANTITY: every wardrobe visual shows
+        # accessories, but only 1-3 of them, each with a stated position. Both
+        # halves matter — "always show them" without the cap produces a hardware
+        # catalogue, the cap without "always" produces empty wardrobes.
+        accessories:
+          required: true          # every wardrobe visual shows interior fittings
+          accessories_dir: "Wardrobe premium accessories"   # relative to project_dir
+          # SCOPE CLARIFIED 2026-07-21 (Karim). This used to read as per-image,
+          # which forced even the hero to stand with a door hanging open. The
+          # requirement is per ASSET SET: a Reel must reveal its accessories in
+          # at least one shot, and a standalone single image must show them.
+          visibility: "interior fittings must be VISIBLE — through glass doors, or
+            with a module shown open. For a multi-shot Reel this is satisfied ACROSS
+            THE SET: the hero may be fully closed to show the tall facades, provided
+            at least one supporting shot opens a door to reveal the accessory. A standalone
+            single image must still show them itself."
+          select: "a SMALL SUBSET per generation — 1 to at most 3 accessories in any
+            single image or reel. NEVER place every accessory from the folder into
+            one generation; that reads as a hardware catalogue, not a lifestyle shot."
+          # ADDED 2026-07-21 (Karim): the hanger lift is the signature fitting and
+          # must appear in every wardrobe asset set, accompanied by exactly two
+          # others — that is the "1 to 3" cap spent as 1 mandatory + 2 chosen.
+          always_include: "`starax hanger lift.jpg` — the pull-down wardrobe lift.
+            It appears in EVERY wardrobe asset set, plus exactly TWO other accessories
+            chosen from the folder and varied across the week."
+          starax_description: "a pull-down hanging rail for a high module: two matte-black
+            articulated scissor arms mounted on the module's side panels, carrying
+            a horizontal brushed-chrome/aluminium hanging bar. At rest it sits high
+            inside the module; in use it swings DOWN and FORWARD, bringing the hanging
+            garments down to reach. Render it mid-travel, pulled down and forward
+            with clothes hanging from the chrome bar, so the mechanism reads clearly."
+          placement: "the concept MUST state WHERE each chosen accessory sits inside
+            the wardrobe (e.g. 'shoe rack in the lower left module', 'tie/belt rack
+            mounted on the door-side rail of the hanging section') — grounded in the
+            module layout of whichever conception_reference image the wardrobe follows.
+            An accessory floating with no stated module/position is wrong."
+          vary_across_week: "do not reuse the same accessory combination twice in
+            one week's assets"
+          never: "invent an accessory that is not a real file in accessories_dir,
+            or fill every module of the wardrobe with accessories — leave most of
+            the wardrobe clean, accessories are an accent on ONE module"
+      inspiration:
+        source: "pinterest"
+        rule: "get inspired from Pinterest references before concepting; do not invent
+          layouts blind"
+      typography:
+        french: "Helvetica Neue LT Pro"   # use for ALL French text (captions, on-image
+          # text/overlays, design-tip graphics) across Delta Cuisine creations
+    posting_schedule:            # local time (Africa/Tunis)
+    - {day: monday, time: "18:00", type: "lifestyle / avant-après reel"}
+    - {day: wednesday, time: "14:00", type: "promo image (alternating months)"}
+    - {day: wednesday, time: "19:00", type: "design-tip reel"}
+    - {day: thursday, time: "18:30", type: "nouveauté/tendance reel (best day)"}
+    - {day: saturday, time: "15:00", type: "educational montage reel (best day)"}
+    posting_windows:
+      primary: "18:00-19:30"
+      secondary: "13:00-14:30"
+      best_days: [thursday, friday, saturday]
+      avoid: ["wednesday", "sunday", "06:00-09:00", "21:00-23:00"]
+
+    # --- live offers (standing promotions the CM may use WITHOUT asking) ---
+    # An offer with active: true is usable in promo content today. It stays usable
+    # until the user says it stopped — at which point flip active: false (or say
+    # "the -10% is over" and Era flips it). The CM never asks "is the -10% still on?"
+    offers:
+    - id: "remise_10"
+      label: "-10%"
+      description: "-10% sur la commande"
+      active: true                 # user confirmed 2026-07-09: live until they say stop
+      usable_in: [promo, campaign]  # not on regular lifestyle/design-tip content
+
+    # --- caption rules (body text the CM writes, above the footer) ---
+    caption_rules:
+      no_emoji: true               # user rule 2026-07-09: zero emoji in the description body
+      first_hashtag: "#deltacuisinegroup"   # ALWAYS the first hashtag, every DC caption
+
+    # --- caption footer (brand signature) ---
+    caption_footer: |
+      Contactez-nous dès maintenant : +216 98 362 990
+      Delta Cuisine – Des espaces à vivre.
+
+    # --- scheduled automation ---
+    # Safety pause lifted 2026-07-03: both Instagram (instagram_noon-droit,
+    # username delta_cuisine_group) and Facebook (page 115558078454323, via
+    # the dedicated "delta cuisine" Composio connection) are now verified live.
+    schedules:
+      weekly_plan: {cron: "21 15 * * 3", enabled: false}     # Fri 11:00
+      auto_publish: {cron: "0 0 * * *", enabled: false}      # Fri 21:00
+
+    # --- Meta Ads (paid) — added 2026-07-20, per fable_meta.md's approved plan ---
+    # LIVE as of 2026-07-20. The `facebook-ads` MCP server was registered
+    # 2026-07-20 in the FREELANCE account (.claude-freelance\.claude.json,
+    # top-level mcpServers), Karim completed the one-time interactive `/mcp`
+    # OAuth approval, and a headless probe under that config dir confirmed
+    # mcp__facebook-ads__* tools (including create/activate ones) actually
+    # reachable — not just "connected" in the interactive /mcp panel, which
+    # turned out NOT to imply headless reachability (a claude.ai-connector
+    # showing "connected" there does not carry into `claude -p` runs at all;
+    # only an explicitly-registered MCP server like this one does).
+    # AD ACCOUNT — RESOLVED 2026-07-20. A live check earlier the same day found
+    # a second, better-labeled candidate (act_1033832265075508, "DELTA CUISINE
+    # GROUP") and flagged the conflict rather than guessing. Karim confirmed
+    # directly, same day: act_33183820 — fable_meta.md's original 2026-07-07
+    # pick — is the correct account. The other candidate is now excluded.
+    ads:
+      enabled: true                     # OAuth confirmed reachable headless 2026-07-20
+      meta_ad_account_id: "act_33183820"   # CONFIRMED by Karim 2026-07-20
+      meta_ad_account_excluded:
+      - {id: "act_1033832265075508", name: "DELTA CUISINE GROUP", business: "DeltaCuisine",
+        note: "flagged 2026-07-20 as a look-alike candidate; Karim confirmed the SAME
+          day this is NOT the account to use — never select it"}
+      page_id: "115558078454323"        # matches platforms.facebook.composio_page_id — no conflict here
+      default_objective: OUTCOME_LEADS  # premium custom kitchens → lead/DM driven
+      currency: EUR                     # confirmed by Karim 2026-09-25 (was TND). Delta takes the big share of the shared act_33183820 budget; Brico Kitchen the smaller one.
+      # Spec derived from the brand's real IG performance report (fable_meta.md
+      # Step 3). Build as a saved audience with this exact name if the Ads MCP
+      # supports it; otherwise apply at ad-set level.
+      audiences:
+      - name: "Claude DC Audience"
+        source_report: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation\\graphify-out\\\
+          converted\\rapport_instagram_delta_cuisine_f44c6f76.md"
+        insight: "audience responds to aspiration/storytelling (luxury kitchens, dressing
+          sur mesure: 100+ engagements) far more than price-led posts"
+        geo: "Tunisia, weighted toward Grand Tunis + major cities"
+        age_range: "28-55"
+        languages: [fr, ar]
+        interests: [kitchen design, interior design, home renovation, custom 
+            furniture, luxury home]
+        retargeting: "FB page + IG engagers, 365 days (highest intent layer)"
+      # BUDGET — NOT a standing cap. Corrected 2026-07-20 per Karim's direct
+      # instruction: there is no fixed daily/lifetime guardrail to fill in once.
+      # Every campaign has its own end date and spend, so the CM MUST ASK Karim
+      # for both — "when should this campaign end?" and "what's the budget?" —
+      # BEFORE building anything, every single time. See era-ads-manager skill's
+      # "Budget — always asked, never assumed" section for the exact procedure.
+      budget_policy: ask_every_campaign
+      review_gate: always_paused        # every created campaign/ad-set/ad starts PAUSED, no exceptions
+      # SHARED ACCOUNT (Karim, 2026-09-25): act_33183820 is also Brico Kitchen's —
+      # same Delta Cuisine group, one payment card. A campaign belongs to the
+      # brand whose PAGE it promotes (this brand: 115558078454323). The dispatcher
+      # adds a PAGE LOCK to every ads brief when two brands share an account.
+
+
+  # -------------------------------------------------------------------------
+  # BRICO KITCHEN  (added 2026-09-25) — Delta Cuisine group, ADS ONLY
+  # -------------------------------------------------------------------------
+  # Karim's only job for this brand is boosting posts that are ALREADY
+  # PUBLISHED on its Page — another team makes its content. `lanes: [ads]`
+  # makes the dispatcher refuse every organic order (plan, post, publish,
+  # produce) for it; `ads.scope: boost_only` puts the same rule in every ads
+  # brief. It spends from Delta Cuisine's ad account and card.
+  brico_kitchen:
+    display_name: "Brico Kitchen"
+    status: "active"
+    lanes: [ads]
+    group: "Delta Cuisine group"
+    aliases: ["brico kitchen", "bricokitchen", "brico-kitchen", "brico"]
+
+    claude_config_dir: "C:\\Users\\nesri\\.claude-freelance"   # unused: ads always run under defaults.ads_claude_config_dir
+    project_dir: "D:\\Ctrl Z\\Freelence\\DC\\Brico Kitchen"    # ads reports land in ads_reports\ here
+    notify_email: null
+    timezone: "Africa/Tunis"
+    language: "fr"
+
+    ads:
+      enabled: true
+      scope: boost_only                 # published posts only — never create content for this brand
+      meta_ad_account_id: "act_33183820"   # SHARED with delta_cuisine (same group, same card)
+      meta_ad_account_excluded:
+      - {id: "act_1033832265075508", name: "DELTA CUISINE GROUP", business: "DeltaCuisine",
+        note: "look-alike account ruled out by Karim 2026-07-20 — never select it"}
+      page_id: "100288952367054"        # Brico Kitchen Page — verified in Composio 2026-09-25
+      website: "https://www.bricokitchen.com"
+      default_objective: OUTCOME_ENGAGEMENT   # its posts ask for Messenger messages / calls
+      currency: EUR                     # what Meta reports for act_33183820 (2026-09-25) — confirm in Ads Manager
+      budget_policy: ask_every_campaign
+      review_gate: always_paused
+
+
+  # -------------------------------------------------------------------------
+  # CERAM QUARTZ  (STUB — fill every TODO before setting status: active)
+  # -------------------------------------------------------------------------
+  ceram_quartz:
+    display_name: "Ceram Quartz"
+    status: "active"                             # completed 2026-07-05 — schedule derived from strategy report; WHERE fields verified 2026-07-03
+    aliases: ["ceram", "ceram quartz", "quartz", "ceramquartz"]
+
+    claude_config_dir: "C:\\Users\\nesri\\.claude-freelance"  # FREELANCE Claude account
+    project_dir: "D:\\telechargements\\ceramequartz\\new"      # your Ceram Quartz folder
+    browser_profile: "Brave/Default (CtrlZ std / freelance)"
+    working_dir: "D:\\telechargements\\ceramequartz\\new"
+    charter_file: "CERAM_QUARTZ_CHARTER.md"       # built from your assets
+    memory_dir: "memory"                                       # DEAD CONFIG — see the note on delta_cuisine's memory_dir
+
+    notify_email: "creakba@gmail.com"            # confirmed — Gmail sending set up in Composio
+
+    timezone: "Africa/Tunis"                     # confirmed — report shows 94.8% of audience in Tunisia
+    language: "fr"                               # confirmed
+
+    # UPDATED 2026-07-20 from D:\my workflow\CLAUDE.md (2026-07-19): "master space
+    # CQ" is the space to generate into going forward. Previous value here was
+    # a22a1207-83aa-475f-b153-b825b9b9d56d, one of the superseded experimental
+    # spaces ("CQ CLAUDE"). Restore it if generations land in the wrong place.
+    magnific_space: "https://www.magnific.com/app/spaces/a24c6c83-0bd2-48db-bdfc-49d0e30b7a28"
+    magnific_space_name: "master space CQ"
+
+    # MAGNIFIC FLOWS + AD-CREATIVE (added 2026-07-29, for the `adcreative` lane).
+    # See delta_cuisine.magnific for the full rationale — same account, same
+    # ceiling, same "Agent / Brand Kit are NOT reachable from MCP" finding, so
+    # brand compliance comes from design_rules below and CERAM_QUARTZ_CHARTER.md.
+    magnific:
+      credit_ceiling_per_run: 600
+      require_simulate: true
+      # No 16:9 — this brand has no landscape placement. 9:16 IS kept: CQ runs
+      # reels on IG + FB (charter §8), it just has no TikTok.
+      ad_ratios: ["1:1", "4:5", "9:16"]
+      approved_flows:
+      - {id: "X5DBfolnSW", name: "Multi-format resizer", credits: 150, use: "one approved
+          slab visual -> every ad ratio"}
+      # Localize matters MORE for this brand than for DC: content_mix allows an
+      # Arabic (Tunisian dialect) description, and caption_footer_ar already exists.
+      - {id: "eqpdqL9Ptk", name: "Localize ads and images", credits: 75, use: "FR
+          banner -> AR, design untouched"}
+      - {id: "DKTpclpxKi", name: "Audience-driven ads", credits: 200, use: "ad variants
+          per audience, one claim each"}
+      - {id: "CQXtEEyuoQ", name: "Change material and colour", credits: 75, use: "swap
+          the slab finish in an existing in-situ shot"}
+      - {id: "LYSswO4tgm", name: "Product color variants", credits: 75, use: "one
+          kitchen, several slab colourways"}
+      - {id: "wVZ7EIQVNR", name: "Render to photoreal", credits: 75, use: "lift a
+          CGI-looking kitchen render to photoreal"}
+      banned_flows:
+      - {id: "1RDr4rEVPs", reason: "Product ad spot — 3360 credits. Explicit spoken
+          order only."}
+      - {id: "lUh9gv9EVU", reason: "Multishot brand story — 4200 credits. Explicit
+          order only."}
+      - {id: "19cr4rEVPs", reason: "UGC unboxing — 10621 credits, EXCEEDS the whole
+          balance."}
+      - {id: "aLUfShW4BA", reason: "UGC tutorial — 10621 credits, EXCEEDS the whole
+          balance."}
+      # A flow's output is a PHOTO, never a finished slide. Carousel slides are
+      # built by placing that photo into offre.psd via the photoshop MCP
+      # (charter §6) — a flow must never be used to fake the branded layout,
+      # because it cannot reproduce the logo lockup, name-bar or footer band.
+      never: "use a flow output directly as a carousel slide, or let a flow render
+        brand text/logo/footer — layout comes from offre.psd in real Photoshop, always"
+    # ^ CONFIRMED working plain link (invite-link version is no longer needed).
+    # NOTE: Magnific + Adobe are the SAME login as Delta Cuisine -> Era's global
+    # lock already guarantees this brand never runs while DC is running.
+
+    # MASTER PSD TEMPLATE (added 2026-07-13): the real, layered Photoshop source of
+    # truth for every carousel slide look (cover/name-bar, detail+facts, plain
+    # in-situ). Layer groups toggle between slide types — see
+    # CERAM_QUARTZ_CHARTER.md §6 for exactly which groups correspond to which
+    # slide. The `photoshop` MCP server (github.com/alisaitteke/photoshop-mcp,
+    # registered in this account's Claude config) drives real Photoshop against
+    # this file: toggle layer visibility, edit the product-name text layer, place
+    # generated images, then export. NEVER edit the master file in place — always
+    # save the populated result as a new file so offre.psd stays a clean template
+    # for the next carousel.
+    master_psd_template: "offre.psd"
+
+    # TEXTURE INPUT (mirrors DC's texture-swap pattern, pointed at this brand's
+    # own folder): the AI reads slab textures from
+    #   D:\telechargements\ceramequartz\new\TEXTURES
+    # You upload/update this folder manually whenever there are new finitions/
+    # slabs. Era/Claude does NOT invent textures — it only uses what's in this
+    # folder, same "never provide reference images, read textures only" rule
+    # as Delta Cuisine's Assistant #10 pipeline.
+    texture_folder: "D:\\telechargements\\ceramequartz\\new\\TEXTURES"
+
+    # DESIGN RULES (added 2026-07-29). Until now this brand had NO design_rules
+    # block, so build_brief's design_note rendered EMPTY for every Ceram Quartz
+    # run — the hard visual constraints existed only in CERAM_QUARTZ_CHARTER.md,
+    # which the headless child had to think to open. Everything below is
+    # transcribed from that charter (the section numbers are cited per key) so it
+    # is injected verbatim into every brief. The charter stays the long-form
+    # source of truth; if the two ever disagree, brands.yaml wins (that is the
+    # documented precedence) — so fix BOTH when a rule changes.
+    design_rules:
+      material_selection:
+        decide: "autonomous — the CM picks which slab to feature from texture_folder
+          and states the exact name. NEVER ask the user which slab to use."
+        must_state: "the plan names the exact slab (e.g. 'La Luna') and one line on
+          why it fits the concept"
+        vary_across_week: "do not feature the same slab twice in one week's assets"
+        one_product_rule: "ONE product per post/slide/carousel — never two slabs in
+          the same piece (charter §4.4)"
+        source_of_truth: "the TEXTURES/ folder governs. A slab becomes usable the
+          moment its image is dropped in — no list to edit by hand (charter §5)"
+        never: "invent a slab name, a price, or a product benefit; feature a name
+          that has no image in texture_folder (e.g. Pantheon, charter §5)"
+      palette:
+        # charter §2 — sampled from the logo. Cyan is emphasis ONLY.
+        system: "teal + cyan + white is the ENTIRE brand system"
+        petrol_teal_primary: "#133C4F — logo background, name bars, solid brand backgrounds"
+        teal_mid: "#1D4757 — price-badge fill, footer band"
+        teal_footer_tint: "#315864 / #38636F — footer band over photos"
+        gradient: "#063340 / #013949 (deep) up to #106B80 (bright) — promo-poster
+          background"
+        accent_cyan: "#18E4E4 (range #17E0E0–#2BB8CC) — PRIX, QUARTZ label, PROMO,
+          material headings, icons"
+        white: "#FFFFFF — primary text, logo mark, wordmark"
+        charcoal: "#23272A — render cabinetry, kitchen-render context only"
+        never: "introduce any accent colour outside this system, or set body text
+          in cyan (cyan is for emphasis only)"
+      typography:
+        # charter §3
+        promo_headline: "heavy condensed sans, BOLD ITALIC, uppercase, cyan + white
+          split"
+        material_name: "bold condensed sans, uppercase, white"
+        labels_kicker: "medium sans, uppercase, letter-spaced, cyan #18E4E4"
+        price_badge: "bold sans uppercase — white number, cyan 'PRIX' and 'M² TTC'"
+        feature_bullets: "regular/medium sans, uppercase, white, short benefit lines"
+        footer: "regular sans — labels lighter, values bold, white on the teal band"
+        fallback_stack: "if a source font is missing: headlines -> heavy condensed
+          grotesque (Anton / Bebas-style); body and labels -> Montserrat or Poppins"
+        never: "retype the 'CERAM QUARTZ' wordmark by hand — it is part of the logo
+          lockup, always use the logo file (charter §4.1, §11)"
+      fixed_components:
+        # charter §4 — present on every post.
+        logo: "Q monogram + CERAM QUARTZ lockup, TOP-LEFT, ~25px inset, white version
+          on photos/teal. Use the provided file, never redraw."
+        contact_footer: "bottom band (teal, or teal over the photo), two lines — 'ADRESSE:
+          LA SOUKRA' and 'CONTACT: +216 98 522 200', labels light, values bold. On
+          single posts add bottom-right: FB + IG glyphs + CERAMQUARTZ."
+        price_badge: "teal CIRCLE, bottom-right, three stacked lines: PRIX (cyan,
+          small) / <PRICE> (white, large) / M² TTC (cyan, small). The badge's POSITION,
+          SIZE, SHAPE and STYLE are FIXED; only the number changes."
+        price_is_a_variable: "the price VALUE is per-campaign, filled from the campaign
+          brief. 470DT was one past campaign, NOT a standing price. No active campaign
+          -> OMIT the PRIX group entirely rather than show a stale price (charter
+          §4.3)."
+        material_name_bar: "the standard carousel cover name-bar is a SINGLE line
+          — bold white uppercase product name alone. NO cyan 'QUARTZ' kicker above
+          it. The kicker exists only in the normally-hidden promo-headline layer group;
+          adding it to a regular cover was a past drift, not the design (charter §4.4)."
+      approved_claims:
+        # charter §4.5 — the ONLY six benefit claims that exist. Never invent a seventh.
+        slide_2_fixed_set: "slide 2 of EVERY carousel uses this exact set, this exact
+          order, these exact icons — it does NOT rotate and is NOT picked per product:
+          1) FAIBLE ABSORPTION D'EAU (water-drop icon), 2) LONGUE DURÉE DE VIE (recycle-loop
+          icon), 3) RÉSISTANT AUX PRODUITS MÉNAGERS (spray-bottle icon)"
+        other_approved_copy: "SURFACE 100% NON-POREUSE / ULTRA-RÉSISTANT AUX RAYURES
+          / ENTRETIEN FACILE AU QUOTIDIEN — approved for other uses, but NOT the slide-2
+          set"
+        never: "invent a claim beyond these six, or reorder/substitute the slide-2
+          three"
+      carousel:
+        # charter §6 — the master template is offre.psd (project root).
+        canvas: "1080x1350, 4:5"
+        build_method: "generate the photos in the Ceram Quartz Magnific Space FIRST,
+          then PLACE them into offre.psd's image slots in REAL Photoshop via the `photoshop`
+          MCP. NEVER freehand-recreate the layout in another tool — that is exactly
+          what caused the previous drift."
+        never_overwrite_master: "save the populated result as a NEW file (<item>_slideN.psd
+          or straight to PNG); offre.psd stays a clean template"
+        slide_1_cover: "layer groups: `top image` + `Texture` + `Fixed names` (name-bar
+          + product-name text) + `FOOTER` + `LOGO` (+ `PRIX` only if a promo is active)"
+        slide_2_detail_facts: "`full image` + `fact` (the fixed 3 facts above) + `FOOTER`
+          + `LOGO` (+ `PRIX` if promo)"
+        slides_3_4_in_situ: "`full image` + `FOOTER` + `LOGO` only — no name-bar,
+          no facts. A DIFFERENT camera angle of the same kitchen per slide (island
+          / waterfall edge / sink / backsplash). NEVER repeat an angle within one
+          carousel."
+        slide_5_cta: "NOT built from offre.psd — it is the fixed, reusable brand outro
+          asset (teal background + Q monogram + tagline), reused VERBATIM across every
+          carousel, never regenerated per item"
+        every_slide: "logo top-left + contact footer on every slide 1-4"
+      promo_poster:
+        # charter §7
+        background: "teal diagonal/radial gradient #063340 -> #106B80"
+        subject: "slab leaning in a minimalist room (product hero), soft floor shadow"
+        layout: "top-right BIG PROMO (bold italic, cyan + white) + small QUARTZ; left
+          PRIX UNIQUE + big cyan price + thin connector line to the slab; lower-left
+          cyan QUARTZ kicker + white material name + 3 feature bullets; contact footer
+          at the bottom"
+        feel: "clean, lots of teal negative space"
+      reel:
+        # charter §8 — 9:16, 1080x1920. Two types, pick one per reel.
+        showcase: "hero slab macro -> in-situ kitchen shots (countertop, waterfall,
+          backsplash) -> detail veining close-ups -> clean exit. Cyan material-name
+          label shown ONCE on its best shot. NO voice-over. Elegant cool electronic
+          bed, 100-120 BPM, instrumental, full length with a 2.5s fade-out."
+        promo: "same visual system PLUS the price badge (campaign price) and the offer.
+          French voice-over allowed HERE ONLY; music ducks under the VO and returns
+          after. Repeat the offer/CTA at the end."
+        production: "if produced via Magnific, use the Ceram Quartz Space with Ceram
+          Quartz slab textures — NEVER mix in Delta Cuisine assets or branding"
+      in_situ_context:
+        setting: "modern handleless kitchens — the slab is the HERO, shot as macro
+          texture and in situ (charter §1)"
+        cabinetry: "charcoal #23272A in render context"
+        feel: "modern, cool, premium, clean — cooler and more showroom/product than
+          Delta Cuisine"
+      safe_zones:
+        # charter §9
+        carousel: "logo top-left inset ~25px; keep text OUT of the bottom band reserved
+          for the contact footer"
+        reel: "no key content in the top ~220px (IG bars) or bottom ~450px (caption/CTA).
+          Price badge sits bottom-right but ABOVE the action buttons."
+      never:
+        # charter §11 — the drift guards, verbatim.
+      - "use any colour outside the teal + cyan + white system"
+      - "place Delta Cuisine's logo, badge (Élu 2026), footer or phone number on Ceram
+        Quartz content — or Ceram Quartz branding on Delta Cuisine content"
+      - "post Ceram Quartz to TikTok — this brand is Instagram + Facebook only"
+      - "invent a product benefit or a price — use the approved lists above"
+      - "retype the CERAM QUARTZ wordmark by hand — use the logo file"
+
+    # CONFIRMED: Ceram Quartz posts Instagram AND Facebook through COMPOSIO.
+    # TikTok is planned too, also via Composio — not connected yet, so it's
+    # excluded from routing below until it is.
+    #
+    # Scheduling note: Composio's own docs confirm Instagram post-creation
+    # supports scheduling; Facebook's scheduling support via Composio is
+    # UNCONFIRMED as of this setup. It doesn't matter either way — timing is
+    # provided by era_scheduler.py's cron trigger (Tue 11:00/20:00 below), which
+    # fires the "publish" task at the right moment and tells Composio to post
+    # NOW at that instant. Composio only needs to support immediate posting.
+    instagram_tool: "composio"                   # matches global default (explicit for clarity)
+    facebook_tool: "composio"
+    routing:                                     # per-brand override of the global matrix
+      reel: [instagram, facebook]                # tiktok excluded until connected on Composio
+      carousel: [instagram, facebook]
+    platforms:
+      instagram:
+        handle: "@ceramquartz"
+        # Verified 2026-07-03 via COMPOSIO_MANAGE_CONNECTIONS(list) — account
+        # username "ceramquartz" matches this brand's handle exactly.
+        composio_connected_account_id: "instagram_toner-soh"
+        # Numeric IG Business user id — REQUIRED by INSTAGRAM_POST_IG_USER_MEDIA.
+        # Verified 2026-07-05: instagram_toner-soh -> @ceramquartz (id below).
+        # NOTE: Composio's DEFAULT ig account is Delta (instagram_noon-droit), so
+        # this id must ALWAYS be passed explicitly or a post lands on the wrong brand.
+        composio_ig_user_id: "27423227613952559"
+      facebook:
+        page_name: "Ceram Quartz"
+        handle: "@ceramquartz"
+        # Verified 2026-07-03 via FACEBOOK_LIST_MANAGED_PAGES under the active
+        # Composio Facebook connection (alias "CQ") — the only page it manages,
+        # name matches exactly.
+        composio_page_id: "788466647689882"
+      # tiktok: not connected yet — planned via Composio (see note above)
+
+    content_mix:
+      # REVISED 2026-07-16 per user mandate (performance-report follow-up):
+      # minimum 5 posts/week, split 3+2 either direction (3 carousels+2 reels OR
+      # 3 reels+2 carousels). CM's standing call: 3 carousels + 2 reels — the
+      # strategic report shows carousels win on engagement-per-reach (2.35% vs
+      # 1.79%) and were the under-used format (was ~1 carousel : 2 reels), so the
+      # extra volume goes to the format with the better return, not a coin flip.
+      # Superseded: the old "2-3 reels + 2 carousels + 1 promo poster/week" mix.
+      reels_per_week: 2
+      carousels_per_week: 3
+      promo_posters_per_week: 0                   # no standing promo cadence; only when a real offer exists (charter §4.3)
+      formats: [reel, carousel, promo_poster]
+      # Description language: FR or AR (Tunisian dialect). The caption FOOTER is
+      # chosen to MATCH the description language — French body -> caption_footer,
+      # Arabic body -> caption_footer_ar (below). build_brief enforces this.
+      description_languages: [fr, ar]            # ar = Tunisian dialect
+      mandatory_weekly:
+      - "minimum 5 posts/week: 3 carousels + 2 reels (2026-07-16 mandate)"
+      - "winning caption structure on every product post: hook -> concrete benefit
+        -> price/offer -> clear CTA (phone/address/DM)"
+      - "no duplicate / near-identical posts within the same week (report flagged
+        reach cannibalization) — same-format posts must be spaced across different
+        days, never same day/near-simultaneous"
+      - "caption footer language MUST match the description language (fr->caption_footer,
+        ar->caption_footer_ar)"
+    # REVISED 2026-07-16 to fit 5 posts/week onto the report's proven-good days
+    # (Tue/Wed/Fri) plus Thursday (weak but never flagged "avoid" — only Mon/Sat/
+    # Sun are). Friday now carries 2 posts (reel AM, carousel PM) spaced 4h apart
+    # so they don't read as a same-slot duplicate. Superseded: the old 3-slot
+    # (Tue reel / Wed carousel / Fri test) schedule from Rapport_Strategique §8.
+    posting_schedule:
+    - {day: tuesday, time: "11:00", type: "product reel (reach)"}
+    - {day: wednesday, time: "13:00", type: "product/promo carousel (engagement)"}
+    - {day: thursday, time: "13:00", type: "product carousel (engagement)"}
+    - {day: friday, time: "11:00", type: "test slot: testimonial / avant-après reel"}
+    - {day: friday, time: "15:00", type: "product carousel (engagement)"}
+    posting_windows:
+      primary: "10:00-15:00"                     # report: top posts landed 09:59-13:34
+      best_days: [tuesday, wednesday, thursday, friday]  # report: Mon oversaturated & weak; Tue/Wed reliable; Fri high potential; Thu added 2026-07-16 to fit the 5-post mandate (never on the "avoid" list)
+      avoid: ["monday", "saturday", "sunday"]
+    # --- caption rules (body text the CM writes, above the footer) ---
+    # no_emoji governs the BODY the CM writes. The caption_footer blocks below are
+    # the fixed brand signature and are appended VERBATIM, emoji included — the
+    # rule does not strip them.
+    caption_rules:
+      no_emoji: true               # user rule 2026-07-09: zero emoji in the description body
+
+    # Appended VERBATIM to the end of every Ceram Quartz caption (product posts,
+    # carousels, and any manually-created reel Era is asked to publish/schedule).
+    # Era writes the post-specific body ABOVE this block in the brand's style, then
+    # appends this block unchanged. 5 hashtags = the hashtag_max ceiling.
+    caption_footer: |
+      📍 Venez découvrir cette pierre d'exception dans notre showroom à La Soukra !
+      📞 Contactez-nous pour un devis gratuit ou plus d'informations au : +216 98 522 200 / 98 522 210
+      Ceram Quartz — Pierre façonnée selon vos envies.
+      #CeramQuartz #Quartz #CuisineModerne #PlanDeTravail #Tunisie
+    # Arabic (Tunisian dialect) footer — appended VERBATIM instead of the French
+    # caption_footer WHENEVER the post description/caption body is written in Arabic.
+    # Never mix: an Arabic body gets THIS footer, a French body gets caption_footer.
+    caption_footer_ar: |
+      ما تترددش باش تاخو فكرة على الأسعار وتكتشف التشكيلة الكاملة! الفريق متاعنا ديما هوني باش ينصحك ويعاونك تختار الأحسن لدارك.
+      📩 ابعثلنا ميساج على الصفحة
+      📞 ولا كلمنا على: 98.522.200/98.522.210
+      📍 مرحبا بكم في المقر متاعنا في سكرة.
+    # PRICE is a per-campaign variable (Era gets it in the brief). The price BADGE
+    # keeps a FIXED position + style; only the number changes. 470 DT/m² TTC was a
+    # past campaign value, not a standing price.
+
+    schedules:
+      # Staggered deliberately: DC = Friday, Ceram Quartz = Tuesday. Both brands
+      # share ONE Magnific/Adobe login, so running them on different days spreads
+      # generation-credit spend across the week instead of spiking it on one day,
+      # and avoids one brand's full pipeline queuing for hours behind the other's.
+      weekly_plan: {cron: "0 11 * * 2", enabled: false}     # Tue 11:00 — enable when live
+      auto_publish: {cron: "0 0 * * *", enabled: false}     # Tue 20:00
+
+    # --- Meta Ads (paid) — added 2026-07-20, per fable_meta.md's approved plan ---
+    # LIVE as of 2026-07-20 — same OAuth confirmation as Delta Cuisine (see its
+    # ads: block comment for the headless-reachability detail). No
+    # account-identity conflict here: a live check on 2026-07-20 found exactly
+    # one match, act_1698581228193609, ACTIVE, named "ceram quartz" under
+    # business "Ceram Quartz" — identical to fable_meta.md's 2026-07-07 pick,
+    # its page_id matches platforms.facebook.composio_page_id exactly, and
+    # Karim independently confirmed this same ID directly the same day.
+    ads:
+      enabled: true                     # OAuth confirmed reachable headless 2026-07-20
+      meta_ad_account_id: "act_1698581228193609"   # confirmed 2026-07-20, no conflict
+      page_id: "788466647689882"        # matches platforms.facebook.composio_page_id
+      default_objective: OUTCOME_LEADS  # sales close via DM/WhatsApp/phone
+      currency: USD                     # was TND — Ads Manager bills this account in USD (verified 2026-09-19)
+      # What Karim is optimising for (stated 2026-09-19). Read by the ads brief so
+      # every report and every "should I scale this?" judgement is measured
+      # against THESE goals, not generic vanity metrics.
+      goals:
+        primary: "Grow Ceram Quartz Page + Instagram followers (reach NEW people)"
+        secondary: "Sales — message conversations (WhatsApp/Messenger/DM) that turn into quotes and showroom visits"
+        note: "Meta cannot see a closed sale. A message conversation is the measurable proxy; ask Karim how many became quotes/visits before calling a campaign a sales success."
+      # The account's OWN history (USD, last 12 months, read from Ads Manager
+      # 2026-09-19) — judge results against these, not industry averages.
+      baselines:
+        cost_per_message_conversation: {best: 0.30, typical: "0.43-0.51", poor_above: 0.80}
+        cost_per_profile_or_page_visit: {typical: 0.03, poor_above: 0.10}
+        cost_per_1000_reached: {typical: "0.08-0.14"}
+        learning_threshold: "about 50 results per week per ad set — below that Meta is still learning; don't judge or edit early"
+      # Spec derived from the brand's strategic report (fable_meta.md Step 3).
+      audiences:
+      - name: "Claude CQ AUDIENCE"
+        source_report: "D:\\telechargements\\ceramequartz\\new\\Rapport_Strategique_Instagram_CeramQuartz.md"
+        insight: "62.8% women, 25-44 = 70.7%, Tunisia = 94.8%; CTA/promo posts with
+          price+phone drive action; carousels = best format"
+        geo: "Tunisia"
+        age_range: "25-44 core, extend to 54"
+        languages: [fr, ar]
+        interests: [countertops/plan de travail, quartz, ceramics/marble/granite,
+          kitchen renovation, bathroom remodel, construction]
+        secondary_interests: "contractors/kitchen installers (B2B layer)"
+        objective_note: "geared to sales conversations: leads/messages (WhatsApp/DM/call)"
+        retargeting: "page + IG engagers, 365 days"
+      # BUDGET — NOT a standing cap. See delta_cuisine.ads.budget_policy's
+      # comment: the CM must ask Karim for the end date and the budget on
+      # EVERY campaign, never read a pre-set number.
+      budget_policy: ask_every_campaign
+      review_gate: always_paused        # every created campaign/ad-set/ad starts PAUSED, no exceptions
+
+
+# ============================================================================
+# HOW TO ADD A BRAND
+#   1. Copy the delta_cuisine block, rename the key (snake_case, no spaces).
+#   2. Fill EVERY field. No value may stay "TODO" once status: active.
+#   3. Connect its Instagram + Facebook (and TikTok, once ready) in COMPOSIO —
+#      this is the default publishing tool for every brand.
+#      Record each platform's composio_connected_account_id / composio_page_id.
+#   4. Write its charter doc (its "Master Blueprint").
+#   5. Assign browser_profile + claude_account.
+#   6. Dry-run the pipeline to Gate 1 and confirm the Brand Lock shows the
+#      correct handles + IDs before publishing anything. If TikTok isn't
+#      connected yet, EXCLUDE it from that brand's routing override (reel/
+#      carousel lists) until it is — don't let it silently route nowhere.
+# ============================================================================

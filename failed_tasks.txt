@@ -1,0 +1,5 @@
+Limitation Netflix : 'next_episode' fonctionne uniquement quand le bouton 'Suivant' est visible à l'écran, pas au tout début d'un show.
+Limitation Netflix : Impossible de lire ou extraire le numéro de l'épisode directement depuis l'écran.
+Limitation : Parfois difficile de distinguer si la parole vient de l'utilisateur ou d'un média en cours de lecture (ex: dialogue Netflix).
+Limitation : Perte de la fixation de la voix sur les lunettes lors du changement de sortie média par défaut (la voix a basculé sur les haut-parleurs PC).
+Issue: Unable to persist voice output on glasses after media output changes - my voice erroneously switches away from pinned device.

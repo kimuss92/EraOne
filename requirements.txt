@@ -1,0 +1,51 @@
+# MARK-XXXIX base requirements
+# For Windows, prefer: pip install -r requirements.windows.txt
+
+sounddevice
+google-genai
+google-generativeai
+pillow
+requests
+beautifulsoup4
+ddgs
+playwright
+pyautogui
+pyperclip
+pygetwindow
+pywinctl
+opencv-python
+numpy
+mss
+psutil
+nvidia-ml-py
+comtypes
+pycaw
+win10toast
+send2trash
+youtube-transcript-api
+pywinauto
+python-pptx
+python-docx
+pandas
+PyQt6
+PyQt6-WebEngine
+mcp
+openai
+flask
+aiohttp
+httpx
+keyboard
+spotipy
+watchdog
+websockets
+pytest
+pytest-asyncio
+pytest-cov
+apscheduler
+ruamel.yaml
+# Gmail lane (core/gmail_service.py). Optional at runtime: Era starts and the
+# voice loop runs without them; only gmail_control reports them missing.
+google-api-python-client
+google-auth
+google-auth-oauthlib
+pywin32; platform_system == "Windows"

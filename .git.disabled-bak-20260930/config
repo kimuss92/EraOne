@@ -1,0 +1,12 @@
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = false
+	logallrefupdates = true
+	ignorecase = true
+[extensions]
+	worktreeConfig = true
+[remote]
+	pushDefault = no-push-allowed
+[push]
+	default = nothing

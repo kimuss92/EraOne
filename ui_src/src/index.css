@@ -1,0 +1,485 @@
+@import "tailwindcss";
+
+/* ERA ONE — localhost HUD design system (v2 tokens, HUD modernization phase 1).
+   Two colour channels, never mixed:
+   - IDENTITY (--accent, fixed cyan): chrome, focus, selection, running work.
+   - STATE (--state, hue --sh / sat --ss): set on .hud-root from the REAL agent
+     state (App.tsx) and used ONLY by the Neuracore, the state label, the voice
+     meter and the centre glow — so an error never recolours the whole HUD.
+   Semantic colours (--ok / --warn / --bad) carry meaning only: amber is
+   reserved for waiting / approval, red for failure / disconnection. */
+
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
+  /* Type scale → Tailwind classes text-micro … text-display. */
+  --text-micro: var(--fs-micro);
+  --text-meta: var(--fs-meta);
+  --text-small: var(--fs-small);
+  --text-body: var(--fs-body);
+  --text-title: var(--fs-title);
+  --text-state: var(--fs-state);
+  --text-display: var(--fs-display);
+}
+
+@layer base {
+  :root {
+    /* spacing (4-px grid) */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+    /* type */
+    --fs-micro: 10px;   /* section labels, chips */
+    --fs-meta: 11px;    /* metadata, telemetry */
+    --fs-small: 12px;   /* secondary text */
+    --fs-body: 13.5px;  /* primary text, input */
+    --fs-title: 15px;   /* brand, drawer titles */
+    --fs-state: 20px;   /* agent state */
+    --fs-display: 28px; /* weather / hero numbers */
+    --ls-label: 0.12em;
+    /* radius */
+    --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+    /* motion */
+    --dur-1: 150ms; --dur-2: 220ms; --dur-3: 400ms;
+    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+    /* layers */
+    --z-content: 10; --z-stage: 20; --z-rail-overlay: 25; --z-header: 30; --z-banner: 35;
+    --z-drawer: 40; --z-palette: 50; --z-menu: 55; --z-toast: 60; --z-drop: 70;
+    /* layout */
+    --header-h: 56px;
+    --panel-head-h: 36px;
+    /* session transcript: FIXED heights so arriving text never resizes the core */
+    --transcript-h: clamp(84px, 13vh, 150px);
+    --transcript-h-expanded: clamp(180px, 38vh, 460px);
+    --rail-left: clamp(240px, 17vw, 320px);
+    --rail-right: clamp(280px, 20vw, 380px);
+
+    /* identity accent — fixed */
+    --ah: 195;
+    --as: 78%;
+    /* state accent — overridden on .hud-root */
+    --sh: 195;
+    --ss: 78%;
+
+    --bg: #03070c;
+    --panel: rgba(7, 15, 24, 0.8);
+    --panel-solid: #07111b;
+    --drawer: rgba(5, 11, 19, 0.97);
+    --line: rgba(120, 195, 240, 0.1);
+    --line-2: rgba(120, 195, 240, 0.2);
+    --text-1: #dcedf6;
+    --text-2: #93b3c5;
+    --text-3: #6a8799;
+    --field: rgba(255, 255, 255, 0.03);
+    --hover: rgba(120, 200, 255, 0.07);
+    --veil: rgba(2, 5, 10, 0.72);
+    --grid: rgba(110, 190, 255, 0.03);
+    --ok: #4fd6a0;
+    --warn: #f0b34e;
+    --bad: #ff7468;
+    --al-fill: 60%;
+    --accent: hsl(var(--ah) var(--as) 64%);
+    --accent-strong: hsl(var(--ah) var(--as) 80%);
+    --accent-soft: hsl(var(--ah) var(--as) 60% / 0.12);
+    --accent-line: hsl(var(--ah) var(--as) 60% / 0.35);
+    /* ERA ONE's own voice (her transcript lines, the date): electric blue.
+       The user's lines are plain white. */
+    --era-blue: hsl(201 100% 62%);
+    --you: #ffffff;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+    --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+  [data-theme='light'] {
+    --bg: #e4edf2;
+    --panel: rgba(255, 255, 255, 0.78);
+    --panel-solid: #f3f8fa;
+    --drawer: rgba(246, 250, 252, 0.98);
+    --line: rgba(20, 60, 80, 0.12);
+    --line-2: rgba(20, 60, 80, 0.24);
+    --text-1: #10303b;
+    --text-2: #3f5a65;
+    --text-3: #52666e;
+    --field: rgba(255, 255, 255, 0.8);
+    --hover: rgba(20, 90, 120, 0.07);
+    --veil: rgba(228, 237, 242, 0.7);
+    --grid: rgba(40, 90, 110, 0.05);
+    --ok: #13875e;
+    --warn: #a86a06;
+    --bad: #c23b30;
+    --accent: hsl(var(--ah) var(--as) 34%);
+    --accent-strong: hsl(var(--ah) var(--as) 26%);
+    --accent-soft: hsl(var(--ah) var(--as) 40% / 0.1);
+    --accent-line: hsl(var(--ah) var(--as) 35% / 0.35);
+    --era-blue: hsl(205 100% 38%);
+    --you: var(--text-1); /* white would vanish on the light background */
+    --shadow: 0 14px 36px rgba(40, 80, 95, 0.14);
+    --shadow-1: 0 6px 18px rgba(40, 80, 95, 0.12);
+    color-scheme: light;
+  }
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-1);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; opacity: 0.4; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+}
+
+@layer components {
+  /* The state channel is DERIVED where --sh/--ss are set (App.tsx puts them on
+     .hud-root). A custom property's var() resolves where it is declared, so
+     declaring these on :root would freeze them at the idle hue for good. */
+  .hud-root {
+    user-select: none;
+    --state: hsl(var(--sh) var(--ss) 64%);
+    --state-strong: hsl(var(--sh) var(--ss) 80%);
+    --state-glow: hsl(var(--sh) var(--ss) 55% / 0.35);
+  }
+  [data-theme='light'] .hud-root {
+    --state: hsl(var(--sh) var(--ss) 34%);
+    --state-strong: hsl(var(--sh) var(--ss) 26%);
+    --state-glow: transparent;
+  }
+  .hud-grid {
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse at center, #000 30%, transparent 80%);
+  }
+  /* The one ambient light source: the Neuracore's state glow, centre only. */
+  .hud-vignette {
+    background: radial-gradient(ellipse at 50% 42%, hsl(var(--sh) var(--ss) 40% / 0.07), transparent 55%),
+      radial-gradient(ellipse at center, transparent 55%, var(--veil) 100%);
+    transition: background 0.9s ease;
+  }
+
+  .t1 { color: var(--text-1); }
+  .t2 { color: var(--text-2); }
+  .t3 { color: var(--text-3); }
+  .ac-text { color: var(--accent); }
+  .ac-text-strong { color: var(--accent-strong); }
+  .ac-bg-soft { background: var(--accent-soft); }
+  .ac-border-soft { border-color: var(--line); }
+  .micro {
+    font-family: var(--font-mono);
+    font-size: var(--fs-micro);
+    font-weight: 500;
+    letter-spacing: var(--ls-label);
+    text-transform: uppercase;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+
+  /* header */
+  .hud-header { height: var(--header-h); border-bottom: 1px solid var(--line); background: var(--bg); }
+  .brand-dot {
+    width: 8px; height: 8px; border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .brand-dot-off { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+  .seg { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm); }
+  .seg-btn { transition: background var(--dur-1); }
+  .seg-btn:hover { background: var(--hover); }
+  .icon-btn {
+    display: inline-flex; height: 32px; width: 32px; align-items: center; justify-content: center;
+    border-radius: var(--r-sm); color: var(--text-2); transition: background var(--dur-1), color var(--dur-1);
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text-1); }
+  .icon-btn[aria-pressed='false'] { color: var(--text-3); }
+
+  /* rails + panels (Level 1) */
+  .rail { display: flex; min-height: 0; flex-direction: column; gap: var(--sp-3); flex-shrink: 0; }
+  .rail-left { width: var(--rail-left); }
+  .rail-right { width: var(--rail-right); }
+  .rail-overlay {
+    position: absolute; top: var(--sp-2); bottom: var(--sp-3); z-index: var(--z-rail-overlay);
+    width: min(330px, 86vw); box-shadow: var(--shadow); border-radius: var(--r-lg);
+  }
+  .rail-overlay.rail-left { left: var(--sp-3); }
+  .rail-overlay.rail-right { right: var(--sp-3); }
+  .rail-overlay .panel { background: var(--panel-solid); }
+  .panel {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    background: var(--panel);
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: var(--sp-2); height: var(--panel-head-h); flex-shrink: 0;
+    padding: 0 var(--sp-3);
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-solid);
+  }
+  .panel-title { color: var(--text-2); }
+
+  /* chips (status pills) */
+  .chip {
+    display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px 6px; border-radius: var(--r-sm);
+    font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: 500; letter-spacing: 0.06em;
+    white-space: nowrap; border: 1px solid var(--line);
+  }
+  .chip-dim { color: var(--text-3); }
+  .chip-live { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .chip-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+  .chip-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .chip-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  .kbd {
+    display: inline-flex; min-width: 22px; justify-content: center; padding: 1px 6px; flex-shrink: 0;
+    border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--field);
+    font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--text-2);
+  }
+  .arg-chip {
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px 6px;
+    font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--text-2);
+  }
+
+  /* activity */
+  .tool-card {
+    border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-2) 10px;
+    background: var(--field); transition: border-color var(--dur-2), background var(--dur-2);
+  }
+  .tool-card-live { border-color: var(--accent-line); background: var(--accent-soft); }
+  .tool-card-bad { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .tool-card-warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 6%, transparent); }
+  /* settled (complete / cancelled) runs: one quiet line */
+  .act-row { border-radius: var(--r-sm); padding: 5px 6px; transition: background var(--dur-1); }
+  .act-row:hover, .act-row-open { background: var(--field); }
+  .tool-icon {
+    display: inline-flex; height: 24px; width: 24px; flex-shrink: 0; align-items: center; justify-content: center;
+    border-radius: var(--r-sm); color: var(--accent); background: var(--accent-soft);
+  }
+  /* timeline events (routing, link, wake…) are background: text-3 unless they warn */
+  .tl-row { display: flex; align-items: center; gap: var(--sp-2); padding: 3px 6px; font-size: var(--fs-meta); color: var(--text-3); }
+  .tl-ok { color: var(--text-3); }
+  .tl-warn { color: var(--warn); }
+  .tl-bad { color: var(--bad); }
+  .tl-row span:first-of-type { color: var(--text-3); }
+  .tl-warn span:first-of-type, .tl-bad span:first-of-type { color: var(--text-2); }
+
+  /* system */
+  .bar-track { height: 3px; overflow: hidden; border-radius: 2px; background: var(--line); }
+  .bar-fill { height: 100%; border-radius: 2px; background: var(--text-3); transition: width 0.6s ease-out, background var(--dur-3); }
+  .bar-warn { background: var(--warn); }
+  .bar-bad { background: var(--bad); }
+
+  /* scheduled tasks (future work — kept visually distinct from live activity) */
+  .sched-row { display: flex; align-items: center; gap: var(--sp-2); padding: 4px 6px; border-radius: var(--r-sm); }
+  .sched-row-warn { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+  .sched-link {
+    display: inline-flex; align-items: center; gap: var(--sp-1); padding: 2px 6px; border-radius: var(--r-sm);
+    font-size: var(--fs-meta); color: var(--text-3); transition: background var(--dur-1), color var(--dur-1);
+  }
+  .sched-link:hover { background: var(--hover); color: var(--text-1); }
+  .sched-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px var(--sp-3); background: var(--field); }
+
+  /* context */
+  .ctx-card { border-left: 2px solid var(--line-2); padding: var(--sp-1) 0 var(--sp-1) 10px; }
+  /* a card with a file/folder behind it: the whole box is the open button */
+  .ctx-card-open {
+    cursor: pointer; border-radius: 0 var(--r-sm) var(--r-sm) 0; padding-right: var(--sp-1);
+    transition: background var(--dur-1), border-color var(--dur-1);
+  }
+  .ctx-card-open:hover { background: var(--hover); border-left-color: var(--accent); }
+  .ctx-card-open:focus-visible { outline-offset: 0; }
+  .icon-btn-xs { height: 20px; width: 20px; color: var(--text-3); }
+  /* Sources: always visible, grows with its rows up to a cap, then scrolls inside */
+  .sources-panel { max-height: clamp(96px, 20vh, 240px); }
+  /* category filter: sits under the sticky CONTEXT head, wraps, never scrolls away */
+  .ctx-filters {
+    display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: 6px var(--sp-3);
+    border-bottom: 1px solid var(--line); background: var(--panel-solid);
+  }
+  .ctx-filters .chip { cursor: pointer; }
+  /* collapsed card body: two lines, click to expand (raw detail stays reachable) */
+  .ctx-clamp .card-body { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card-body { margin-top: 2px; font-size: var(--fs-meta); line-height: 1.45; color: var(--text-2); overflow-wrap: anywhere; }
+  .src-row { display: flex; align-items: flex-start; gap: var(--sp-2); border-radius: var(--r-sm); padding: 6px; }
+  button.src-row:hover { background: var(--hover); }
+  .kv { display: flex; align-items: baseline; justify-content: space-between; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--text-1); }
+  .field { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--field); transition: border-color var(--dur-1); }
+  .field:focus-within { border-color: var(--accent-line); }
+  .mini-btn {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+    padding: var(--sp-1) 10px; font-size: var(--fs-meta); color: var(--text-1); transition: background var(--dur-1);
+  }
+  .mini-btn:hover { background: var(--hover); }
+  /* a file/folder path inside any HUD text: click opens it (components/PathText.tsx) */
+  .path-link {
+    display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent);
+    text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;
+    overflow-wrap: anywhere; cursor: pointer; border-radius: 2px;
+  }
+  .path-link:hover { text-decoration-style: solid; }
+  .path-link:focus-visible { outline: 1px solid var(--accent-line); outline-offset: 1px; }
+  .mini-btn-danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  .menu-panel { border: 1px solid var(--line-2); background: var(--drawer); box-shadow: var(--shadow); }
+
+  /* core — the state channel lives here */
+  .state-label {
+    font-size: var(--fs-state); font-weight: 600; letter-spacing: 0.28em; padding-left: 0.28em;
+    color: var(--state-strong);
+    text-shadow: 0 0 16px var(--state-glow);
+    transition: color 0.8s ease, text-shadow var(--dur-3);
+  }
+  /* Glow means activity: resting / terminal states stay flat. */
+  .state-label:is([data-state='idle'], [data-state='standby'], [data-state='offline'], [data-state='complete'], [data-state='interrupted']) {
+    text-shadow: none;
+  }
+
+  /* transcript + command bar */
+  .transcript-scroll {
+    height: var(--transcript-h); overflow-y: auto; overscroll-behavior: contain;
+    /* symmetric, so the centred lines sit on the Neuracore's axis */
+    padding: var(--sp-2) var(--sp-6) var(--sp-1);
+    scrollbar-gutter: stable both-edges;
+    mask-image: linear-gradient(transparent, #000 14px);
+    /* no height transition: it would resize the core's canvas every frame */
+  }
+  .transcript-expanded .transcript-scroll { height: var(--transcript-h-expanded); }
+  .transcript-scroll:focus-visible { outline-offset: -2px; }
+  .transcript-tools { position: absolute; right: 0; top: 0; z-index: 1; display: flex; gap: 2px; }
+  .icon-btn-sm { height: 26px; width: 26px; color: var(--text-3); }
+  /* Centred under the Neuracore; who is speaking is told by colour:
+     ERA ONE electric blue, the user white. Older lines recede by opacity. */
+  .tr-row { padding: 3px var(--sp-2); border-radius: var(--r-sm); text-align: center; }
+  .tr-row + .tr-row { margin-top: var(--sp-1); }
+  .tr-who { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .tr-text { margin: 0 auto; max-width: 46rem; font-size: var(--fs-body); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tr-agent .tr-text { color: var(--era-blue); }
+  .tr-user .tr-text { color: var(--you); }
+  .tr-old .tr-text { opacity: 0.62; }
+  .tr-partial { opacity: 0.75; }
+  /* one-shot arrival highlight: fades out, never keeps glowing */
+  .tr-new { animation: tr-new 1.4s var(--ease); }
+  @keyframes tr-new {
+    from { background: var(--accent-soft); transform: translateY(4px); }
+    30% { transform: none; }
+    to { background: transparent; }
+  }
+  .tr-unseen {
+    position: absolute; left: 50%; bottom: var(--sp-1); transform: translateX(-50%);
+    display: inline-flex; align-items: center; gap: var(--sp-1); padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--accent-line); background: var(--panel-solid); color: var(--accent);
+    font-size: var(--fs-meta); box-shadow: var(--shadow-1);
+  }
+  .caret {
+    display: inline-block; width: 7px; height: 1em; margin-left: 3px; vertical-align: -2px;
+    background: var(--state); animation: caret 1s steps(1) infinite;
+  }
+  @keyframes caret { 50% { opacity: 0; } }
+  .cmd-bar {
+    border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--panel-solid);
+    box-shadow: var(--shadow-1); transition: border-color var(--dur-2);
+  }
+  .cmd-bar:focus-within { border-color: var(--accent-line); }
+  /* voice activity: the bar takes the state colour while the user is heard or
+     ERA ONE speaks — the meter inside already moves; this only frames it */
+  .cmd-bar[data-voice] { border-color: hsl(var(--sh) var(--ss) 60% / 0.5); }
+
+  /* approval prompt (Level 2) — amber means "needs the user" and nothing else */
+  .approval {
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); border-radius: var(--r-lg);
+    background: var(--panel-solid); box-shadow: var(--shadow-1); padding: var(--sp-3) var(--sp-4);
+    animation: approval-in var(--dur-2) var(--ease);
+  }
+  @keyframes approval-in { from { opacity: 0; transform: translateY(6px); } }
+  .mini-btn-approve { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .mini-btn-approve:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+  .cmd-input { background: transparent; color: var(--text-1); outline: none; max-height: 8rem; }
+  .cmd-input:focus-visible { outline: none; }
+  .cmd-input::placeholder { color: var(--text-3); }
+  .round-btn {
+    display: inline-flex; height: 40px; width: 40px; flex-shrink: 0; align-items: center; justify-content: center;
+    border-radius: var(--r-md); color: var(--text-2); transition: background var(--dur-1), color var(--dur-1);
+  }
+  .round-btn:hover:not(:disabled) { background: var(--hover); color: var(--text-1); }
+  .round-btn-on { color: var(--accent); background: var(--accent-soft); }
+  .round-btn-off { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .round-btn-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .round-btn-accent { color: var(--bg); background: var(--accent); }
+  .round-btn-accent:hover:not(:disabled) { color: var(--bg); background: var(--accent-strong); }
+
+  /* overlays (Level 2–3) */
+  /* notification rail (Level 3): top-centre, under the header; kind = icon + label + edge */
+  .notice-rail {
+    position: absolute; left: 50%; top: calc(var(--header-h) + var(--sp-2)); z-index: var(--z-toast);
+    width: min(440px, calc(100vw - 2 * var(--sp-4))); transform: translateX(-50%);
+    max-height: calc(100vh - var(--header-h) - 160px); overflow-y: auto; overscroll-behavior: contain;
+  }
+  .notice {
+    display: flex; gap: var(--sp-3); padding: 10px var(--sp-3); border-radius: var(--r-md);
+    border: 1px solid var(--line-2); border-left-width: 3px;
+    background: color-mix(in srgb, var(--panel-solid) 94%, transparent); box-shadow: var(--shadow-1);
+    animation: notice-in var(--dur-2) var(--ease);
+  }
+  @keyframes notice-in { from { opacity: 0; transform: translateY(-6px); } }
+  .notice-ok { border-left-color: var(--ok); } .notice-ok .notice-icon, .notice-ok .notice-kind { color: var(--ok); }
+  .notice-info { border-left-color: var(--accent); } .notice-info .notice-icon, .notice-info .notice-kind { color: var(--accent); }
+  .notice-warn { border-left-color: var(--warn); } .notice-warn .notice-icon, .notice-warn .notice-kind { color: var(--warn); }
+  .notice-bad { border-left-color: var(--bad); } .notice-bad .notice-icon, .notice-bad .notice-kind { color: var(--bad); }
+  .notice-icon { margin-top: 1px; }
+  .notice-msg { margin-top: 1px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+  .notice-action {
+    display: inline-flex; align-items: center; gap: 2px; padding: 2px 6px; border-radius: var(--r-sm);
+    font-size: var(--fs-meta); color: var(--accent); white-space: nowrap; transition: background var(--dur-1);
+  }
+  .notice-action:hover { background: var(--hover); }
+  .notice-more { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel-solid); font-size: var(--fs-meta); color: var(--text-2); }
+  .notice-more:hover { color: var(--text-1); }
+  .approval:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+  .banner {
+    display: flex; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-4); border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent); background: var(--drawer);
+    color: var(--bad); font-family: var(--font-mono); font-size: var(--fs-meta); letter-spacing: var(--ls-label);
+    box-shadow: var(--shadow-1);
+  }
+  .drop-target { border: 1px dashed var(--accent-line); border-radius: var(--r-lg); background: var(--drawer); }
+  .drawer-scrim { background: rgba(0, 0, 0, 0.45); }
+  .drawer { border-left: 1px solid var(--line-2); background: var(--drawer); box-shadow: var(--shadow); animation: drawer-in var(--dur-2) var(--ease); }
+  @keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
+  .palette { border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--drawer); box-shadow: var(--shadow); }
+  .palette-row { display: flex; width: 100%; align-items: center; gap: 10px; border-radius: var(--r-sm); padding: var(--sp-2) 10px; text-align: left; }
+  .palette-row-sel { background: var(--accent-soft); }
+  .switch { position: relative; height: 20px; width: 36px; flex-shrink: 0; border-radius: 999px; background: var(--line-2); transition: background var(--dur-2); }
+  .switch span { position: absolute; left: 2px; top: 2px; height: 16px; width: 16px; border-radius: 999px; background: var(--text-2); transition: transform var(--dur-2), background var(--dur-2); }
+  .switch-on { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); }
+  .switch-on span { transform: translateX(16px); background: var(--accent); }
+
+  .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .select-text { user-select: text; }
+}
+
+/* Short displays (1366×768 and similar): drop secondary ambient detail first. */
+@media (max-height: 820px) {
+  .spark { display: none; }
+  .mem-cats { display: none; } /* gives the Context scroll room back */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  .caret { animation: none; }
+}

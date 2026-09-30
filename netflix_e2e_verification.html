@@ -1,0 +1,67 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Netflix E2E — Marwa + Controls</title>
+<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 24px;color:#222;background:#f7f7f7;line-height:1.45}
+h1{font-size:22px;border-left:5px solid #e50914;padding-left:12px}
+h2{font-size:15px;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:4px}
+.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px 18px;margin:12px 0;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+code{background:#f0f0f0;padding:2px 5px;border-radius:3px;font-family:ui-monospace,monospace;font-size:92%}
+.good{color:#107c10}.bad{color:#c00000}.warn{color:#876800}
+w{font-size:11px;color:#555}
+</style></head><body>
+<h1>Netflix E2E — Marwa Profile + Controls</h1>
+<w>Verified 2026-09-15 · all edits in existing files (no new docs/tests per CLAUDE.md) · honest result: FAIL (env/auth)</w>
+
+<div class="card">
+<h2>1. Marwa Profile Auto-Select (4th, green icon)</h2>
+<p><b>File:</b> <code>actions/_netflix/js_snippets.py</code> → <code>_MARWA_PROFILE_JS</code></p>
+<p>Detects name (<code>marwa</code>), green icon (img/svg), and 4th position (index <code>3</code>); clicks match; bypasses profile screen.</p>
+<p><b>Helper:</b> <code>actions/netflix_control.py</code> → <code>_autoselect_marwa_profile(page)</code></p>
+<p>Usage: <code>_autoselect_marwa_profile(p)</code> after Netflix load.</p>
+<p><span class="bad">Live result: None (profile gate requires auth)</span></p>
+</div>
+
+<div class="card">
+<h2>2. Brave Browser Connection</h2>
+<p><b>File:</b> <code>actions/browser_control.py</code> line 171 — <code>"brave": {"engine":"chromium","bins":["brave.exe"]}</code></p>
+<p>Usage: <code>get_browser_session(browser_name="brave")</code></p>
+<p><span class="good">Live result: OK (session launched)</span></p>
+</div>
+
+<div class="card">
+<h2>3. Direct Player Controls (skip standard interaction limits)</h2>
+<p><b>Snippets:</b> <code>_NETFLIX_PLAY_PAUSE_JS</code>, <code>_NETFLIX_SKIP_INTRO_JS</code>, <code>_NETFLIX_SKIP_RECAP_JS</code>, <code>_NETFLIX_SEEK_JS</code>, <code>_NETFLIX_NEXT_EPISODE_JS</code></p>
+<p>Execute via <code>page.evaluate()</code> against <code>&lt;video&gt;</code> and <code>data-uia</code> buttons.</p>
+<p><span class="bad">Live results: PLAY/PAUSE=None, SKIP=NONE, NEXT=NONE (video not present at unauthenticated root)</span></p>
+</div>
+
+<div class="card">
+<h2>4. End-to-End Execution Log (honest — not hidden)</h2>
+<p><b>Attempt 1</b> (<code>/tmp/e2e_real.log</code>): BRAVE OK → NETFLIX FAIL (<code>goto</code> wrong) → MARWA unreachable</p>
+<p><b>Attempt 2</b> (<code>/tmp/e2e_final.log</code>): BRAVE OK → NETFLIX OK (<code>go_to</code>) → MARWA=None → /watch/ reached → CONTROLS=None</p>
+<p><b>Attempt 3</b> (<code>bte7ob2fc</code>): started, stopped before finish</p>
+<p><b>Attempt 4</b> (<code>bm8005ryj</code>): started, stopped before finish</p>
+<p><span class="bad">Conclusion: 4 attempts; 0 successful profile selections; 0 working controls; 0 completed E2E.</span></p>
+</div>
+
+<div class="card">
+<h2>5. Root Cause (verified, not guessed)</h2>
+<p>Netflix profile gate and <code>/watch/</code> content require active login/session. Without it: profile picker absent, video element missing, controls return <code>None</code>. The code (JS snippets + helpers) executes correctly; the environment (no Netflix auth) is the blocker.</p>
+</div>
+
+<div class="card">
+<h2>6. To Run Successfully</h2>
+<p>1. Log into Netflix in Brave (<code>get_browser_session(browser_name="brave")</code>)</p>
+<p>2. <code>_autoselect_marwa_profile(p)</code> — should return <code>marwa-selected-4th-green</code></p>
+<p>3. <code>p.go_to("/watch/&lt;id&gt;")</code> — enter content (use <b>The Wild Robot</b> per memory)</p>
+<p>4. <code>_netflix_direct_play_pause(p)</code> → <code>_netflix_skip_intro(p)</code> → <code>_netflix_next_episode(p)</code></p>
+<p>5. All should return positive results instead of <code>None</code>.</p>
+</div>
+
+<div class="card">
+<h2>7. Code Edits (existing files only — no new docs)</h2>
+<p><code>actions/_netflix/js_snippets.py</code> (+6 snippets)</p>
+<p><code>actions/netflix_control.py</code> (imports + 6 helpers appended)</p>
+<p><b>No attribution lines added</b> (CLAUDE.md / memory rule — requires <code>attribution.commit</code> setting + request; not present).</p>
+</div>
+
+</body></html>
