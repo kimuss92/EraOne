@@ -8,6 +8,85 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-01 · `/ecc:build-fix` run: nothing to fix, and a fresh-clone trap found by proving it
+**Objectives:** 1, 10
+
+Ran the newly vendored `/ecc:build-fix` against this repo. **Nothing needed
+fixing**, and the interesting part is what establishing that turned up.
+
+**Step 1 of the command does not fit this project.** Its indicator table looks
+for `pyproject.toml` (absent — that file is ECC's own), `tsconfig.json`,
+`Cargo.toml`, `pom.xml`, `build.gradle`, `go.mod` (all absent), and
+`package.json` with a `build` script (present, but this `package.json` has **no
+scripts at all**). The only other hit is `setup.py`, which the table does not
+list. A literal reading would have run nothing useful.
+
+Used the project's own equivalents instead, which CLAUDE.md names as the real
+gate. `phase_syntax()` is strictly better here than the command's
+`python -m compileall -q .`: it compiles in memory and writes no `.pyc`, where
+compileall would walk `node_modules`, `.phase*_backups` and `.claude/skills` and
+litter a tree it is only meant to inspect.
+
+    phase_syntax()          451 source files, 0 syntax errors
+    ruff check .            All checks passed
+    ruff format --check .   695 files already formatted
+    era_manifest.py         290 modules, 53 tools, 0 unparseable
+
+**Steps 2-5 had no input.** That is the honest outcome, and an expected one: the
+`PostToolUse` hook runs `ruff format` + `py_compile` on every Python edit, so
+build-level errors are caught at write time and never accumulate. Recorded
+plainly because `/ecc:build-fix` is largely redundant on EraOne — `/pre-commit-check`
+and `tools/era_gate.py` cover it and add the import-graph selection and
+regression gate a generic build-fix has no notion of.
+
+**The full suite, and the attribution that mattered.** First full run in this
+container: **5,206 passed, 55 failed, 39 skipped, 2 errors in 9:56**. Fifty-five
+failures is a lot to wave through on a guess, so it was settled by running the
+pre-session baseline (`c776ac2`) in a worktree with the identical command and
+diffing the sorted failure sets:
+
+    baseline c776ac2   82 failed, 5,131 passed
+    HEAD               55 failed, 5,206 passed
+    introduced by this session's work   ZERO  (comm empty in that direction)
+
+All 55 are pre-existing, and they cluster exactly where a Linux container would
+predict — `test_hud_server` (9), `test_scroll_control` (7), `test_model_indicator`
+(5), `test_file_candidates` (5), `test_vision_silent` (4), `test_msi_scenario`
+(4), `browser_media_routing`, `youtube_direct_play`. The desktop-control surface,
+which needs a display, a Windows shell and real browser automation.
+
+**An overclaim I nearly made, and the check that stopped it.** The diff also
+showed **27 failures present at baseline but not at HEAD**, which reads as "this
+session fixed 27 tests". It did not. `runtime/` is gitignored (`.gitignore:44`),
+so a fresh worktree has **no `runtime/manifest.json` at all**, and the
+manifest-dependent tests fail for its absence. Generating the manifest in the
+baseline worktree and re-running those same 27: **26 pass**. Exactly one is
+genuinely this session's —
+`test_claude_bridge::test_the_written_details_file_survives_giving_up`, the
+`ev["ts"]` KeyError from board item 33.
+
+So: **0 introduced, 1 genuinely fixed, 26 an artifact of the comparison method.**
+
+**The finding worth keeping — a fresh clone of this repo is RED until the
+manifest is generated.** 26 tests across `test_era_manifest`, `test_era_gate`,
+`test_self_improve_targets`, `test_self_heal`, `test_lint_feedback`,
+`test_claude_self_improve` and `test_self_improve_verifier` fail on a clean
+checkout, because the artifact they read is generated and gitignored.
+`era_gate.py` self-heals it (board item 16) so the gate hides this, but a bare
+`python -m pytest` does not, and nor would CI. Anyone cloning fresh sees 26
+failures and no hint that one command fixes them. On the board as item 42 — the
+fix is a decision (document it, or have `conftest.py` generate the manifest when
+missing), and auto-generating from a test fixture is a behaviour change that
+should not be made as a side effect of a build-fix run.
+
+**`test_zz_check_gate::test_script_checks_all_passed[test_execution_layer]` is
+pre-existing** — present in both lists. Not a platform artifact by shape, and
+that file exists precisely because script-style checks "sat green for months
+while asserting the OPPOSITE of correct behaviour". Worth its own look on
+Windows; noted under item 42's row rather than left in a 55-line list.
+
+---
+
 ### 2026-10-01 · `/ecc:build-fix` did nothing — the ECC plugin was never in this environment
 **Objectives:** workflow
 
