@@ -8,6 +8,64 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-01 · `/ecc:build-fix` did nothing — the ECC plugin was never in this environment
+**Objectives:** workflow
+
+Karim ran `/ecc:build-fix` and nothing happened. The cause was not a broken
+plugin: **ECC was not present here in any form.** Checked before concluding —
+account plugins empty, `~/.claude/plugins/synced/<org>_<account>/` created but
+completely empty, `pluginUsage` listing only the two builtins, no `ecc` anywhere
+on the filesystem, no `build-fix` string in any `.md` or `.json`, and no plugin
+or marketplace entry in either settings file. The catalog has `ecoctx` and `cc`;
+neither is ECC.
+
+**Why.** A plugin installed locally with `/plugin` lives in that machine's own
+`~/.claude/`. Claude Code on the web starts from a fresh container holding a
+clone of this repository and nothing else, so a locally-installed plugin is
+simply absent. The empty `synced/` directory is the tell: the sync path exists
+for the account, and nothing has ever been put in it.
+
+**What was done.** Karim supplied the source (github.com/affaan-m/ECC, MIT,
+v2.2.2, commit `c70874f`). Its 94 commands are vendored to
+`.claude/commands/ecc/`, which Claude Code namespaces as `/ecc:<name>` — the
+same mechanism that already gives this repo `/github:code-review`. Committed, so
+they work in every session rather than on one laptop. `/ecc:build-fix` detects
+the build system and fixes build/type errors incrementally; for this repo that
+overlaps `/pre-commit-check` and `era_gate.py`, which are stricter.
+
+**What was deliberately NOT taken, and the reasons are the useful part.** ECC
+also ships 293 skills, 68 agents, 5 hooks with a 33 KB `hooks.json`, and MCP
+configs. The skills alone would be the costly mistake: every skill's name and
+description loads into context on EVERY turn, and this repo already carries ~50.
+The hooks matter more: they are executable automation on tool calls, ECC's
+manifest defaults `hooks_enabled` to **true**, and this project already runs its
+own safety-critical hooks (`guard_protected_paths.py`, `post_edit_format.py`).
+Third-party automation in that path is a decision to make deliberately, not a
+side effect of wanting one command. The commands themselves were checked for
+references to ECC's scripts or hook paths before vendoring — there are none, so
+they are self-contained instructions with nothing to execute.
+
+**Two things the install broke immediately, both caught by the gate.**
+
+  * `ruff format --check` went red: the file count jumped 694 -> 788 (exactly the
+    94 new files) because **ruff formats Python inside Markdown**, and one
+    vendored command's examples did not match this project's style. `ruff.toml`
+    already excludes `.claude/agents`, `docs/superpowers` and `skills` for
+    precisely this, with a comment saying restyling vendored examples "changes
+    history to satisfy a linter". `.claude/commands/ecc` is now excluded on the
+    same grounds — the established pattern, not a new judgement call.
+  * A `README.md` placed inside the commands directory registered as a junk
+    `/ecc:README` command. Moved to `docs/ecc-commands.md`, which is where the
+    vendoring record (source, version, commit, licence, what was omitted and
+    how to update) now lives.
+
+**Verification.** `ruff format --check .` 695 files clean, `ruff check .` clean,
+92 passed / 3 skipped across the bridge, latency and recall suites, manifest
+regenerated (290 modules, 53 tools). All 94 commands register, `/ecc:build-fix`
+among them.
+
+---
+
 ### 2026-09-30 · The first fixture measurement, and the two mistakes it exposed
 **Objectives:** 11 — board item 36
 

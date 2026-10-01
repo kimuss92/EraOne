@@ -27,6 +27,10 @@ extend-exclude = [
     # to satisfy a linter and makes `ruff format --check .` permanently red for
     # something that is not Era's code.
     ".claude/agents",
+    # Vendored ECC commands (2026-10-01, docs/ecc-commands.md). Same reasoning
+    # again: 94 third-party Markdown files whose Python examples ruff rewrites.
+    # One of them went red on the very first `format --check` after vendoring.
+    ".claude/commands/ecc",
     "docs/superpowers",
     "skills",
     "node_modules",
