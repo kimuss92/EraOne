@@ -8,6 +8,48 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-01 · Item 36 CLOSED — the recall floors are measured, not assumed
+**Objectives:** 11, 1 — board items 36, 43
+
+Run 2 on Karim's machine, against the corrected 50-entry frozen corpus:
+
+    entries 50   model all-minilm   cut 0.36
+    top-1 8/12   top-3 11/12   noise 0/8
+
+Baked as `FIXTURE_TOP1 = 8` / `FIXTURE_TOP3 = 11`. Item 36 is closed.
+
+**Why run 1 was not banked.** It measured 7/12 and 10/12 — but with **noise
+1/8** (`'showroom' -> ['job']`). A floor taken from that run would be a number
+measured under a condition the noise test forbids, so the two fixture faults were
+fixed first (invented proper nouns embedding as noise; a `job` value sitting
+closer to "showroom" than to "what do I do for a living"), the corpus's
+words-only difficulty was re-checked as **unchanged** at 5/12 and 10/12, and only
+then was a clean run used. The discipline is the same one that kept
+`MEASURED_TOP3` at 10 when it would have been easier to lower it.
+
+**The number that says the corpus is fair.** Words only on this corpus is 5/12;
+with semantic recall 8/12. **+3 on top-1 — exactly the gain the real store
+showed (6 → 9)** before the measurement was moved off it. A synthetic corpus can
+fail in two directions, too easy or too hard, and that agreement is the evidence
+against both. Top-3 went 10 → 11, against the real store's 10.
+
+**One case semantic recall still does not rescue, recorded rather than tuned
+away.** `"where do I live"` returns ONLY the lexical trap `live_ui_feed_plan`;
+`current_city: Bristol` does not even reach the top five, so its cosine is under
+the 0.36 cut. The live store's `Tunis` cleared it — a real difference between two
+real city names, and a reminder that `all-minilm` is a 46 MB model whose
+associations are uneven. Rewording that entry until it scores would lift top-1 to
+9 and would be fitting the corpus to the result: the same sin as lowering a
+floor, pointed the other way. It stays as it is, and the floor records what was
+actually observed.
+
+**Verification.** 22 passed, 3 skipped (the `@requires_model` tests, no Ollama in
+this container); `ruff check` and `ruff format --check` clean. The floors are
+asserted `>=`, so a better embedding model pushes them up without failing, while
+a drop on a corpus that cannot drift is now unambiguously a regression.
+
+---
+
 ### 2026-10-01 · `/ecc:build-fix` run: nothing to fix, and a fresh-clone trap found by proving it
 **Objectives:** 1, 10
 

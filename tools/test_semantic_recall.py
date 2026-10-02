@@ -133,11 +133,23 @@ FIXTURE_PATH = Path(__file__).resolve().parent / "golden" / "semantic_recall_sto
 LIVE_STORE_TOP1_2026_09_29 = 9  # of 12, against the real store, at COSINE_CUT 0.36
 LIVE_STORE_TOP3_2026_09_29 = 10
 
-# Floors for the FIXTURE. None until measured once on a machine with Ollama —
-# see the __main__ block at the bottom of this file. The measurement test SKIPS
-# while these are None rather than asserting a number nobody has observed.
-FIXTURE_TOP1: int | None = None
-FIXTURE_TOP3: int | None = None
+# Floors for the FIXTURE. MEASURED 2026-10-01 on Karim's Windows machine with
+# Ollama serving all-minilm at COSINE_CUT 0.36, against the 50-entry corpus:
+#
+#     top-1 8/12    top-3 11/12    noise 0/8
+#
+# Run 1 that day measured 7/12 and 10/12 with **noise 1/8** ('showroom' -> job)
+# and was NOT banked: a floor taken from a run that also reported noise is a
+# number measured under a condition the noise test forbids. Two fixture values
+# were fixed first (see the header above on invented proper nouns), the corpus's
+# words-only difficulty was re-checked as unchanged, and only then were these
+# taken from a clean run.
+#
+# `>=`, not `==`: a better embedding model may push these up and that must not
+# be a failure. Falling BELOW them, on a corpus that cannot drift, is a real
+# regression rather than the store having moved underneath the test.
+FIXTURE_TOP1: int | None = 8
+FIXTURE_TOP3: int | None = 11
 
 LEXICAL_TOP1 = 6  # the REAL store's words-only baseline, kept for the record
 
@@ -153,6 +165,13 @@ LEXICAL_TOP1 = 6  # the REAL store's words-only baseline, kept for the record
 # nothing at all. That last one is the case only meaning can rescue.
 FIXTURE_LEXICAL_TOP1 = 5
 FIXTURE_LEXICAL_TOP3 = 10
+
+# What semantic recall is worth on this corpus, measured rather than asserted:
+#     words only   top-1 5/12   top-3 10/12
+#     + semantic   top-1 8/12   top-3 11/12
+# +3 on top-1, which is the same gain the REAL store showed (6 -> 9) before the
+# measurement was moved off it. That agreement is the evidence the synthetic
+# corpus is a fair stand-in and not merely an easier one.
 
 
 def load_fixture() -> dict:
