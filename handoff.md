@@ -4,6 +4,18 @@ Newest first. One entry per fix or improvement: what was wrong, what changed,
 how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 (the map). Phase 0 = stabilize; Phase 1 = empower.
 
+**Resuming?** `TODO.md` has a START HERE block with the branch, the last commit,
+and the two live checks owed by Karim. `LUNAR_HANDOFF.md` is the system map.
+`CLAUDE.md` carries two standing rules worth reading before the first reply:
+write to Karim in plain language and always say how to test a fix, and load the
+matching skill from `.claude/skills/` automatically rather than asking.
+
+**The three habits this log exists to enforce**, each learned by getting it wrong:
+a test is not trusted until it has been seen to FAIL (revert the fix, or mutate
+the code and count what is caught); a gate red is ATTRIBUTED against a baseline
+worktree, never explained away as a flake; and the manifest is regenerated AFTER
+the last edit, because one built mid-edit is already stale at commit time.
+
 ---
 
 ## Phase 0 — Stabilization (week of 2026-09-29)

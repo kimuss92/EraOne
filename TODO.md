@@ -9,6 +9,36 @@ proved it. "Written" is not "done".
 
 ---
 
+## ▶ START HERE — resuming in a new session
+
+**Branch:** `claude/kind-babbage-ml3csw` · **Remote:** `kimuss92/EraOne` (private)
+**Last pushed:** `76de337` (board item 41)
+
+**Waiting on Karim, not on code** — two fixes are built, tested and pushed, but
+neither can be proved from a Linux container. Both need him to talk to Era on
+Windows. The plain-language test scripts are in the chat handoff; in short:
+
+| Item | What to test | What must NOT happen |
+|------|--------------|----------------------|
+| 19 | Ask for a file that does not exist. She should try something before announcing a failure. | **Priority:** ask her to delete a file that does not exist, with a real file beside it. She must NOT retry onto the real one. |
+| 41 | Save a fact, ask for it in different words, **wait 6+ minutes**, ask again in different words. | She must not lose it after the wait. |
+
+**Next unstarted work:** item 20 (continuous learning pipeline).
+
+**Before touching code:** read `CLAUDE.md` (talking to Karim in plain language;
+auto-loading the right skill) and `handoff.md` (what was wrong, what changed, how
+it was verified). `LUNAR_HANDOFF.md` is the wider system map.
+
+**The gate, every time:**
+```bash
+python -m ruff format . && python -m ruff check --fix .
+python tools/era_manifest.py          # AFTER the last edit, never before
+python tools/era_gate.py --changed    # or --all (~5,300 tests, ~10-12 min)
+```
+A gate red is attributed against a baseline worktree, never explained away.
+
+---
+
 ## ✅ Done
 
 | # | Item | Objective | Evidence |
