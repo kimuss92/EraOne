@@ -728,3 +728,176 @@ def test_the_traps_actually_trap():
     assert keys("what song does my kid like")[0] == "song_licensing_rules"
     # And the case words cannot reach at all.
     assert keys("what do I do for a living") == []
+
+
+# ── board item 41: the cold model must heal itself, not stall the turn ───────
+#
+# The bug: Ollama unloads an idle model after five minutes, a cold load costs
+# ~4s, and the probe allowed 1.5s. So the first recall after any pause timed
+# out, dropped to word-matching, cached that for a minute, and did it again --
+# forever, and silently. These pin all three halves of the fix: the model stays
+# loaded, a cold one is warmed OFF the conversational path, and the drop is
+# no longer invisible.
+
+
+@pytest.fixture
+def no_threads(monkeypatch):
+    """Run the warm-up inline so the test is deterministic.
+
+    A real thread would make every assertion below a race. Captures the thread
+    objects too, because "is it a daemon" is itself a thing worth asserting --
+    a non-daemon warm-up waiting on a dead Ollama would hold Era's shutdown open.
+    """
+    made = []
+
+    class FakeThread:
+        def __init__(self, target=None, name=None, daemon=None, **kw):
+            self.target, self.name, self.daemon = target, name, daemon
+            made.append(self)
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(sr.threading, "Thread", FakeThread)
+    return made
+
+
+def _posts(monkeypatch, answer):
+    """Record every call into Ollama. `answer(path, payload, timeout)` decides
+    what comes back, so a test can make the model cold, warm, or absent."""
+    seen = []
+
+    def fake_post(path, payload, timeout_s):
+        seen.append({"path": path, "payload": payload, "timeout": timeout_s})
+        return answer(path, payload, timeout_s)
+
+    monkeypatch.setattr(sr, "_post", fake_post)
+    return seen
+
+
+_ONE_VECTOR = {"embeddings": [[1.0, 0.0, 0.0, 0.0]]}
+
+
+def test_every_embed_asks_ollama_to_keep_the_model_loaded(monkeypatch):
+    """THE root-cause fix. Without keep_alive the model is gone five minutes
+    after the last question, which is the whole of board item 41."""
+    seen = _posts(monkeypatch, lambda *_a: _ONE_VECTOR)
+    sr.embed(["anything"])
+    assert seen[0]["payload"]["keep_alive"] == sr.KEEP_ALIVE
+    assert sr.KEEP_ALIVE, "an empty keep_alive silently restores the 5-minute unload"
+
+
+def test_the_keep_alive_window_is_configurable(monkeypatch):
+    """Karim runs several local models on one 8 GB card. If holding even a 46 MB
+    model is ever the wrong trade, it must be changeable without a code edit."""
+    monkeypatch.setattr(sr, "KEEP_ALIVE", "-1")
+    seen = _posts(monkeypatch, lambda *_a: _ONE_VECTOR)
+    sr.embed(["anything"])
+    assert seen[0]["payload"]["keep_alive"] == "-1"
+
+
+def test_a_cold_probe_warms_the_model_off_the_conversational_path(monkeypatch, enabled, no_threads):
+    """The heart of it. The probe keeps its short budget -- a turn must never
+    wait 4s for memory -- and the real cold-load budget is spent in the
+    background instead."""
+    calls = []
+
+    def answer(_path, _payload, timeout_s):
+        calls.append(timeout_s)
+        # Cold: too slow for the probe's budget, fine for the warm-up's.
+        return _ONE_VECTOR if timeout_s >= sr._WARM_TIMEOUT_S else None
+
+    _posts(monkeypatch, answer)
+    assert sr.available() is False, "a cold model must not stall the turn"
+    assert calls == [sr._PROBE_TIMEOUT_S, sr._WARM_TIMEOUT_S]
+    assert sr._WARM_TIMEOUT_S > sr._PROBE_TIMEOUT_S
+
+
+def test_a_successful_warm_up_clears_the_cached_unavailable(monkeypatch, enabled, no_threads):
+    """Otherwise the fix does nothing for a minute: the model would be loaded
+    and ready while recall kept reading a stale 'unavailable' off the cache."""
+    _posts(
+        monkeypatch,
+        lambda _p, _pl, t: _ONE_VECTOR if t >= sr._WARM_TIMEOUT_S else None,
+    )
+    sr.available()
+    assert sr._probe is None, "the warm-up left the stale answer in place"
+
+
+def test_the_warm_up_runs_as_a_daemon(monkeypatch, enabled, no_threads):
+    """A warm-up still waiting on a dead Ollama must not hold Era's exit open."""
+    _posts(monkeypatch, lambda *_a: None)
+    sr.available()
+    assert no_threads and no_threads[0].daemon is True
+
+
+def test_only_one_warm_up_runs_at_a_time(monkeypatch, enabled):
+    """Without the guard, every probe during an outage starts another thread and
+    a long outage quietly piles them all onto the same unreachable socket."""
+    started = []
+
+    class NeverFinishes:
+        def __init__(self, target=None, name=None, daemon=None, **kw):
+            started.append(name)
+
+        def start(self):
+            pass  # deliberately never runs, so _warming stays set
+
+    monkeypatch.setattr(sr.threading, "Thread", NeverFinishes)
+    _posts(monkeypatch, lambda *_a: None)
+    for _ in range(5):
+        sr.reset_probe()
+        sr.available()
+    assert len(started) == 1
+
+
+def test_a_warm_up_that_throws_never_escapes(monkeypatch, enabled, no_threads):
+    """This runs beside a live conversation. An exception out of it would land
+    somewhere nobody is catching."""
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ollama exploded")
+
+    monkeypatch.setattr(sr, "embed", lambda texts, **k: None if k else boom())
+    monkeypatch.setattr(sr, "_post", lambda *_a: None)
+    sr.available()  # must not raise
+
+
+def test_the_off_switch_never_starts_a_warm_up(monkeypatch, no_threads):
+    """conftest.py disables this suite-wide. If the off switch still spawned
+    warm-up threads, every one of the thousands of memory tests would reach for
+    a real local service."""
+    monkeypatch.setenv("ERA_SEMANTIC_RECALL", "0")
+    _posts(monkeypatch, lambda *_a: None)
+    assert sr.available() is False
+    assert no_threads == []
+
+
+def test_the_drop_to_word_matching_is_announced_once_not_every_minute(
+    monkeypatch, enabled, no_threads, capsys
+):
+    """Item 41 went unnoticed BECAUSE this was silent -- memory quietly got
+    worse and the symptom pointed at the memory store instead of a timeout. But
+    an Ollama that is simply not installed must not write a line every minute
+    forever, so the log marks the CHANGE, not the state."""
+    _posts(monkeypatch, lambda *_a: None)
+    sr.available()
+    first = capsys.readouterr().out
+    assert "WORD-MATCHING ONLY" in first
+
+    sr._probe = None  # re-probe without clearing what was last reported
+    sr.available()
+    assert "WORD-MATCHING ONLY" not in capsys.readouterr().out, "it repeated itself"
+
+
+def test_recovery_is_announced_too(monkeypatch, enabled, no_threads, capsys):
+    """Knowing memory came back matters as much as knowing it went: without it,
+    a reader of the log cannot tell a blip from a permanent degradation."""
+    _posts(monkeypatch, lambda *_a: None)
+    sr.available()
+    capsys.readouterr()
+
+    sr._probe = None
+    _posts(monkeypatch, lambda *_a: _ONE_VECTOR)
+    assert sr.available() is True
+    assert "meaning-based" in capsys.readouterr().out

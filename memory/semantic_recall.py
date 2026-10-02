@@ -91,9 +91,50 @@ _QUERY_TIMEOUT_S = 2.5
 _INDEX_TIMEOUT_S = 120.0
 _PROBE_TIMEOUT_S = 1.5
 
+# ── board item 41: the cold-model problem, and why the fix is not a bigger probe
+#
+# Ollama unloads an idle model after five minutes (its documented `keep_alive`
+# default). Era's own measured figure for a COLD load is ~4s — see the docstring
+# of core/vision_config.resolve_ollama_timeout. So after any five-minute gap in
+# the conversation the 1.5s probe was handed a 4s job, timed out, and recall
+# silently dropped to word-matching for the next minute. Then it did it again.
+# Nothing recovered it and nothing said it had happened; the first recall after
+# every pause was quietly the dumb one.
+#
+# The obvious fix — a bigger probe timeout — is the wrong one, and the board said
+# so before this was built: the probe sits in the middle of a spoken sentence, so
+# paying 4s there buys better memory at the price of exactly the lateness board
+# item 22 exists to remove. Three changes instead, none of which stall a turn:
+#
+#   1. KEEP_ALIVE below, sent with every embed, so once the model is loaded it
+#      STAYS loaded and the five-minute unload stops happening at all.
+#   2. A cold probe no longer just gives up for a minute: it starts a background
+#      warm-up with a real cold-load budget, off the conversational path, and
+#      clears the cached "unavailable" the moment the model answers. The turn
+#      that found it cold is still lexical-only; the next one is not.
+#   3. The degradation is logged. It was invisible before, which is why it went
+#      unnoticed long enough to become board item 30b's "degrades to lexical
+#      silently" risk with no identified cause.
+#
+# Ollama accepts a duration string, 0 to unload at once, or any negative number
+# to keep the model resident indefinitely. One hour is the default here because
+# all-minilm is a 46 MB model — the cost of holding it is negligible beside the
+# cost of losing meaning-based recall — while a finite value still releases it
+# eventually rather than pinning memory for as long as Ollama runs.
+KEEP_ALIVE = os.environ.get("ERA_EMBED_KEEP_ALIVE", "1h").strip()
+
+# What a cold load is actually allowed to take, used ONLY off the conversational
+# path. Generous against the ~4s measurement because a GPU busy with one of the
+# bigger local models makes a small model's load slower, not faster.
+_WARM_TIMEOUT_S = 20.0
+
 _lock = threading.Lock()
 _probe: tuple[float, bool] | None = None  # (when, reachable) — see available()
 _PROBE_TTL_S = 60.0
+
+_warm_lock = threading.Lock()
+_warming = False  # one warm-up in flight at a time, never a thread per probe
+_last_reported: bool | None = None  # so the log marks CHANGES, not every probe
 
 
 def _base_url() -> str:
@@ -124,7 +165,13 @@ def embed(texts: list[str], *, timeout_s: float = _INDEX_TIMEOUT_S) -> np.ndarra
     """
     if not texts:
         return None
-    out = _post("/api/embed", {"model": MODEL, "input": texts}, timeout_s)
+    payload: dict = {"model": MODEL, "input": texts}
+    if KEEP_ALIVE:
+        # Sent on EVERY embed, not just the warm-up: each call renews the
+        # countdown, so a model Era is actually using can never fall out from
+        # under her between one question and the next.
+        payload["keep_alive"] = KEEP_ALIVE
+    out = _post("/api/embed", payload, timeout_s)
     vectors = (out or {}).get("embeddings")
     if not isinstance(vectors, list) or len(vectors) != len(texts):
         return None
@@ -167,13 +214,90 @@ def available() -> bool:
         print(f"[Memory] [SEMANTIC] probe failed, treating as unavailable: {e}")
         ok = False
     _probe = (now, ok)
+    _report(ok)
+    if not ok:
+        # Board item 41. A failed probe is MOST OFTEN a cold model rather than a
+        # missing one, and the two are indistinguishable from here — `_post`
+        # collapses a timeout, a refusal and a 404 into the same bare None. So
+        # instead of guessing, this turn degrades (fast, no stall) and a
+        # background warm-up settles the question with a real cold-load budget.
+        _start_warm_up()
     return ok
 
 
+def _report(ok: bool) -> None:
+    """Say it out loud when recall changes quality, and only when it CHANGES.
+
+    The whole reason item 41 went unnoticed is that this transition was silent:
+    memory got worse, nothing said so, and the symptom ("she forgets things
+    sometimes") pointed at the memory store rather than at a timeout. Logged on
+    change rather than per probe so an Ollama that is simply not installed does
+    not write a line every minute forever.
+    """
+    global _last_reported
+    if ok == _last_reported:
+        return
+    _last_reported = ok
+    if ok:
+        print("[Memory] [SEMANTIC] embedding model reachable — recall is meaning-based.")
+    else:
+        print(
+            "[Memory] [SEMANTIC] embedding model did not answer in "
+            f"{_PROBE_TIMEOUT_S}s — recall is WORD-MATCHING ONLY until it does. "
+            "Warming it in the background."
+        )
+
+
+def _start_warm_up() -> None:
+    """Load the model off the conversational path, then let recall notice.
+
+    A daemon thread, deliberately: this must never hold Era's shutdown open, and
+    a warm-up that is still waiting on a dead Ollama when the user quits is
+    exactly the case that would.
+
+    One at a time — without the flag, every probe during an outage would start
+    another thread, and a long outage would quietly accumulate them all waiting
+    on the same unreachable socket.
+    """
+    global _warming
+    with _warm_lock:
+        if _warming:
+            return
+        _warming = True
+
+    def run() -> None:
+        global _warming
+        try:
+            if embed(["probe"], timeout_s=_WARM_TIMEOUT_S) is not None:
+                # It answered, so the cached "unavailable" is now a lie. Clearing
+                # it rather than writing True: the next real call re-probes a
+                # model that is now warm, which is both honest and fast.
+                reset_probe()
+                print("[Memory] [SEMANTIC] model warmed — meaning-based recall is back.")
+        except Exception as e:  # a warm-up must never be the thing that crashes
+            print(f"[Memory] [SEMANTIC] warm-up failed: {e}")
+        finally:
+            with _warm_lock:
+                _warming = False
+
+    try:
+        threading.Thread(target=run, name="era-embed-warmup", daemon=True).start()
+    except Exception as e:  # thread exhaustion must degrade, not raise
+        with _warm_lock:
+            _warming = False
+        print(f"[Memory] [SEMANTIC] could not start the warm-up: {e}")
+
+
 def reset_probe() -> None:
-    """Forget the cached availability answer (tests, and a manual retry)."""
-    global _probe
+    """Forget the cached availability answer (tests, and a manual retry).
+
+    Also forgets what was last REPORTED, so a manual retry says out loud what it
+    found instead of staying quiet because the previous state happened to match.
+    Tests rely on the same thing for isolation.
+    """
+    global _probe, _last_reported
     _probe = None
+    _last_reported = None
 
 
 def entry_text(key: str, value: Any) -> str:

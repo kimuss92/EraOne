@@ -8,6 +8,73 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-02 · Item 41 FIXED — memory was quietly going dumb after every pause
+**Objectives:** 11 — board item 41, and the cause behind item 30b's known risk
+
+**The bug, plainly.** Era's memory can search by MEANING as well as by words,
+using a 46 MB model (`all-minilm`) served by Ollama. Before using it she asks
+"is the model there?" and allows **1.5s** for the answer. Ollama unloads an idle
+model after **5 minutes** (its documented `keep_alive` default), and Era's own
+measured cold-load figure is **~4s** — see the docstring of
+`core/vision_config.resolve_ollama_timeout`. So after any five-minute gap in the
+conversation the probe handed a 4s job a 1.5s budget, timed out, and recall fell
+back to word-matching. That answer was then cached for a minute, after which the
+model was cold again. Nothing ever recovered it, and **nothing said it had
+happened**: memory simply got worse, which made the symptom look like a problem
+with the memory store rather than with a timeout. That silence is exactly board
+item 30b's "it degrades to lexical silently" — this is its cause.
+
+**Why the obvious fix is the wrong one.** Raising the probe timeout to 4s makes
+memory correct by making Era slower in the middle of a spoken sentence, which is
+the precise cost board item 22 exists to remove. The board said so before this
+was built, and the candidate fix recorded there was `keep_alive` plus a warm-up —
+to be verified against Karim's Ollama version first rather than assumed.
+
+**Verified, not assumed.** Karim is on **Ollama 0.35.0**. Checked against the
+live API documentation rather than memory: `/api/embed` — the endpoint Era
+already calls, and the one that supersedes the deprecated `/api/embeddings` —
+accepts `keep_alive`, whose default is `5m` and which takes a duration string, a
+number of seconds, `0` to unload at once, or any negative value to hold the model
+indefinitely.
+
+**Three changes, none of them on the conversational path.**
+
+1. `KEEP_ALIVE` is sent with **every** embed, not only the warm-up, so each use
+   renews the countdown and a model Era is actually using cannot fall out from
+   under her between one question and the next. Default `1h`, overridable with
+   `ERA_EMBED_KEEP_ALIVE`. One hour rather than `-1`: holding a 46 MB model is
+   negligible beside losing meaning-based recall, but a finite value still lets
+   it go eventually instead of pinning memory for as long as Ollama runs. Karim
+   runs several much larger models on one 8 GB card, so that stays his call.
+
+2. A cold probe **still fails fast** — the turn is never made to wait — but now
+   starts a background warm-up with a real 20s cold-load budget (generous against
+   the ~4s measurement, because a GPU busy with a larger model makes a small
+   model load slower, not faster). On success it clears the cached
+   "unavailable", so the turn that found the model cold is lexical-only and the
+   next one is not. One warm-up at a time, or a long outage would pile a thread
+   per probe onto the same unreachable socket; daemon, or a warm-up waiting on a
+   dead Ollama would hold Era's shutdown open.
+
+3. The drop is **logged, on change rather than per probe**. Invisibility is what
+   let this run undiagnosed, and logging the state instead of the transition
+   would write a line a minute, forever, on a machine with no Ollama at all.
+
+**Verification.** 10 new tests, and **8 of 8 targeted mutations were caught**:
+keep_alive never sent, no warm-up on a cold probe, the warm-up given the probe's
+budget instead of its own, the warm-up not clearing the cache, the one-at-a-time
+guard removed, a non-daemon thread, logging every probe instead of changes, and
+the degradation made silent again. The warm-up is driven through a fake thread so
+the assertions are deterministic rather than races. 175 memory tests pass across
+every `test_memor*`, `test_semantic_recall` and `test_tool_recovery` file.
+
+**What this does NOT prove.** There is no Ollama in this container, so every test
+here drives a fake. The real claim — that recall stays meaning-based across a
+long pause on Karim's machine — is his to confirm, and it is the same live proof
+board item 30b already owed.
+
+---
+
 ### 2026-10-02 · Item 19 — she was told to stand down and wait for a layer that cannot exist
 **Objectives:** 6, 4, 1 — board items 19, 44
 

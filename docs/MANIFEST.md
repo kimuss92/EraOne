@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**291 source modules** · 109,668 lines · 169 test modules · 53 declared tools · 57 registered actions
+**291 source modules** · 109,792 lines · 169 test modules · 53 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
@@ -223,7 +223,7 @@ Every source module, its size, and what it is for.
 | `memory/memory_manager.py` | 1176 |  |
 | `memory/persistence.py` | 59 |  |
 | `memory/safe_store.py` | 264 |  |
-| `memory/semantic_recall.py` | 304 | memory/semantic_recall.py — recall by MEANING, on top of the lexical scorer. |
+| `memory/semantic_recall.py` | 428 | memory/semantic_recall.py — recall by MEANING, on top of the lexical scorer. |
 | `memory/transient_filter.py` | 49 | Shared transient-key filter for long-term memory. |
 
 ### Actions (what Era can DO)
