@@ -154,6 +154,7 @@ from core.logger import log_crash, log_event, main_logger
 from core.pending_confirmation import get_shared_store
 from core.session_manager import SessionManager
 from core.speaker_recognition import get_verifier
+from core.tool_recovery import TurnRecovery
 from core.turn_latency import TurnLatency
 from core.turn_memory import TurnMemory
 
@@ -331,6 +332,13 @@ class EraLive(
         # a continuation", this one asks "why did that take so long". Purely
         # observational — nothing reads it back into a decision.
         self.turn_latency = TurnLatency()
+        # Tool failures waiting to see whether the turn recovers from them
+        # (board item 19). Beside turn_latency because both are per-turn and both
+        # are flushed at the same two turn boundaries — but this one IS
+        # behavioural: what it holds back is a sentence the user would otherwise
+        # have heard before any workaround could be tried. See
+        # core/tool_recovery.py for why the announcement had to move.
+        self.tool_recovery = TurnRecovery()
         # Snapshot taken at the instant the transport died; consumed once by the
         # recovery decision on the next successful connect.
         self._disconnect_snapshot: TurnSnapshot | None = None

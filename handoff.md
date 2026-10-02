@@ -8,6 +8,126 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-02 · Item 19 — she was told to stand down and wait for a layer that cannot exist
+**Objectives:** 6, 4, 1 — board items 19, 44
+
+Board item 19 is *"intelligent fallback protocol (try workarounds before asking)"*,
+and the board's note on it was a dash. So the first job was to find out what Era
+actually does when a tool fails, rather than to build a framework for a problem
+nobody had described. Two defects came out of that, and neither needed a guess.
+
+**Defect 1 — the prompt promised a recovery mechanism that structurally cannot
+exist.** `core/prompt.txt` §4 said, in consecutive lines:
+
+    ONE-CALL POLICY: Simple command → exactly one target tool, no retries.
+    If a tool fails, report the failure in one short phrase and allow
+    self-healing routing to select a safer existing route. Do not loop.
+
+`core/self_healing_router.py` is 2,587 lines and is named for exactly that
+promise. It is a **pre-dispatch rewriter**. `route_tool_call` has two production
+call sites — `tool_dispatch.py:1775` and `agent/executor.py:251` — both *before*
+execution, and its signature is `(tool, parameters, user_text)`: there is no
+parameter a result could arrive in. It can fix the model's bad tool *choice*; it
+can never see the *outcome*. So Era was told not to retry, and to hand recovery to
+something that is never given the failure. That is not a missing feature, it is a
+false statement about her own machinery — the same class of problem as board
+item 31's invented capabilities, pointed inward.
+
+Rewritten as **FALLBACK BEFORE ASKING**: one attempt down a genuinely different
+route before reporting anything, with the reason stated plainly in the prompt
+("nothing will do this for you"), and a hard carve-out that matters more than the
+feature — *never* auto-retry a HIGH-risk, destructive, irreversible or
+ConfirmationRequired action. There the failure IS the answer. "Try the other
+route" is for reading, opening, focusing, playing and searching, not for deleting,
+sending, shutting down or overwriting.
+
+**Defect 2 — the announcement came first, from code, and could not be taken
+back.** `_execute_tool` ran this the instant a tool failed:
+
+    if not result.success and result.error:
+        ...
+            self.speak_error(name, result.error)
+
+`speak_error` → `speak` → on the Fish / speech_out voice (`VOICE_CFG.uses_speech_out()`)
+that path **synthesizes the text literally**. The user heard *"Sir,
+netflix_control encountered an error. <raw message>"* before the model had been
+handed the failure, let alone tried anything else. So "try workarounds before
+asking" was not merely unimplemented — it was **impossible by construction**. Any
+recovery, by the model or by code, could only ever contradict a sentence the user
+had already heard. Zero tests covered the line; the exclusion list around it has
+been unchanged since the July backup.
+
+New `core/tool_recovery.py` arms the notice instead of speaking it, and the turn
+boundary speaks whatever the turn did not recover from. **Two** boundaries, because
+the local brain never produces a Gemini `turn_complete` — miss that one and a
+failure armed during a quota outage surfaces when the cloud returns, in an
+unrelated conversation.
+
+**What counts as recovered is deliberately narrow, and the narrowing is the
+design decision.** Only a later success of the SAME tool+action clears a notice.
+The obvious broader rule — anything succeeding clears everything — would swallow a
+real failure inside a compound command: "close Photoshop and open Premiere",
+Photoshop fails, Premiere opens, user told nothing at all. Silence about a real
+failure is the worse of the two errors, so the narrow rule stands until there are
+logs to say how often the broad case arises. Measure first, as with the quota
+ledger.
+
+**Two costs recorded rather than hidden.** The (tool, action) key means one tool
+called twice with different targets forgives the first — `file_controller read a`
+fails, `read b` succeeds, a's failure is cleared. That is a genuine false
+negative, and it is pinned by its own test so whoever changes the key meets the
+decision instead of rediscovering it; closing it (per-target keys) would break the
+corrected-parameter retry the prompt now asks for, which is the primary case. And
+a session that drops mid-turn never reaches its boundary, so its notice is
+announced at the end of the *next* turn — late but true, bounded by `MAX_AGE_S`,
+and chosen over clearing at turn start because that would turn every mid-turn
+disconnect into silence.
+
+**A side effect worth naming, since it lands on another open item.** A fallback
+attempt costs an extra tool round trip, so a *failing* turn now takes longer.
+Item 22's instrument already measures exactly that — `tool_ms` and `tool_count` on
+the `turn.latency` line — so the cost of item 19 is readable in item 39's output
+rather than being an argument.
+
+**Verification — load-bearing proven by reverting, not asserted.** 24 tests.
+Restoring the `speak_error` call where it was fails
+`test_a_failed_tool_says_nothing_during_the_turn`, which drives the real
+`_execute_tool` funnel rather than a helper — that was a deliberate extra effort,
+because every test against the helpers alone stayed green under that revert.
+Deleting either flush site fails the wiring guard (checked by knocking out each
+one in turn). Six targeted mutations of the store — broad clear rule, clear-one-
+only, no staleness, unbounded queue, non-draining `take`, non-clearing `reset` —
+were all caught; a seventh "mutation" turned out to be a no-op I had written
+badly, and was replaced with a real one rather than counted.
+
+Beyond the new file: `ruff format` and `ruff check` clean across 697 files, manifest
+regenerated, `tools/test_tool_recovery.py` **24 passed**. A full-suite attribution
+run — this tree against a baseline worktree at `989a347`, both excluding the two
+collections this container cannot import (`test_ui_window` needs PyQt6,
+`test_music_generate` a fixture file that is not here) — was **still in flight when
+this was committed**, so its numbers are not yet in this entry. They are appended in
+a follow-up, and anything the diff turns out to own is fixed before item 19 is
+called done. Committing first rather than holding the work: the targeted
+verification above is what the change stands on, and the attribution run exists to
+catch collateral damage elsewhere, not to validate these tests.
+
+`era_doctor` reads NOT READY here for the same **3 environmental errors** as every
+prior session (no `config/api_keys.json`, no Cloudinary, no OneDrive vault) —
+unchanged by this work. Manifest regenerated: **291 modules**.
+
+**What is NOT built, and why.** No code-level fallback registry mapping failure
+signatures to alternative routes. The per-tool alternatives that exist already
+live where they belong, and where they can be specific about what went wrong:
+`_BrowserSession.run` detects a driver that died mid-call, replaces it and
+re-invokes the call once (`actions/browser_control.py:536`). Inventing a general table
+would mean guessing which workaround fits failures nobody has logged. The brief's
+own rule was *"do NOT just add blind retry"*. This change also produces the data
+that decision needs: `tool.recovery.unrecovered` names every tool that ended a
+turn unrecovered, so the registry, if it is ever justified, will be built from
+counts instead of intuition.
+
+---
+
 ### 2026-10-01 · Item 36 CLOSED — the recall floors are measured, not assumed
 **Objectives:** 11, 1 — board items 36, 43
 

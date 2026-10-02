@@ -341,6 +341,17 @@ class LocalFallbackMixin:
         finally:
             if not self.ui.muted and not self._standby_active:
                 self.ui.set_state("LISTENING")
+            # Board item 19: the SECOND turn boundary. The local brain never
+            # produces a Gemini turn_complete, so without this a failure armed
+            # during a quota outage would sit in the store until the cloud came
+            # back and then be announced into an unrelated conversation.
+            # Guarded because this is a `finally`: an exception raised here would
+            # REPLACE the CancelledError the barge-in path above re-raises, and a
+            # cancelled local turn would stop being cancelled.
+            try:
+                self._flush_failure_notices()
+            except Exception as e:
+                print(f"[era] [RECOVERY] local flush ignored: {e}")
         spoken = " ".join(reply)
         if spoken:
             self._tg_ack(spoken)

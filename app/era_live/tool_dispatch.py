@@ -917,7 +917,19 @@ class ToolDispatchMixin:
                 "ActionError",
                 "ConfirmationFailed",
             ):
-                self.speak_error(name, result.error)
+                # Board item 19: ARM the announcement, do not speak it. This used
+                # to be `self.speak_error(name, result.error)` right here, which
+                # on the Fish voice reached the speakers literally — before the
+                # model had even been handed the failure. A workaround could only
+                # ever contradict something the user had already heard, so "try
+                # workarounds before asking" was impossible by construction.
+                # Flushed at the turn boundary by _flush_failure_notices().
+                self._note_tool_failure(name, hud_args, error_type, result.error)
+        elif result.success:
+            # A later success of the SAME tool+action cancels the armed notice:
+            # a retry or a re-route that worked is not a failure the user needs
+            # read out. Narrow on purpose — see core/tool_recovery.py.
+            self._note_tool_success(name, hud_args)
 
         print(f"[era] [OUT] {name} -> {result.short_message(80)}")
         # Task trace (core/task_trace.py, 25/09/2026): the whole procedure of
@@ -2105,6 +2117,93 @@ class ToolDispatchMixin:
             )
 
         return result
+
+    # ── board item 19: the deferred failure announcement ─────────────────────
+    #
+    # Three small methods rather than inline code, because the flush is called
+    # from TWO turn boundaries that know nothing about each other — the cloud
+    # turn in app/era_live/audio.py and the local-brain turn in
+    # app/era_live/local_fallback.py. Both must behave identically or a failure
+    # announced on one voice goes silent on the other.
+
+    def _recovery(self):
+        """The turn's notice store, or None where there isn't one.
+
+        `getattr` rather than a plain attribute: this mixin's methods are borrowed
+        onto bare objects in tests, and a half-built EraLive has no store either.
+        A missing store costs the DEFERRAL and nothing else — _note_tool_failure
+        falls back to announcing immediately, which is the behaviour this change
+        replaced. Premature is bad; silent is worse, and raising inside the tool
+        funnel is worst of all.
+        """
+        return getattr(self, "tool_recovery", None)
+
+    def _note_tool_failure(self, tool: str, params: dict, error_type: str, message: str) -> None:
+        store = self._recovery()
+        if store is None:
+            # No store (a stub, or construction failed): fall back to the old
+            # immediate announcement rather than losing the failure entirely.
+            # Premature is bad; silent is worse.
+            try:
+                self.speak_error(tool, message)
+            except Exception:
+                pass
+            return
+        try:
+            action = str((params or {}).get("action", ""))
+            store.note_failure(tool, action, error_type, message)
+        except Exception as e:  # never change a tool's outcome
+            print(f"[era] [RECOVERY] could not arm the notice: {e}")
+
+    def _note_tool_success(self, tool: str, params: dict) -> None:
+        store = self._recovery()
+        if store is None:
+            return
+        try:
+            store.note_success(tool, str((params or {}).get("action", "")))
+        except Exception as e:
+            print(f"[era] [RECOVERY] could not clear the notice: {e}")
+
+    def _flush_failure_notices(self) -> None:
+        """Speak whatever the turn did not recover from, then forget it.
+
+        Called at a turn boundary. The `finally` is what makes a missed flush
+        impossible to turn into a leak: whatever happens while speaking, the
+        store is emptied, because a notice that survives its own turn is a
+        failure announced into the middle of the next conversation.
+        """
+        store = self._recovery()
+        if store is None:
+            return
+        try:
+            notices = store.take()
+            if store.dropped_stale or store.overflow:
+                # Both are silent losses, so neither may be invisible: a flush
+                # that keeps dropping notices is a missing flush site somewhere.
+                log_event(
+                    main_logger,
+                    "tool.recovery.dropped",
+                    "WARNING",
+                    stale=store.dropped_stale,
+                    overflow=store.overflow,
+                )
+            for n in notices:
+                log_event(
+                    main_logger,
+                    "tool.recovery.unrecovered",
+                    "INFO",
+                    tool=n.tool,
+                    action=n.action,
+                    error_type=n.error_type,
+                )
+                self.speak_error(n.tool, n.message)
+        except Exception as e:
+            print(f"[era] [RECOVERY] flush skipped: {e}")
+        finally:
+            try:
+                store.reset()
+            except Exception:
+                pass
 
     def _log_caught_exception(self, tool_name: str, parameters: dict, result) -> None:
         """A tool that caught its own exception returned a string, so no stack

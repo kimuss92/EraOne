@@ -869,6 +869,17 @@ class AudioIOMixin:
                                 self._log_turn_latency()
                             except Exception as e:
                                 print(f"[era] [LATENCY] ignored: {e}")
+                            # Board item 19: the turn is over, so whatever it did
+                            # not recover from is now worth saying. Deliberately
+                            # AFTER the model's own reply has been generated —
+                            # that ordering is the entire point of deferring it.
+                            # Wrapped although the method already swallows its
+                            # own faults: this is the receive loop, and an
+                            # exception escaping here costs Era her hearing.
+                            try:
+                                self._flush_failure_notices()
+                            except Exception as e:
+                                print(f"[era] [RECOVERY] flush ignored: {e}")
                             # The fallback window for this turn is over; release the
                             # held Gemini audio so it can never play late.
                             self._clear_cloud_audio_buffer()
