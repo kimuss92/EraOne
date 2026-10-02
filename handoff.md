@@ -100,20 +100,43 @@ only, no staleness, unbounded queue, non-draining `take`, non-clearing `reset` �
 were all caught; a seventh "mutation" turned out to be a no-op I had written
 badly, and was replaced with a real one rather than counted.
 
-Beyond the new file: `ruff format` and `ruff check` clean across 697 files, manifest
-regenerated, `tools/test_tool_recovery.py` **24 passed**. A full-suite attribution
-run — this tree against a baseline worktree at `989a347`, both excluding the two
-collections this container cannot import (`test_ui_window` needs PyQt6,
-`test_music_generate` a fixture file that is not here) — was **still in flight when
-this was committed**, so its numbers are not yet in this entry. They are appended in
-a follow-up, and anything the diff turns out to own is fixed before item 19 is
-called done. Committing first rather than holding the work: the targeted
-verification above is what the change stands on, and the attribution run exists to
-catch collateral damage elsewhere, not to validate these tests.
+Beyond the new file: `ruff format` and `ruff check` clean across 697 files,
+`tools/test_tool_recovery.py` **24 passed**.
+
+**Full-suite attribution: 5,139 passed / 56 failed, against the baseline worktree
+at `989a347` on 5,116 / 55 — ZERO introduced, and zero appearing only at baseline**
+(the second half matters as much: the board's earlier "27 tests fixed" turned out to
+be a missing manifest in the baseline worktree, so this one had its manifest
+generated before running). Both runs excluded the two collections this container
+cannot import — `test_ui_window` needs PyQt6, `test_music_generate` a fixture file
+that is not here.
+
+**Getting there took two runs, and both corrections were my own error, recorded
+because the board's rule is that a gate red gets attributed rather than waved at.**
+
+The first run reported one introduced failure: `test_build_is_deterministic`. It
+builds the manifest twice and asserts the bytes match, on the stated premise *"same
+tree, same bytes — so any diff means the code moved."* The code HAD moved: I was
+still editing `audio.py`, `local_fallback.py`, `tool_dispatch.py` and
+`tool_recovery.py` while the suite ran. The test did its job and caught me. Since
+that contamination could have touched any content-sensitive test in that run, the
+whole run was discarded and re-run on a frozen tree, rather than that one failure
+being explained away as a flake.
+
+The clean re-run then found a **real fault in the first commit**:
+`test_committed_artifacts_are_fresh` red. `docs/MANIFEST.md` and
+`runtime/manifest.json` had been regenerated BEFORE the last round of edits, so the
+committed copies were stale — 28 shifted line numbers and a line count, no semantic
+change, and entirely beside the point: the brief lists a fresh manifest as a
+standing constraint precisely so a stale map cannot be shrugged off as cosmetic.
+Regenerated and corrected in the follow-up commit, with the manifest tests green
+(7 passed).
 
 `era_doctor` reads NOT READY here for the same **3 environmental errors** as every
 prior session (no `config/api_keys.json`, no Cloudinary, no OneDrive vault) —
-unchanged by this work. Manifest regenerated: **291 modules**.
+unchanged by this work.
+
+Manifest: **291 modules**, 53 tools, 0 unparseable.
 
 **What is NOT built, and why.** No code-level fallback registry mapping failure
 signatures to alternative routes. The per-tool alternatives that exist already
