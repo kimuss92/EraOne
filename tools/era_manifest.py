@@ -366,6 +366,13 @@ def build(_argv: list[str] | None = None) -> dict[str, Any]:
             "source_lines": sum(m["lines"] for m in source_modules),
         },
         "capabilities": load_capabilities(),
+        # Carried in the data so a RUNTIME reader (actions/self_improve_locator.py)
+        # routes a request by the same hand-curated table the markdown map prints.
+        # `tools/` is not a package Era imports, and a second copy would drift.
+        "subsystems": [
+            {"name": heading, "prefixes": list(prefixes), "when": when}
+            for heading, prefixes, when in SUBSYSTEMS
+        ],
         "modules": sorted(modules, key=lambda m: m["path"]),
         "reverse_deps": build_reverse_deps(modules),
         "unparseable": broken,

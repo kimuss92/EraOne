@@ -622,6 +622,12 @@ def self_improve(
             return "No module of mine matches that — try different feature words."
         return "Files that match:\n" + "\n".join(f"- {rel} (score {s})" for s, rel in matches)
 
+    if action == "locate":
+        # Read-only: area, best file, and the checklist for a brand-new ability.
+        from actions.self_improve_locator import locate
+
+        return locate(description or file_path)
+
     target, status, message = resolve_request(file_path, description)
     if status != "ok":
         return message  # never writes on refused/ambiguous/none — see resolve_request

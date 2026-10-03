@@ -1299,9 +1299,12 @@ class ToolDispatchMixin:
         # the only thing standing between an unresolved target and a false claim.
         return (
             f"NOT started — I have not touched any of my code, and nothing is running "
-            f"in the background. {message} Tell the user exactly this: you could not "
-            f"tell which file to change, so you did nothing, and ask which file they "
-            f"mean. Do NOT say you are working on it."
+            f"in the background. {message} Do NOT say you are working on it. Do not ask "
+            f"the user for a filename yet — they cannot know one. First call self_improve "
+            f'with action="locate" and the same description: if it names one file, call '
+            f"apply again with that file_path and tell the user which file you chose. Only "
+            f"if locate finds no single clear file, tell the user you could not tell which "
+            f"file to change, so you did nothing, and ask which file they mean."
         )
 
     def _reload_after_self_edit(self, outcome: dict) -> None:
@@ -3237,7 +3240,7 @@ class ToolDispatchMixin:
             improve_args = dict(args)
             improve_action = str(improve_args.get("action") or "propose").lower().strip()
 
-            if improve_action in ("propose", "list_backups", ""):
+            if improve_action in ("propose", "list_backups", "find", "locate", ""):
                 # Read-only and fast enough to answer inline.
                 r = await asyncio.to_thread(
                     self_improve, improve_args, None, self.ui, None, self.speak

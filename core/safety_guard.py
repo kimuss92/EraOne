@@ -737,7 +737,7 @@ def classify_action(
     # the supervisor are exactly what the pipeline cannot protect Era from
     # breaking, so touching those must be confirmed by the user out loud.
     if tool == "self_improve":
-        if action in ("propose", "list_backups", "find", ""):
+        if action in ("propose", "list_backups", "find", "locate", ""):
             return {
                 "risk_level": LOW,
                 "requires_confirmation": False,

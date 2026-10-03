@@ -1897,7 +1897,10 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": (
                         "propose (read-only plan, default) | apply | rollback | "
-                        "find (list which of Era's modules match the description) | list_backups"
+                        "find (list which of Era's modules match the description) | "
+                        "locate (read-only: which area and file a change belongs in, or "
+                        "what a brand-new ability must touch; call it BEFORE asking the "
+                        "user for a filename) | list_backups"
                     ),
                 },
                 "file_path": {
