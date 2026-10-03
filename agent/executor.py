@@ -36,6 +36,7 @@ from core.safety_guard import classify_action
 from core.self_healing_router import route_tool_call
 from core.tool_result import ToolResult
 from core.verification import verify_tool_result
+from core.win_subprocess import NO_WINDOW
 
 # Shared with EraLive so confirmations created on either path are mutually
 # resolvable (previously two independent stores caused confirm RuntimeErrors).
@@ -103,6 +104,7 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
             text=True,
             timeout=120,
             cwd=str(Path.home()),
+            creationflags=NO_WINDOW,
         )
 
         try:

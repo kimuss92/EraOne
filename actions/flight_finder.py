@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types as gtypes
 
 from config import is_mac, is_windows
+from core.win_subprocess import NO_WINDOW
 
 
 class _GeminiModel:
@@ -343,7 +344,7 @@ def _save_to_desktop(content: str, origin: str, destination: str) -> str:
 
     try:
         if is_windows():
-            subprocess.Popen(["notepad.exe", str(filepath)])
+            subprocess.Popen(["notepad.exe", str(filepath)], creationflags=NO_WINDOW)
         elif is_mac():
             subprocess.Popen(["open", "-t", str(filepath)])
         else:

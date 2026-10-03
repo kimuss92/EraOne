@@ -32,6 +32,7 @@ except ImportError:
     _PWC = False
 
 from core.utils import get_os
+from core.win_subprocess import NO_WINDOW
 
 _OS = get_os()
 
@@ -289,6 +290,7 @@ def close_window(title_fragment: str) -> str:
                         shell=False,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        creationflags=NO_WINDOW,
                     )
                     return f"{title_fragment.title()} process channels terminated completely, sir."
 
@@ -321,7 +323,11 @@ def close_window(title_fragment: str) -> str:
             if not re.fullmatch(r"[A-Za-z0-9._-]+\.exe", exec_name):
                 return f"No application runtime thread found with '{title_fragment}' anywhere in the system matrix."
             result = subprocess.run(
-                ["taskkill", "/IM", exec_name, "/T"], shell=False, capture_output=True, text=True
+                ["taskkill", "/IM", exec_name, "/T"],
+                shell=False,
+                capture_output=True,
+                text=True,
+                creationflags=NO_WINDOW,
             )
             if "SUCCESS" in result.stdout:
                 return f"Terminated background process target: {exec_name}."

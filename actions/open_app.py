@@ -31,6 +31,7 @@ if sys.platform == "win32":
         _GUI_AUTOMATION = False
 
 from core.intent_memory import remember_action
+from core.win_subprocess import NO_WINDOW
 
 # Harmonized Master Registry for precise process cross-referencing
 MASTER_APP_REGISTRY = {
@@ -280,7 +281,7 @@ def _ensure_spotify_launched(spotify_exe: str | None = None) -> None:
     """Launch Spotify using the executable path or protocol handler."""
     if spotify_exe:
         try:
-            subprocess.Popen([spotify_exe], shell=False)
+            subprocess.Popen([spotify_exe], shell=False, creationflags=NO_WINDOW)
             return
         except Exception:
             pass
@@ -288,7 +289,7 @@ def _ensure_spotify_launched(spotify_exe: str | None = None) -> None:
     try:
         os.startfile("spotify:")
     except Exception:
-        subprocess.Popen(["cmd", "/c", "start", "spotify:"], shell=False)
+        subprocess.Popen(["cmd", "/c", "start", "spotify:"], shell=False, creationflags=NO_WINDOW)
 
 
 def _play_spotify_after_open() -> None:
@@ -398,7 +399,7 @@ def open_app(parameters=None, response=None, player=None, session_memory=None) -
         if any(b in app_name.lower() for b in ("brave", "chrome", "edge", "firefox")):
             webbrowser.open("about:blank")
             return f"{app_name.capitalize()} context opened, sir."
-        subprocess.Popen([reg_path], shell=False)
+        subprocess.Popen([reg_path], shell=False, creationflags=NO_WINDOW)
         return f"{app_name} launched successfully from system registry, sir."
 
     # ----- 5. Fast Start Menu Shortcuts Mapping Verification -----
@@ -415,7 +416,7 @@ def open_app(parameters=None, response=None, player=None, session_memory=None) -
     # ----- 6. Global Command PATH Allocation Lookup -----
     binary = shutil.which(app_name) or shutil.which(f"{app_name}.exe")
     if binary:
-        subprocess.Popen([binary], shell=False)
+        subprocess.Popen([binary], shell=False, creationflags=NO_WINDOW)
         return f"Opened {app_name} via standard path routing."
 
     # ----- 7. Toggle-close / open-or-close support (generic) -----

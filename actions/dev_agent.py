@@ -11,6 +11,7 @@ from google import genai
 from google.genai import types as gtypes
 
 from core.utils import get_api_key, get_base_dir
+from core.win_subprocess import NO_WINDOW
 
 BASE_DIR = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
@@ -283,6 +284,7 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
             capture_output=True,
             text=True,
             shell=False,  # Explicitly set shell=False for clarity and security
+            creationflags=NO_WINDOW,
         )
         if result.returncode != 0:
             to_install.append(dep)
@@ -303,6 +305,7 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
             timeout=120,
             cwd=str(project_dir),
             shell=False,  # Explicitly set shell=False for clarity and security
+            creationflags=NO_WINDOW,
         )
         if result.returncode == 0:
             return f"Installed: {', '.join(to_install)}"
@@ -339,6 +342,7 @@ def _open_vscode(project_dir: Path) -> bool:
                 shell=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=NO_WINDOW,
             )
             time.sleep(1.5)
             print(f"[DevAgent] 💻 VSCode opened: {project_dir}")
@@ -364,6 +368,7 @@ def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
             timeout=timeout,
             cwd=str(project_dir),
             shell=False,  # Explicitly set shell=False for clarity and security
+            creationflags=NO_WINDOW,
         )
 
         stdout = result.stdout.strip()
@@ -404,6 +409,7 @@ def _try_auto_install(error_output: str, project_dir: Path) -> bool:
             timeout=60,
             cwd=str(project_dir),
             shell=False,  # Explicitly set shell=False for clarity and security
+            creationflags=NO_WINDOW,
         )
         return result.returncode == 0
     except Exception:

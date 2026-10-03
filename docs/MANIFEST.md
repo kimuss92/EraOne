@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**291 source modules** · 109,792 lines · 169 test modules · 53 declared tools · 57 registered actions
+**292 source modules** · 109,967 lines · 170 test modules · 53 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
@@ -94,6 +94,7 @@ Most-imported first. A change here has the widest blast radius.
 | Module | Imported by | Purpose |
 |---|---|---|
 | `core.utils` | 79 |  |
+| `core.win_subprocess` | 28 | One definition of "run a helper program without flashing a window at Karim". |
 | `actions.netflix_control` | 25 |  |
 | `core.logger` | 25 |  |
 | `core.tool_result` | 25 |  |
@@ -117,7 +118,6 @@ Most-imported first. A change here has the widest blast radius.
 | `app.hud.events` | 12 | The HUD's single, truthful event stream and agent state machine. |
 | `core.action_registry` | 12 | Unified action registry for Era One routing. |
 | `core.tts_fish` | 12 | Fish Audio TTS client Ã¢ÂÂ Era's PRIMARY speech synthesis backend. |
-| `actions.screen_processor` | 11 |  |
 
 ## 4. Module index
 
@@ -191,7 +191,7 @@ Every source module, its size, and what it is for.
 |---|---:|---|
 | `core/llm/__init__.py` | 8 | Provider-neutral LLM layer for Era One. |
 | `core/llm/adapters/__init__.py` | 15 | Provider adapters. |
-| `core/llm/adapters/claude_cli.py` | 491 | Claude as a reasoning oracle, over the subscription `claude -p` CLI. |
+| `core/llm/adapters/claude_cli.py` | 493 | Claude as a reasoning oracle, over the subscription `claude -p` CLI. |
 | `core/llm/adapters/gemini_generate.py` | 257 | Gemini generate/JSON as an LLMProvider — a wrapper AROUND existing behaviour. |
 | `core/llm/adapters/ollama_chat.py` | 315 | Local LLM over Ollama's /api/chat — the brain that needs no cloud. |
 | `core/llm/adapters/openai_compat.py` | 479 | OpenAI-compatible chat completions — the cloud brain of the cascade mode. |
@@ -237,47 +237,47 @@ Every source module, its size, and what it is for.
 | `actions/_netflix/profile_gate.py` | 259 | Get past Netflix's profile picker onto the configured profile, reliably. |
 | `actions/agent_browser_use.py` | 99 | Agent-browser CLI integration for Era One. |
 | `actions/audio_control.py` | 285 | audio_control - list / switch audio devices and control any ONE device. |
-| `actions/browser_control.py` | 2597 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
+| `actions/browser_control.py` | 2599 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
 | `actions/browser_driver_health.py` | 118 | Liveness checks for the Playwright driver behind a _BrowserSession. |
 | `actions/browser_intelligence.py` | 1496 | Browser Intelligent Automation for YouTube and Netflix grid/card selection. |
 | `actions/claude_bridge.py` | 164 | claude_bridge tool: Era talks to the Claude Code desktop app and reads its answers. |
 | `actions/claude_self_improve.py` | 148 | Claude-Code-as-generator for self_improve. |
-| `actions/code_helper.py` | 732 |  |
-| `actions/computer_control.py` | 693 |  |
-| `actions/computer_settings.py` | 1943 |  |
+| `actions/code_helper.py` | 734 |  |
+| `actions/computer_control.py` | 695 |  |
+| `actions/computer_settings.py` | 1950 |  |
 | `actions/design_studio.py` | 288 | actions/design_studio.py — natural language -> professional prompt -> image / video. |
 | `actions/desktop.py` | 459 |  |
-| `actions/desktop_ops.py` | 487 | actions/desktop_ops.py — the vetted operation set behind `desktop_control action=task`. |
+| `actions/desktop_ops.py` | 489 | actions/desktop_ops.py — the vetted operation set behind `desktop_control action=task`. |
 | `actions/desktop_preview.py` | 263 | actions/desktop_preview.py — planning a desktop task, and describing the plan. |
-| `actions/dev_agent.py` | 680 |  |
+| `actions/dev_agent.py` | 686 |  |
 | `actions/feature_inspire.py` | 47 | FeatureInspire — web-search similar AI-agent projects and propose improvements. Uses existing Gemini grounded  |
-| `actions/file_controller.py` | 1964 |  |
+| `actions/file_controller.py` | 1967 |  |
 | `actions/file_indexer.py` | 846 | Persistent file system index for Era One instant file finder. |
-| `actions/file_processor.py` | 1076 | file_processor.py — Era One Universal File Processor |
-| `actions/flight_finder.py` | 421 |  |
-| `actions/game_updater.py` | 1153 |  |
+| `actions/file_processor.py` | 1091 | file_processor.py — Era One Universal File Processor |
+| `actions/flight_finder.py` | 422 |  |
+| `actions/game_updater.py` | 1167 |  |
 | `actions/gmail_control.py` | 549 | Era One's Gmail tool — the single entry point Gemini routes mail work through. |
 | `actions/legal_automation.py` | 32 | Legal automation scaffold — EXPLICIT DEFINITION ONLY — NOT autonomous legal practice. Service defined: AUTO-ND |
 | `actions/media_coordinator.py` | 196 |  |
 | `actions/monitor_move.py` | 439 | Move a window to another connected monitor ("move this window to screen 2"). |
 | `actions/netflix_control.py` | 5048 |  |
-| `actions/open_app.py` | 444 | High-performance Windows Application Launcher for Era One. Features: - Ultra-fast Start Menu Shortcut (.lnk) i |
+| `actions/open_app.py` | 445 | High-performance Windows Application Launcher for Era One. Features: - Ultra-fast Start Menu Shortcut (.lnk) i |
 | `actions/page_refs.py` | 310 | Text-first page reading for browser_control: `page_snapshot` + `click_ref`. |
 | `actions/path_anchors.py` | 142 | Resolve bare folder/file names against paths Era already knows. |
 | `actions/platform_tab.py` | 176 | Strict platform tab ownership for YouTube and Netflix. |
 | `actions/premiere_control.py` | 195 | actions/premiere_control.py — voice/text bridge to the Adobe Premiere Pro MCP server. |
 | `actions/protocol_one.py` | 674 | actions/protocol_one.py — Protocol One, Era's project health guardian. |
 | `actions/protocol_zero.py` | 427 | actions/protocol_zero.py — Protocol Zero, the prompt-synchronisation auditor. |
-| `actions/reminder.py` | 325 |  |
+| `actions/reminder.py` | 327 |  |
 | `actions/scheduled_task.py` | 425 | actions/scheduled_task.py — the `scheduled_task` tool: create, list, modify, cancel, approve and waive the use |
 | `actions/screen_processor.py` | 933 |  |
-| `actions/self_diagnosis.py` | 633 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
+| `actions/self_diagnosis.py` | 635 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
 | `actions/self_heal.py` | 52 | actions/self_heal.py — the `self_heal` tool: Era's view of her own healing loop. |
-| `actions/self_improve.py` | 665 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
+| `actions/self_improve.py` | 667 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
 | `actions/self_improve_targets.py` | 136 | actions/self_improve_targets.py — feature → file resolution for self_improve. |
-| `actions/self_improve_verifier.py` | 445 | actions/self_improve_verifier.py — independent second pass after a self_improve apply. |
-| `actions/send_message.py` | 409 |  |
-| `actions/spotify_control.py` | 1306 |  |
+| `actions/self_improve_verifier.py` | 447 | actions/self_improve_verifier.py — independent second pass after a self_improve apply. |
+| `actions/send_message.py` | 411 |  |
+| `actions/spotify_control.py` | 1315 |  |
 | `actions/spotify_exact.py` | 243 | Exact Spotify control that window-automation cannot do, using APIs already in this repo — no new dependencies, |
 | `actions/spotify_gsmtc_host.py` | 236 | Persistent PowerShell host for Windows GSMTC (media transport) reads. |
 | `actions/spotify_ui.py` | 262 | Resize-proof Spotify content playback via UI Automation (accessibility tree). |
@@ -286,8 +286,8 @@ Every source module, its size, and what it is for.
 | `actions/vault_writer.py` | 424 | vault_writer.py — how Era writes into her own Obsidian vault, live, in conversation. |
 | `actions/weather_report.py` | 299 |  |
 | `actions/web_search.py` | 208 |  |
-| `actions/window_control.py` | 678 | Advanced window management for Era One. Features an aggressive Windows 11 foreground stealer and class-based m |
-| `actions/youtube_video.py` | 1563 | Era One YouTube Controller — tab-aware, browser-integrated. |
+| `actions/window_control.py` | 684 | Advanced window management for Era One. Features an aggressive Windows 11 foreground stealer and class-based m |
+| `actions/youtube_video.py` | 1564 | Era One YouTube Controller — tab-aware, browser-integrated. |
 
 ### Vision
 
@@ -327,17 +327,17 @@ Every source module, its size, and what it is for.
 | `core/daily_note.py` | 276 | daily_note.py — Era's entry in the shared daily log. |
 | `core/vault_audit.py` | 382 | vault_audit.py — what is WRONG with the era_brain vault. Read-only, always. |
 | `core/vault_maintenance.py` | 440 | vault_maintenance.py — the routine that ACTS on what vault_audit.py found. |
-| `era_dispatch.py` | 2450 | era_dispatch.py — Era One → Claude Code dispatcher. |
+| `era_dispatch.py` | 2452 | era_dispatch.py — Era One → Claude Code dispatcher. |
 
 ### Self-healing & diagnosis
 
 | File | Lines | Purpose |
 |---|---:|---|
-| `actions/self_diagnosis.py` | 633 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
+| `actions/self_diagnosis.py` | 635 | actions/self_diagnosis.py — Era deep-diagnoses her own code and proposes fixes. |
 | `actions/self_heal.py` | 52 | actions/self_heal.py — the `self_heal` tool: Era's view of her own healing loop. |
-| `actions/self_improve.py` | 665 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
+| `actions/self_improve.py` | 667 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
 | `actions/self_improve_targets.py` | 136 | actions/self_improve_targets.py — feature → file resolution for self_improve. |
-| `actions/self_improve_verifier.py` | 445 | actions/self_improve_verifier.py — independent second pass after a self_improve apply. |
+| `actions/self_improve_verifier.py` | 447 | actions/self_improve_verifier.py — independent second pass after a self_improve apply. |
 | `core/handled_exceptions.py` | 266 | core/handled_exceptions.py — see exceptions Era's tools CATCH, not just the ones that escape. |
 | `core/self_heal.py` | 499 | core/self_heal.py — Era repairs her own code defects, unattended, with rollback. |
 | `core/self_heal_incidents.py` | 227 | core/self_heal_incidents.py — turn era.log into fixable incidents. |

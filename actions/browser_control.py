@@ -43,6 +43,7 @@ from actions.browser_driver_health import (
 )
 from actions.page_refs import hold_if_sensitive
 from core.utils import get_os, log
+from core.win_subprocess import NO_WINDOW
 
 _OS = get_os()  # "windows" | "darwin" | "linux"
 
@@ -973,6 +974,7 @@ class _BrowserSession:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=NO_WINDOW,
             )
             log(
                 "Browser",

@@ -179,6 +179,11 @@ def kill_tree(proc: subprocess.Popen) -> None:
             ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
             capture_output=True,
             check=False,
+            # The watchdog may itself have been started from a visible console
+            # (--debug). taskkill would then flash its own window. Spelled out
+            # rather than imported: this file is standard library only, so it
+            # keeps working when Era's code is broken. See core/win_subprocess.py.
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
     else:
         proc.kill()
@@ -333,7 +338,7 @@ def respawn_windowless(argv: list[str]) -> int | None:
             [sys.executable, str(Path(__file__).resolve()), *argv],
             cwd=str(BASE_DIR),
             env={**os.environ, "ERA_SUPERVISOR_DETACHED": "1"},
-            creationflags=0x08000000 | 0x00000200,  # CREATE_NO_WINDOW | NEW_PROCESS_GROUP
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

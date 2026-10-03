@@ -20,6 +20,7 @@ from core.utils import (
     get_videos,
     is_safe_path,
 )
+from core.win_subprocess import NO_WINDOW
 
 if TYPE_CHECKING:
     pass
@@ -1660,7 +1661,7 @@ def _open_path(target: Path, reveal_file: bool = False) -> str:
         except Exception as e:
             # Fallback: try explorer for folders
             if target.is_dir():
-                subprocess.run(["explorer", str(target)])
+                subprocess.run(["explorer", str(target)], creationflags=NO_WINDOW)
                 return f"Opened folder: {target.name}"
             return f"Failed to open {target.name}: {e}"
     elif _OS == "Darwin":
@@ -1714,7 +1715,9 @@ def open_with_picker(path: str, name: str = "") -> str:
 
     if _OS == "Windows":
         try:
-            subprocess.run(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", str(target)])
+            subprocess.run(
+                ["rundll32.exe", "shell32.dll,OpenAs_RunDLL", str(target)], creationflags=NO_WINDOW
+            )
             return f"Opened the 'Open With' picker for {target.name}."
         except Exception as e:
             return f"Failed to open the app picker for {target.name}: {e}"

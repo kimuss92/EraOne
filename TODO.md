@@ -12,14 +12,15 @@ proved it. "Written" is not "done".
 ## ▶ START HERE — resuming in a new session
 
 **Branch:** `claude/kind-babbage-ml3csw` · **Remote:** `kimuss92/EraOne` (private)
-**Last pushed:** `76de337` (board item 41)
+**Last pushed:** `ebe7615` (handoff docs) — plus the flickering-window fix below.
 
-**Waiting on Karim, not on code** — two fixes are built, tested and pushed, but
-neither can be proved from a Linux container. Both need him to talk to Era on
-Windows. The plain-language test scripts are in the chat handoff; in short:
+**Waiting on Karim, not on code** — three fixes are built, tested and pushed, but
+none can be proved from a Linux container. All three need him on Windows. The
+plain-language test scripts are in the chat handoff; in short:
 
 | Item | What to test | What must NOT happen |
 |------|--------------|----------------------|
+| flicker | Restart Era, then ask for a few ordinary tasks (volume, open an app, close a window). | **No PowerShell window may blink on screen** — not once, including after Era restarts herself. |
 | 19 | Ask for a file that does not exist. She should try something before announcing a failure. | **Priority:** ask her to delete a file that does not exist, with a real file beside it. She must NOT retry onto the real one. |
 | 41 | Save a fact, ask for it in different words, **wait 6+ minutes**, ask again in different words. | She must not lose it after the wait. |
 

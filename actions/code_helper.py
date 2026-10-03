@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core.ai_provider import GeminiModel, quota_message
 from core.utils import get_base_dir, get_desktop
+from core.win_subprocess import NO_WINDOW
 
 BASE_DIR = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
@@ -305,6 +306,7 @@ def _run_file(path: Path, args: list, timeout: int) -> str:
             timeout=timeout,
             cwd=str(path.parent),
             env=env,
+            creationflags=NO_WINDOW,
         )
         output = result.stdout.strip()
         error = result.stderr.strip()

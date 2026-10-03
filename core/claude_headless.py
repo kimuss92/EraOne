@@ -58,6 +58,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.win_subprocess import NO_WINDOW
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Pinned because the default alias returns api_error — see the module docstring.
@@ -158,6 +160,7 @@ def ask(prompt: str, *, timeout_s: float | None = None) -> Reply:
             errors="replace",
             timeout=timeout_s if timeout_s is not None else TIMEOUT_S,
             shell=False,
+            creationflags=NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return Reply(False, reason="it did not answer in time")

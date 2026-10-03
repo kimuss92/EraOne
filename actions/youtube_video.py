@@ -33,6 +33,7 @@ except ImportError:
 
 from core.intent_memory import remember_action
 from core.utils import get_base_dir, is_linux, is_mac, is_windows
+from core.win_subprocess import NO_WINDOW
 
 # ── Import browser session bridge ────────────────────────────────────────────
 try:
@@ -199,7 +200,7 @@ def _os_open_url(url: str) -> None:
         elif is_linux():
             subprocess.Popen(["xdg-open", url])
         else:
-            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False)
+            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False, creationflags=NO_WINDOW)
     except Exception as e:
         print(f"[YouTube] ⚠️ OS open_url failed: {e}")
 
@@ -358,7 +359,7 @@ def _save_summary(content: str, video_url: str) -> str:
     filepath.write_text(header + content, encoding="utf-8")
 
     if is_windows():
-        subprocess.Popen(["notepad.exe", str(filepath)])
+        subprocess.Popen(["notepad.exe", str(filepath)], creationflags=NO_WINDOW)
     elif is_mac():
         subprocess.Popen(["open", "-t", str(filepath)])
     else:

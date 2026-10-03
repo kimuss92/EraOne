@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from core.utils import get_api_key, get_os, is_windows
+from core.win_subprocess import NO_WINDOW
 
 _OS = get_os()
 
@@ -362,6 +363,7 @@ var a=(IAudioEndpointVolume2)o;float v;a.GetMasterVolumeLevelScalar(out v);retur
             capture_output=True,
             text=True,
             timeout=10,
+            creationflags=NO_WINDOW,
         )
         if res.returncode == 0:
             out = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else ""
@@ -493,6 +495,7 @@ Write-Output "OK"
             capture_output=True,
             text=True,
             timeout=15,
+            creationflags=NO_WINDOW,
         )
         out = (res.stdout or "").strip()
         if res.returncode == 0 and out.splitlines() and out.splitlines()[-1] == "OK":
@@ -814,6 +817,7 @@ def brightness_up():
                 "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, [math]::Min(100, (Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness + 10))",
             ],
             capture_output=True,
+            creationflags=NO_WINDOW,
         )
 
 
@@ -833,6 +837,7 @@ def brightness_down():
                 "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, [math]::Max(0, (Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness - 10))",
             ],
             capture_output=True,
+            creationflags=NO_WINDOW,
         )
 
 
@@ -1137,7 +1142,7 @@ def toggle_wifi():
                 "$adapter = Get-NetAdapter | Where-Object {$_.PhysicalMediaType -eq 'Native 802.11'}; if ($adapter.Status -eq 'Up') { Disable-NetAdapter -Name $adapter.Name -Confirm:$false } else { Enable-NetAdapter -Name $adapter.Name -Confirm:$false }",
             ],
             capture_output=True,
-            creationflags=0x08000000,
+            creationflags=NO_WINDOW,
         )
 
 
@@ -1206,7 +1211,7 @@ def _set_bluetooth_radio(desired: str) -> str:
             ],
             capture_output=True,
             text=True,
-            creationflags=0x08000000,
+            creationflags=NO_WINDOW,
             timeout=20,
         )
         out = (res.stdout or "").strip()
@@ -1260,7 +1265,7 @@ def _get_bt_paired_devices() -> list[tuple[str, str]]:
     try:
         # Try btpair first with a strict timeout so it never hangs
         res = subprocess.run(
-            ["btpair", "-l"], capture_output=True, text=True, creationflags=0x08000000, timeout=2
+            ["btpair", "-l"], capture_output=True, text=True, creationflags=NO_WINDOW, timeout=2
         )
         out_text = (res.stdout or "") + "\n" + (res.stderr or "")
         for line in out_text.splitlines():
@@ -1312,7 +1317,7 @@ def _get_bt_paired_devices() -> list[tuple[str, str]]:
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
                 capture_output=True,
                 text=True,
-                creationflags=0x08000000,
+                creationflags=NO_WINDOW,
                 timeout=4,
             )
             for line in (res.stdout or "").splitlines():
@@ -1401,7 +1406,7 @@ def connect_device(device_name: str) -> str:
             cmd_disable = ["btcom", "-r", f"-b{mac}"]
             if service:
                 cmd_disable.append(f"-s{service}")
-            subprocess.run(cmd_disable, capture_output=True, creationflags=0x08000000)
+            subprocess.run(cmd_disable, capture_output=True, creationflags=NO_WINDOW)
 
             # 2. Enable to force the physical connection
             cmd_enable = ["btcom", "-c", f"-b{mac}"]
@@ -1412,7 +1417,7 @@ def connect_device(device_name: str) -> str:
                 cmd_enable,
                 capture_output=True,
                 text=True,
-                creationflags=0x08000000,
+                creationflags=NO_WINDOW,
             )
             if res.returncode == 0:
                 return f"Audio routed to {device_name}, sir."
@@ -1449,7 +1454,7 @@ def disconnect_device(device_name: str) -> str:
             if service:
                 cmd.append(f"-s{service}")
 
-            res = subprocess.run(cmd, capture_output=True, text=True, creationflags=0x08000000)
+            res = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
             if res.returncode == 0:
                 success = True
             else:
@@ -1487,6 +1492,7 @@ def _run_power_command(flag: str) -> subprocess.CompletedProcess | None:
         capture_output=True,
         text=True,
         timeout=10,
+        creationflags=NO_WINDOW,
     )
 
 
@@ -1530,6 +1536,7 @@ def abort_shutdown() -> str:
             capture_output=True,
             text=True,
             timeout=10,
+            creationflags=NO_WINDOW,
         )
     except Exception as e:
         return f"Could not cancel: {e}"

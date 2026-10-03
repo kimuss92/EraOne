@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.utils import get_os
+from core.win_subprocess import NO_WINDOW
 
 
 def _scripts_dir() -> Path:
@@ -166,6 +167,7 @@ def _schedule_windows(target_dt: datetime, task_name: str, script_path: Path, me
         ["schtasks", "/Create", "/TN", task_name, "/XML", str(xml_path), "/F"],
         capture_output=True,
         text=True,
+        creationflags=NO_WINDOW,
     )
 
     try:

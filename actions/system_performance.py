@@ -777,7 +777,7 @@ def msi_set_scenario(scenario) -> str:
     launched_here = False
     if not wins:
         try:
-            subprocess.Popen(["explorer.exe", _MSI_CENTER_AUMID])
+            subprocess.Popen(["explorer.exe", _MSI_CENTER_AUMID], creationflags=_NO_WINDOW)
         except Exception as e:
             return f"Could not launch MSI Center: {e}"
         launched_here = True
@@ -994,7 +994,7 @@ def pc_boost() -> str:
     launched_here = False
     if not wins:
         try:
-            subprocess.Popen(["cmd", "/c", "start", "", _PC_MANAGER_URI])
+            subprocess.Popen(["cmd", "/c", "start", "", _PC_MANAGER_URI], creationflags=_NO_WINDOW)
         except Exception as e:
             return f"Could not launch Microsoft PC Manager: {e}"
         launched_here = True

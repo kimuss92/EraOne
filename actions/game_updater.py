@@ -14,6 +14,7 @@ from pathlib import Path
 # core.utils.is_mac() tests for "darwin", which is what get_os() actually
 # returns when os_system isn't pinned in api_keys.json.
 from core.utils import is_linux, is_mac, is_windows
+from core.win_subprocess import NO_WINDOW
 
 _KNOWN_APPIDS: dict[str, tuple[str, str]] = {
     "pubg": ("578080", "PUBG: Battlegrounds"),
@@ -137,7 +138,7 @@ def _launch_steam_url(exe: Path, url: str) -> None:
     elif is_linux():
         subprocess.Popen(["xdg-open", url])
     else:
-        subprocess.Popen([str(exe), url])
+        subprocess.Popen([str(exe), url], creationflags=NO_WINDOW)
 
 
 def _get_steam_libraries(steam_path: Path) -> list[Path]:
@@ -186,7 +187,10 @@ def _is_steam_running() -> bool:
     try:
         if is_windows():
             out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq steam.exe"], capture_output=True, text=True
+                ["tasklist", "/FI", "IMAGENAME eq steam.exe"],
+                capture_output=True,
+                text=True,
+                creationflags=NO_WINDOW,
             ).stdout
             return "steam.exe" in out.lower()
         proc = "steam_osx" if is_mac() else "steam"
@@ -490,7 +494,7 @@ def _ensure_steam_running(steam_path: Path) -> bool:
     if is_mac():
         subprocess.Popen(["open", "-a", "Steam"])
     else:
-        subprocess.Popen([str(exe)])
+        subprocess.Popen([str(exe)], creationflags=NO_WINDOW)
 
     for _ in range(20):
         time.sleep(1)
@@ -661,7 +665,7 @@ def _get_download_status(steam_path: Path) -> str:
 
 def _system_shutdown() -> None:
     if is_windows():
-        subprocess.run(["shutdown", "/s", "/t", "10"])
+        subprocess.run(["shutdown", "/s", "/t", "10"], creationflags=NO_WINDOW)
     elif is_mac():
         subprocess.run(["osascript", "-e", 'tell app "System Events" to shut down'])
     else:
@@ -812,6 +816,7 @@ def _is_epic_running() -> bool:
                 ["tasklist", "/FI", "IMAGENAME eq EpicGamesLauncher.exe"],
                 capture_output=True,
                 text=True,
+                creationflags=NO_WINDOW,
             ).stdout
             return "epicgameslauncher.exe" in out.lower()
         proc = "EpicGamesLauncher" if is_mac() else "heroic"
@@ -835,9 +840,11 @@ def _update_epic_games(epic_exe: Path, game_name: str = None) -> str:
             if is_mac():
                 subprocess.Popen(["open", url])
             elif is_linux():
-                subprocess.Popen([str(epic_exe), url] if epic_exe else ["xdg-open", url])
+                subprocess.Popen(
+                    [str(epic_exe), url] if epic_exe else ["xdg-open", url], creationflags=NO_WINDOW
+                )
             else:
-                subprocess.Popen([str(epic_exe), url])
+                subprocess.Popen([str(epic_exe), url], creationflags=NO_WINDOW)
             return f"Opened Epic for '{matched[0]['name']}'."
         except Exception as e:
             return f"Epic update failed: {e}"
@@ -847,7 +854,7 @@ def _update_epic_games(epic_exe: Path, game_name: str = None) -> str:
                 subprocess.Popen(["open", "-a", "Epic Games Launcher"])
             elif is_linux():
                 if epic_exe:
-                    subprocess.Popen([str(epic_exe)])
+                    subprocess.Popen([str(epic_exe)], creationflags=NO_WINDOW)
                 else:
                     return (
                         "Epic Games is not natively supported on Linux. "
@@ -860,12 +867,13 @@ def _update_epic_games(epic_exe: Path, game_name: str = None) -> str:
                             [
                                 str(epic_exe),
                                 f"com.epicgames.launcher://apps/{g['id']}?action=launch&silent=true",
-                            ]
+                            ],
+                            creationflags=NO_WINDOW,
                         )
                         time.sleep(0.5)
                     return f"Triggered update check for {len(games)} Epic game(s)."
                 else:
-                    subprocess.Popen([str(epic_exe)])
+                    subprocess.Popen([str(epic_exe)], creationflags=NO_WINDOW)
             count = len(games)
             return (
                 f"Epic Games Launcher opened. {count} game(s) will be checked."
@@ -887,7 +895,11 @@ def _schedule_daily_update(hour: int = 3, minute: int = 0) -> str:
 def _schedule_windows(hour: int, minute: int) -> str:
     task_name = "EraOne_GameUpdater"
     script_path = Path(__file__).resolve()
-    subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], capture_output=True)
+    subprocess.run(
+        ["schtasks", "/Delete", "/TN", task_name, "/F"],
+        capture_output=True,
+        creationflags=NO_WINDOW,
+    )
     for extra in (["/RL", "HIGHEST", "/RU", "SYSTEM"], []):
         cmd = [
             "schtasks",
@@ -903,7 +915,7 @@ def _schedule_windows(hour: int, minute: int) -> str:
             "/F",
             *extra,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
         if result.returncode == 0:
             return f"Daily game update scheduled at {hour:02d}:{minute:02d}."
     return f"Scheduling failed: {result.stderr.strip()}"
@@ -973,6 +985,7 @@ def _cancel_scheduled_update() -> str:
             ["schtasks", "/Delete", "/TN", "EraOne_GameUpdater", "/F"],
             capture_output=True,
             text=True,
+            creationflags=NO_WINDOW,
         )
         return (
             "Scheduled update cancelled."
@@ -1002,6 +1015,7 @@ def _get_schedule_status() -> str:
             ["schtasks", "/Query", "/TN", "EraOne_GameUpdater", "/FO", "LIST"],
             capture_output=True,
             text=True,
+            creationflags=NO_WINDOW,
         )
         if result.returncode != 0:
             return "No scheduled game update found."

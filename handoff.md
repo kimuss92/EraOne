@@ -20,6 +20,101 @@ the last edit, because one built mid-edit is already stale at commit time.
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-03 · FIXED — a PowerShell window blinking on screen on every task
+**Reported by Karim:** "there is a powershell window flickering when i ask era to
+do any task". No log evidence was available: `logs/` is gitignored, so the
+container has only a 0-byte `era.log` and no `runtime/diagnosis/` report. The
+diagnosis below is from the code, and the root cause is a flag, not a log line.
+
+**The Windows rule this is all about.** A console program needs a console. If its
+parent already has one, the child attaches to it silently. If the parent has NO
+console, Windows creates a fresh one for the child — and that one has a WINDOW,
+which appears and then vanishes when the program exits. That blink is the whole
+symptom. `CREATE_NO_WINDOW` means "a console with no window": output still pipes
+back, and children attach to it instead of making their own. Hiding the window
+afterwards is NOT equivalent — with Windows Terminal as the default console host
+the window belongs to another process, so `ShowWindow(SW_HIDE)` does nothing.
+That was already learned once, in `era_supervisor.respawn_windowless` (2026-09-26).
+
+**Root cause (one flag).** `core/era_relaunch.spawn_supervisor` used
+`DETACHED_PROCESS`. It is the trap that looks like the right answer: it does mean
+"no console window", but it gets there by giving the process **no console at
+all**. That supervisor then launches Era with inherited stdio
+(`era_supervisor.py:482`), so Era had no console either — and from that moment
+every console helper she ran (powershell, taskkill, ffmpeg, schtasks, the `claude`
+CLI) had to create its own console, each with a visible window. It is reached from
+`app/era_live/tool_dispatch.py:1181`, i.e. after a self-restart, which is why the
+flashing appears partway into a session rather than from launch.
+
+**Why one flag was not the whole fix.** Before this, 70 call sites relied on
+*inheriting* a windowless console from whatever started Era. That made "does a
+window flash?" a property of how Era was launched, not of the code — correct under
+the desktop shortcut, wrong after a relaunch, and unprovable either way. So each
+site now carries its own guarantee.
+
+**What changed**
+- `core/win_subprocess.py` (new, leaf module, no project deps) — `NO_WINDOW`,
+  `NEW_GROUP`, `no_window(extra)`. Both constants are `0` off Windows and
+  `subprocess` accepts `creationflags=0` on POSIX, so one call-site shape is
+  correct on all three platforms with no branch. The docstring records the
+  Windows rule and the `DETACHED_PROCESS` trap.
+- `core/era_relaunch.py` — `DETACHED_PROCESS` → `CREATE_NO_WINDOW` (keeping
+  `CREATE_NEW_PROCESS_GROUP`, so Ctrl-C in Era's console still cannot kill the
+  watchdog waiting to bring her back). Flags spelled out inline, NOT imported:
+  that module is standard-library-only on purpose, stated in its own docstring,
+  so the watchdog path keeps working when Era's code is broken.
+- 70 call sites across 30 runtime modules now pass `creationflags=NO_WINDOW`.
+  Seven raw `0x08000000` literals in `actions/computer_settings.py` and two in
+  `era_supervisor.py` became the named constant — the magic number also raises
+  `ValueError` the moment the same line runs on Linux.
+- `era_supervisor.kill_tree` — `taskkill` got the flag; the watchdog itself can
+  be started from a visible console (`--debug`).
+- `tools/test_no_window.py` (new, 5 tests).
+
+**Deliberately NOT changed**, each pinned in the test's `ALLOWED_VISIBLE` with a
+reason and an exact expected count: `app/hud/launcher.py` (2 — the `ERA ONE Debug`
+console *is* the feature), `app/hud/api.py` (2 — `explorer` is a GUI program and
+takes a string command line because Explorer splits its own on commas),
+`era_supervisor.py:482` (1 — Era inherits the watchdog's stdio by design, so
+`--debug` shows her output). 66 macOS/Linux-only calls (`osascript`, `pactl`,
+`xdg-open`, …) were skipped: they cannot open a Windows console window.
+
+**Why a source scan and not a behavioural test.** The thing under test exists only
+on Windows, inside process creation. "A window did not appear" cannot be observed
+from a Linux container, and a mock would only prove the mock was called. So the
+test asserts the checkable property — the flag is present where the process is
+created — and says so in its own docstring rather than implying it proves the
+window is gone. That last part is Karim's check, below.
+
+**The checker had to resolve aliases, or it would have been loosened into
+uselessness.** Legitimate sites do not all pass the constant literally:
+`core/protocol_checks.py` builds `_LOW_PRIORITY = BELOW_NORMAL_PRIORITY_CLASS |
+_NO_WINDOW`, and `era_relaunch` computes a local `flags` inside an
+`if os.name == "nt"` branch. The first draft flagged both. The fix was to follow
+assignment chains to a fixed point — not to add an escape hatch that waves
+anything named `flags` through, which is what the first draft actually did.
+
+**Verified**
+- Load-bearing, by three mutations, each caught: (1) `DETACHED_PROCESS` back in
+  `era_relaunch` → 2 tests fail; (2) the flag removed from the PowerShell
+  window-focus call in `actions/computer_control.py` → named as
+  `computer_control.py:287 (no creationflags)`; (3) a new unguarded
+  `subprocess.run(["powershell", …])` added inside an ALLOWLISTED file →
+  caught by the count (`allowed 2 … but has 3`), which is the hole a file-level
+  allowlist would have left open.
+- `ast.get_source_segment` re-splits the file on every call, which made the scan
+  take ~50s across ~300 modules — too slow to live in a 5,300-test gate.
+  `ast.unparse` reads the tree directly: **1.3s**.
+- Every one of the 30 changed modules imports and compiles. The one import error
+  (`actions.spotify_control`, missing Windows-only deps) was confirmed
+  pre-existing by re-running it on a stashed tree.
+- ruff format + check clean; manifest regenerated after the last edit; gate below.
+
+**NOT proven, and Karim is the only one who can prove it:** that the window has
+actually stopped flashing on his machine. Everything above is the mechanism and
+the code; the observation is his.
+
+
 ### 2026-10-02 · Item 41 FIXED — memory was quietly going dumb after every pause
 **Objectives:** 11 — board item 41, and the cause behind item 30b's known risk
 
