@@ -363,3 +363,67 @@ def test_headless_ui_speaks_the_engine_api_and_feeds_the_bus():
     assert amp["value"] == 0.0 and amp["bands"] == [0.0, 0.5]  # stays valid JSON
     assert {m["type"] for m in sent} >= {"state", "log", "mute", "amplitude"}
     ui.window_control("minimize")  # the browser owns its window: a no-op, never an error
+
+
+@pytest.mark.parametrize("path", ["/api/visual", "/api/development"])
+def test_new_workspace_reads_need_authentication(server, path):
+    assert get(server, path)[0] == 401
+    assert get(server, path, token=server.session_token)[0] == 200
+
+
+@pytest.mark.parametrize("path", ["/api/visual", "/api/development", "/api/schedule/action"])
+def test_new_workspace_writes_need_authentication(server, path):
+    assert post(server, path, {"action": "reset"})[0] == 401
+
+
+def test_visual_rest_updates_are_validated(server, tmp_path, monkeypatch):
+    from core import visual_engine
+
+    monkeypatch.setattr(visual_engine, "PATH", tmp_path / "scene.json")
+    status, data = post(
+        server,
+        "/api/visual",
+        {
+            "action": "upsert",
+            "widget": {"id": "cpu", "kind": "metric", "binding": "cpu_percent", "label": "CPU"},
+        },
+        token=server.session_token,
+    )
+    assert status == 200 and data["revision"] == 1
+    assert (
+        post(
+            server,
+            "/api/visual",
+            {"action": "layout", "layout": {"accent": "url(x)"}},
+            token=server.session_token,
+        )[0]
+        == 400
+    )
+    assert (
+        json.loads(get(server, "/api/visual", token=server.session_token)[1])["widgets"][0]["id"]
+        == "cpu"
+    )
+
+
+def test_rest_cannot_activate_without_explicit_verified_approval(server, tmp_path, monkeypatch):
+    from core import development
+
+    monkeypatch.setattr(development, "JOBS", tmp_path)
+    assert (
+        post(
+            server,
+            "/api/development",
+            {"action": "approve", "id": "a" * 16, "approval": "x"},
+            token=server.session_token,
+        )[0]
+        == 409
+    )
+    assert (
+        post(
+            server,
+            "/api/development",
+            {"action": "approve", "id": "../outside", "approval": "x", "confirmed": True},
+            token=server.session_token,
+        )[0]
+        == 409
+    )

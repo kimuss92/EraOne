@@ -173,7 +173,10 @@ class LocalFallbackMixin:
                 if not frames.full():
                     frames.put_nowait(data)
 
-            loop.call_soon_threadsafe(put)
+            try:
+                loop.call_soon_threadsafe(put)
+            except RuntimeError:
+                pass
 
         self._local_mode_active = True
         # Cascade is a chosen mode, not an outage: nothing to announce or warm.
@@ -188,12 +191,11 @@ class LocalFallbackMixin:
             self.ui.set_state("LISTENING")
         print(f"[LOCAL] Serving locally for up to {seconds / 60:.0f} min ({reason}).")
         warm = asyncio.create_task(self._local_warm_brain()) if first else None
-        if first:
-            self.ui.write_log(f"SYS: {_ANNOUNCE.get(reason, _ANNOUNCE['network'])}")
-            await self._local_say(_ANNOUNCE.get(reason, _ANNOUNCE["network"]))
-
         deadline = time.monotonic() + seconds
         try:
+            if first:
+                self.ui.write_log(f"SYS: {_ANNOUNCE.get(reason, _ANNOUNCE['network'])}")
+                await self._local_say(_ANNOUNCE.get(reason, _ANNOUNCE["network"]))
             with sd.InputStream(
                 samplerate=SEND_SAMPLE_RATE,
                 channels=CHANNELS,
@@ -211,8 +213,11 @@ class LocalFallbackMixin:
                     await self._local_on_frame(frame)
         finally:
             self._local_cancel_turn()
+            tasks = [t for t in (self._local_turn_task, warm) if t is not None]
             if warm is not None and not warm.done():
                 warm.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             self._local_mode_active = False
             self._local_listener.reset()
 
@@ -290,6 +295,16 @@ class LocalFallbackMixin:
             print(f"[LOCAL] Gate blocked: {text!r} — {decision.reason}")
             return
         self.ui.write_log(f"You: {text}")
+        from core.autopilot import MAIN, classify
+
+        autopilot = None
+        if hasattr(self, "_run_autopilot"):
+            autopilot = self._autopilot_confirmation(text) or classify(text)
+        if autopilot is not None and autopilot.lane != MAIN:
+            self._note_user_utterance(text, said_at)
+            self._last_interaction_timestamp = time.time()
+            self._local_turn_task = asyncio.create_task(self._run_autopilot(text, autopilot))
+            return
         if decision.action == "ASK_CLARIFICATION":
             from core.input_safety_gate import CLARIFICATION_PHRASE
 
@@ -304,7 +319,7 @@ class LocalFallbackMixin:
         from core.local_tts import guess_lang, synthesize_best
 
         self.ui.set_state("THINKING")
-        queue: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue()
+        queue: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue(maxsize=4)
         reply: list[str] = []
         fish = self._local_fish_ok()
 
@@ -322,10 +337,14 @@ class LocalFallbackMixin:
                     if self._in_cascade()
                     else "My backup brain isn't responding, sir."
                 )
-                pcm, _ = await synthesize_best(msg, "en", allow_fish=fish)
+                try:
+                    pcm, _ = await synthesize_best(msg, "en", allow_fish=fish)
+                except Exception:
+                    pcm = b""  # a TTS outage must still produce a visible reply
                 await queue.put((msg, pcm))
             finally:
-                await queue.put(None)
+                if not asyncio.current_task().cancelling():
+                    await queue.put(None)
 
         producer = asyncio.create_task(produce())
         try:
@@ -334,24 +353,13 @@ class LocalFallbackMixin:
                 reply.append(sentence)
                 self.ui.write_log(f"Era: {sentence}")
                 await self._local_play(pcm)
-        except asyncio.CancelledError:
-            self._local_brain.cancel()
-            producer.cancel()
-            raise
         finally:
+            self._local_brain.cancel()
+            if not producer.done():
+                producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
             if not self.ui.muted and not self._standby_active:
                 self.ui.set_state("LISTENING")
-            # Board item 19: the SECOND turn boundary. The local brain never
-            # produces a Gemini turn_complete, so without this a failure armed
-            # during a quota outage would sit in the store until the cloud came
-            # back and then be announced into an unrelated conversation.
-            # Guarded because this is a `finally`: an exception raised here would
-            # REPLACE the CancelledError the barge-in path above re-raises, and a
-            # cancelled local turn would stop being cancelled.
-            try:
-                self._flush_failure_notices()
-            except Exception as e:
-                print(f"[era] [RECOVERY] local flush ignored: {e}")
         spoken = " ".join(reply)
         if spoken:
             self._tg_ack(spoken)
@@ -510,7 +518,10 @@ class LocalFallbackMixin:
             )
 
         async def run() -> None:
+            previous = self._local_turn_task
             self._local_cancel_turn()
+            if previous is not None:
+                await asyncio.gather(previous, return_exceptions=True)
             self._local_turn_task = asyncio.create_task(self._local_turn(prompt))
             await asyncio.gather(self._local_turn_task, return_exceptions=True)
 

@@ -49,6 +49,7 @@ STRIPPED_ARGS = ("confirmed", "confirmation_id", "auto_confirm", *sorted(CARRIED
 # unattended on a repeat — open-ended goals, code, other agents, publishing — they
 # need the same approval-or-waiver as a HIGH action. {tool: read-only actions exempt}
 UNATTENDED_REVIEW_TOOLS = {
+    "autonomous_development": ("status",),
     "agent_task": (),
     "agent_browser": (),
     "code_helper": ("explain",),

@@ -71,7 +71,8 @@ from core.llm.toolspec import (
 # logged tracebacks (core/self_heal.py); propose-only until the user enables auto.
 # 52 -> 53 on 2026-09-29: `capability_check` added — answers "what can you do?"
 # from the live declarations instead of from the prompt (acceptance point 3).
-EXPECTED_TOOL_COUNT = 53
+# 53 -> 56: visual_engine, autonomous_development and run_feature.
+EXPECTED_TOOL_COUNT = 56
 
 # Tools declaring at least one required parameter. Pinned for the same reason as
 # EXPECTED_TOOL_COUNT: it is the non-vacuity floor for test_required_sets_survive,
@@ -86,7 +87,8 @@ EXPECTED_TOOL_COUNT = 53
 # 32 -> 33 on 2026-09-16: `protocol_zero` requires `action`, for the same reason.
 # 33 -> 34 on 2026-09-17: `scheduled_task` requires `action`.
 # 36 -> 37 on 2026-09-19: `claude_bridge` requires `action`.
-EXPECTED_TOOLS_WITH_REQUIRED = 37
+# Three new tools each require a command/action/feature_id.
+EXPECTED_TOOLS_WITH_REQUIRED = 40
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "tool_declarations_anthropic.json"
 

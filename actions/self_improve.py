@@ -37,7 +37,6 @@ from actions.self_improve_targets import find_target_files
 from core import lint_feedback
 from core.lint_feedback import Finding
 from core.utils import log
-from core.win_subprocess import NO_WINDOW
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKUP_ROOT = REPO_ROOT / "runtime" / "self_improve" / "backups"
@@ -68,6 +67,29 @@ _PROTECTED_GLOBS = (
 SAFETY_CRITICAL = frozenset(
     {
         "main.py",
+        "app/websocket_server.py",
+        "core/task_scheduler.py",
+        "core/task_store.py",
+        "core/task_chain.py",
+        "tools/test_stability_regressions.py",
+        "tools/test_autopilot.py",
+        "tools/test_task_scheduler_authority.py",
+        "tools/test_visual_engine.py",
+        "tools/test_development.py",
+        "core/development.py",
+        "core/visual_engine.py",
+        "core/feature_engine.py",
+        "tools/era_development_worker.py",
+        "app/hud/api.py",
+        "app/hud/schedule_control.py",
+        "app/tool_declarations.py",
+        "app/era_live/tool_dispatch.py",
+        "core/autopilot.py",
+        "core/autopilot_coding.py",
+        "app/era_live/autopilot.py",
+        "hermes_router.py",
+        "actions/claude_self_improve.py",
+        "core/llm/adapters/claude_cli.py",
         "era_supervisor.py",
         "core/safety_guard.py",
         "core/input_safety_gate.py",
@@ -313,7 +335,6 @@ def _verify(target: Path) -> tuple[list[str], list[Finding]]:
                 cwd=str(REPO_ROOT),
                 encoding="utf-8",
                 errors="replace",
-                creationflags=NO_WINDOW,
             )
             if proc.returncode != 0:
                 tail = (proc.stdout or "").strip().splitlines()[-15:]
@@ -613,6 +634,34 @@ def self_improve(
     generator = str(p.get("generator") or "").lower().strip()
     wants_reload = bool(p.get("reload", False))
 
+    if action == "create":
+        # New source is created only inside an isolated development workspace.
+        # The normal engine cannot turn a tool argument into a live file write.
+        import os
+
+        if os.environ.get("ERA_DEVELOPMENT_STAGE") != str(REPO_ROOT):
+            return "New own-source files must be staged through autonomous_development first."
+        target = (REPO_ROOT / file_path).resolve()
+        if not target.is_relative_to(REPO_ROOT) or target.suffix != ".py" or target.exists():
+            return "Creation refused: require a new repository Python path."
+        relative = target.relative_to(REPO_ROOT)
+        if relative.parts[0] not in {"features", "app", "core", "actions", "tools"} or any(
+            part.startswith(".") for part in relative.parts
+        ):
+            return "Creation refused: protected path."
+        content = p.get("content")
+        if (
+            not isinstance(content, str)
+            or not content.strip()
+            or len(content.encode()) > _MAX_FILE_BYTES
+        ):
+            return "Creation refused: missing or oversized source."
+        compile(content, str(target), "exec")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        out.update(verdict="staged", rel=relative.as_posix(), reload_requested=False)
+        return f"Created staged source {relative.as_posix()}; final verification and approval are still required."
+
     if action == "list_backups":
         return _list_backups()
 
@@ -621,12 +670,6 @@ def self_improve(
         if not matches:
             return "No module of mine matches that — try different feature words."
         return "Files that match:\n" + "\n".join(f"- {rel} (score {s})" for s, rel in matches)
-
-    if action == "locate":
-        # Read-only: area, best file, and the checklist for a brand-new ability.
-        from actions.self_improve_locator import locate
-
-        return locate(description or file_path)
 
     target, status, message = resolve_request(file_path, description)
     if status != "ok":
@@ -651,9 +694,15 @@ def self_improve(
             try:
                 from actions.claude_self_improve import claude_generate_factory
 
-                gen = claude_generate_factory()
+                gen = (
+                    claude_generate_factory(allow_fallback=False)
+                    if p.get("allow_generator_fallback") is False
+                    else claude_generate_factory()
+                )
             except Exception as e:
                 log("SelfImprove", f"claude generator unavailable: {e}")
+                if p.get("allow_generator_fallback") is False:
+                    return "Claude coding is unavailable. No file was changed and no alternate generator was used."
         out["reload_intent"] = wants_reload
         result = _apply(target, description, player, generate=gen, info=out)
         # Requested AND independently vouched for. Both halves matter: the

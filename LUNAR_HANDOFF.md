@@ -1,10 +1,6 @@
 # Era One — Handoff for Lunar
-Updated: 2026-10-02
-Session count: 3
-
-> **Read `TODO.md` first.** Since 2026-09-29 the work is driven by a numbered
-> board there, with evidence for every closed item in `handoff.md`. This file is
-> the map of the system; `TODO.md` is what is actually being worked on.
+Updated: 2026-09-27T18:30:00Z
+Session count: 2
 
 ## What Era One is
 Era One is a Windows desktop AI assistant ("Era") with a live voice/text conversation
@@ -148,7 +144,7 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 - **Obsidian vault (local filesystem)** — `Era One Obsidian vault/`, `core/cm_vault.py` — working — source of truth for CM lane
 - **Star Glass / Bluetooth audio devices** — WinRT via comtypes, `core/audio_*.py` — working — battery read via SetupAPI, not `Get-PnpDevice` (64s vs ~20ms)
 - **Spotify** — window automation + pycaw (exact volume, cached pointer → ~0.04 ms warm) + WinRT GSMTC track data via a persistent PowerShell host (`actions/spotify_gsmtc_host.py`), `actions/spotify_exact.py` — all working, live-verified — the older Spicetify bridge integration is dormant, not this path
-- **git / GitHub** — **LIVE since 2026-09-30**, reversing the 2026-09-25 disable. `.git/HEAD.disabled` is gone (verified 2026-10-02). Remote is the PRIVATE repo `kimuss92/EraOne`; development happens on a `claude/*` branch and Karim pulls it to `C:\Users\nesri\OneDrive\Documents\EraOne` with `git pull origin <branch>`. **`git checkout` is NOT a substitute — once the branch exists locally it is a silent no-op and he sees no new code.** Commit and push are expected, not forbidden; `config/api_keys.json` stays gitignored and blocked by the guard hook
+- **git** — DISABLED 2026-09-25 (`.git/HEAD.disabled` confirmed present) — no commits, no push, no `gh`; do not re-enable without the user asking
 
 ## What is currently working
 - Owner-only voice gate (speaker recognition, fail-closed) gating the mic path
@@ -159,17 +155,10 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 - Task scheduler with fire-time gating, fingerprint waivers, and opt-in catch-up for missed runs
 - `ui.py` (QWebEngineView + React/Vite) as the primary UI shell, driven directly by `main.py` — verified this session, not previously confirmed
 - Separate `app/hud/*` at `127.0.0.1:8765` (token-guarded aiohttp server); Phase 1 modernization landed 2026-09-26 — its relationship to `ui.py`'s HUD is unresolved (see open questions)
-- **Phase 0 stabilization (2026-09-29 → ongoing)**, tracked item-by-item in `TODO.md` with evidence in `handoff.md`. Landed since the last update to this file:
-  - `memory/semantic_recall.py` — recall by MEANING as well as words, via Ollama `all-minilm`. Floors are measured against a FROZEN synthetic corpus (`tools/golden/semantic_recall_store.json`), never the live store, because the live store grows every time Era learns something
-  - `core/turn_latency.py` — one `turn.latency` line per turn breaking the wait into endpoint wait / model think / playback / tool time, so "she responds too late" can be measured instead of argued about
-  - `core/tool_recovery.py` — a failed tool no longer announces itself mid-turn before a workaround can be tried; the notice is held to the turn boundary and cancelled if a retry succeeds
-  - `core/claude_error_router.py` — repeated tool failures are reported to Claude Code by code, with a pending queue so a report is never silently dropped
-  - `actions/self_diagnosis.py` — a provider 5xx is no longer counted as an Era crash (it was forcing a DEGRADED verdict off upstream outages)
 - Netflix control via the player's own JS API (not DOM clicks — a Brave extension strips buttons)
 - Spotify exact control (window-automation lane, NOT the dormant Spicetify bridge): exact per-app volume via pycaw with a cached ISimpleAudioVolume pointer (~0.04 ms warm, live-verified) and track-as-data (title/artist/album/position/duration + exact/relative seek) via WinRT GSMTC through a persistent PowerShell host `actions/spotify_gsmtc_host.py` (live-verified: real track data, `seek_exact` ±0 ms, `spotify_forward`/`spotify_rewind` relative seek) — `actions/spotify_exact.py`, routed through the `spotify_control` tool
 - Spotify Liked Songs / New Releases / Made For You playback AND search-and-play now via UI Automation (`actions/spotify_ui.py`), no pixel clicks: collections navigate by URI (Liked Songs = `spotify:collection:tracks`) or Spotify's alt+shift shortcut. SEARCH enters the query into Spotify's search combobox via **UIA `SetValue`** (`set_search_query`) — focus-independent (writes straight to the element, unlike keystrokes which need OS foreground and misfired) AND shows CLEAN text in the box ("chill music", not "chill+music"); Chromium fires the input event so the live search reacts. Then `invoke_search_result` polls the a11y tree and invokes the result whose "Play <title>" best matches (exact > all-query-words > word overlap > substring, with &/punctuation normalized). It requires a real textual match (level>=1) and NEVER grabs a "top result" with zero word overlap — that only happens when the new results have not rendered yet, so it keeps polling (this was the "viva la vida played a stale leftover track" bug). Live-verified: "bohemian rhapsody"→Queen, "viva la vida"→Coldplay, "blinding lights"→The Weeknd, "chill music"→a chill track. Needs a one-time a11y warm-up walk (Chromium builds its accessibility tree lazily on first UIA access). Fallback: if the search box can't be reached via UIA, `_open_search` uses the `spotify:search:<q>` URI (reliable but renders "+").
-- Git + private GitHub backup (`kimuss92/EraOne`), live since 2026-09-30
-- **A 3-tier regression gate**: `tools/era_gate.py` (`--changed` for the blast radius of a diff, `--all` for ~5,300 tests, ~10-12 min) built on an import-graph reachability map, plus `tools/era_doctor.py` for environment health and `tools/era_manifest.py` for the module map
+- `.git` deliberately disabled; confirmed present as `.git/HEAD.disabled`
 
 ## What is currently broken
 - `era_telegram.py` — a webhook accidentally set on the bot returns 409 and silently kills long-polling; needs manual `doctor` run, no auto-detection yet
@@ -183,45 +172,10 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 - Hermes router (`hermes_dispatch.py`/`hermes_router.py`) — has dedicated tests but zero references from `era_dispatch.py` (verified this session); last source change Jul 24 — looks stalled rather than actively worked, but not confirmed abandoned
 
 ## What is next
-
-`TODO.md` is authoritative and ordered. In short, as of 2026-10-02:
-
-1. **Two live checks are owed by Karim, not by code** — board items 19 and 41.
-   Both mechanisms are built, tested and pushed; what neither can prove from a
-   Linux container is that they behave on his Windows machine. The test scripts
-   are written in plain language in the chat handoff and summarized in `TODO.md`.
-2. **Board item 20** — continuous learning pipeline. The next unstarted item.
-3. **Board item 35b** — one full `python tools/era_gate.py --all` on Windows.
-   Every session so far has run on Linux, and Era is a Windows program.
-4. **Board item 42** — a fresh clone is RED (26 tests) until `tools/era_manifest.py`
-   is run, because `runtime/` is gitignored. The fix is a DECISION — document it as
-   a required first step, or have `conftest.py` generate the manifest when missing.
-   The second is a behaviour change (a test fixture writing a build artifact) and
-   should not be made as a side effect.
-5. **Board item 20b** — the quota ledger was proposed, approved in principle, then
-   NOT built because the measurement came back `engine.quota.exhausted = 1`. Three
-   real defects behind it stand and are recorded. Revisit when that count moves.
-6. **Deliverable 9** — a full `README.md` generated from `runtime/manifest.json`.
-   Unblocked, not started.
-
-Older entries from the 2026-09-27 pass, still open: the `hermes_*` wiring question,
-the `ui.py` vs `app/hud/*` relationship, and the 13 root-level `test_*.py` files.
-
-## How work is done now (changed since the last update)
-
-- Develop on the `claude/*` branch named at the top of `TODO.md`. Commit and push
-  to `kimuss92/EraOne`; Karim pulls with `git pull`, **never `git checkout`**.
-- A board item moves to Done only when something RAN and proved it. "Written" is
-  not "done" — that rule is at the top of `TODO.md` and is enforced in practice.
-- A test is not trusted until it has been seen to FAIL. Revert the fix, watch the
-  test go red, restore. Where that is impractical, mutate the code instead and
-  record how many mutations were caught.
-- A gate failure is ATTRIBUTED, never waved at: run the same suite on a baseline
-  worktree and diff the failure lists. Generate the manifest in that worktree
-  first, or 26 tests fail for its absence and look like your doing.
-- Regenerate the manifest **after** the last edit, not before. A manifest built
-  mid-edit is stale by the time you commit, and `test_committed_artifacts_are_fresh`
-  will catch it.
+1. Determine whether `hermes_dispatch.py`/`hermes_router.py` are called from anywhere (a standalone entry point? a test-only harness?) given `era_dispatch.py` doesn't call them — then decide archive vs. finish-wiring
+2. Clarify the `ui.py` vs. `app/hud/*` relationship: are these two independent UI surfaces serving different purposes (e.g. one is the always-on shell, one is a debug/ops panel), or is one meant to retire the other
+3. Move the 13 root-level `test_*.py` files into `/tests` (or confirm they're intentionally root-pinned) — low risk, but touches `conftest.py` fixture paths, so verify ERA_VAULT_DIR/ERA_LOCK_FILE isolation still holds after the move
+4. Optional optimization: if a `winrt`/`winsdk` CPython 3.14 wheel later ships (today: `winrt` has no distribution, `winsdk` is sdist-only, build-from-source, banned), the PowerShell GSMTC host in `actions/spotify_gsmtc_host.py` could be swapped for an in-process native path to shave the ~cold spawn — not blocking anything, track verbs already work via PowerShell
 
 ## Open questions for Lunar
 1. Should the 13 root-level `test_*.py` files be moved into `/tests` now, or is there a reason (CI, tooling path) they were left at root?
@@ -231,7 +185,7 @@ the `ui.py` vs `app/hud/*` relationship, and the 13 root-level `test_*.py` files
 ## Standing decisions
 1. Spicetify replaces SpotX. Do not propose SpotX again.
 2. Gemini is the fuzzy-fallback brain; regex fast-path stays local. Do not propose cloud STT as default.
-3. ~~`git` is disabled repo-wide~~ — **REVERSED 2026-09-30.** Git and the private GitHub repo `kimuss92/EraOne` are the normal workflow now: develop on the `claude/*` branch named in `TODO.md`, run the gate green, commit with a message that says what was wrong and how it was verified, push. Never commit `memory/*.json` or secrets.
+3. `git` is disabled repo-wide (2026-09-25). No commits, no push, no GitHub, no `gh`. Never re-enable unasked.
 4. CodeCraft quota-failover leg is off by user choice (2026-09-25), independent of the Cascade voice-mode toggle.
 5. `brands.yaml` must be edited with ruamel (round-trip), never plain PyYAML load+dump — plain dump deletes the comments that justify every account id.
 6. Voice-mode preference (Fish vs. Gemini) is a deliberate user choice stored in `voice.json`; automatic fallback must never persist over it (`set_mode(persist=False)`).
@@ -254,7 +208,6 @@ the `ui.py` vs `app/hud/*` relationship, and the 13 root-level `test_*.py` files
 7. Mic path is half-duplex by design (barge-in) — do not "fix" this into full-duplex without the user asking.
 
 ## Session log
-- 2026-10-02 — Phase 0 session. Closed board item 36 (recall floors measured on a frozen corpus: top-1 8/12, top-3 11/12, noise 0/8), board item 19 (a failed tool used to announce itself out loud BEFORE any workaround could be tried — the prompt also promised a recovery layer that structurally cannot exist, since `route_tool_call` is pre-dispatch only and has no parameter a result could arrive in), and board item 41 (Ollama unloads an idle model after 5 min, a cold load costs ~4s, the probe allowed 1.5s — so memory silently dropped to word-matching after every pause and never recovered; fixed with `keep_alive`, a background warm-up off the conversational path, and logging the transition). **Corrected this file's standing decision #3: git is NOT disabled** — it has been the live workflow since 2026-09-30 and the old entry would have stopped the next session pushing anything. Added a "Talking to Karim" rule to `CLAUDE.md` (plain language, always include how to test) and a skills/plugins auto-use table.
 - 2026-09-27 (later still) — Spotify search fix round 3 (clean box, "one for all"): the search box showed "chill+music" because URI nav renders spaces as "+". Fixed by entering the query via UIA `SetValue` on Spotify's search combobox ("What do you want to play?") — clean text + focus-independent (keystroke typing failed on Windows foreground restrictions; argv nav ignored by a running Spotify). Removed the level-0 "top result" fallback from `_best_search_match` — it grabbed the STALE previous-query results before the new ones rendered (played the wrong Coldplay track for "viva la vida"); now requires a real word match and keeps polling. Live-verified 4/5 exact (5th was GSMTC title-read lag, not a miss).
 - 2026-09-27 (later) — Spotify search fix round 2: the "+"-cosmetic fix (Ctrl+L + typewrite) regressed search — Windows foreground restrictions made keystrokes land in the wrong window, leaving stale results (voice "chill music" failed). Reverted search to reliable `spotify:search:` URI navigation (box shows "+", cosmetic) and instead fixed the real gap: `_best_search_match` now does &/punctuation normalization + partial word-overlap scoring + a top-of-screen fallback for vibe queries (so "chill music" plays the top result). Note `minimize spotify after use` is an active standing rule; UIA reads need the window restored (invoke handles this).
 - 2026-09-27 — Spotify seek + content-play: added relative `spotify_forward`/`spotify_rewind` on GSMTC (tokens seek_forward/seek_rewind to dodge the router's next/prev rewrite; live-verified ±1 ms). Fixed Liked Songs / New Releases / Made For You: replaced blind pixel-ratio clicks (broke on resize/layout change) with URI/shortcut navigation + UIA `invoke()` of the primary "Play <context>" button (`actions/spotify_ui.py`) — live-verified Liked Songs + New Releases both play. Chose UIA after verifying (as promised) that Spotify's a11y tree IS reachable once warmed (635 elements incl. "Play Liked Songs"); a naive single walk sees only ~4 chrome buttons, so the helper polls until the tree populates.
@@ -263,8 +216,7 @@ the `ui.py` vs `app/hud/*` relationship, and the 13 root-level `test_*.py` files
 - 2026-09-27 — Created LUNAR_HANDOFF.md for the first time; populated from a live pass over the repo (file counts, requirements, integrations) plus verified existing project memory
 (older entries trimmed)
 
-## How to resume
-1. Open a new session on the repo.
-2. Say: **"Read CLAUDE.md, TODO.md and handoff.md, then continue the Phase 0 board."**
-   Those three files carry the current state; this file is the system map behind them.
-3. Add one sentence saying what you want next, or let the board's order decide.
+## How to resume with Lunar
+1. Open a new session with Lunar.
+2. Paste this entire file as the first message.
+3. Write one sentence: what you want to work on next.

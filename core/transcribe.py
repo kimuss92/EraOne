@@ -33,8 +33,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from core.win_subprocess import NO_WINDOW
-
 # Gemini accepts audio up to a generous size, but a long recording is far more
 # likely to be a misfire (a pocket-dial, a forwarded podcast) than an order.
 _MAX_SECONDS = 300
@@ -100,7 +98,6 @@ def to_wav(src: Path) -> bytes:
             ],
             capture_output=True,
             timeout=120,
-            creationflags=NO_WINDOW,
         )
         if proc.returncode != 0 or not out.is_file():
             detail = (proc.stderr or b"").decode("utf-8", "replace").strip()[:200]

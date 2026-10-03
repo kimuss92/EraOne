@@ -20,6 +20,11 @@ PROMPT = (
 )
 
 
+def _read_exact(path):
+    with path.open(encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
 class FakeModel:
     def __init__(self, reply: str):
         self.reply = reply
@@ -88,7 +93,7 @@ def test_unmatchable_plan_writes_nothing_and_reports_failure(monkeypatch, tmp_pa
 
     result = fp.file_processor({"file_path": str(f), "action": "edit", "instruction": "x"})
 
-    assert f.read_text(encoding="utf-8", newline="") == PROMPT
+    assert _read_exact(f) == PROMPT
     assert not ToolResult.from_any(result).success, result
     assert "20-second" in result
     assert not backups.exists()
@@ -102,7 +107,7 @@ def test_unparseable_plan_is_a_failure_not_a_silent_success(monkeypatch, tmp_pat
     result = fp.file_processor({"file_path": str(f), "action": "fix", "instruction": "15s"})
 
     assert not ToolResult.from_any(result).success, result
-    assert f.read_text(encoding="utf-8", newline="") == PROMPT
+    assert _read_exact(f) == PROMPT
 
 
 def test_typographic_dash_in_file_still_matches(tmp_path):
@@ -181,7 +186,7 @@ def test_repeated_deletion_is_no_change_not_failure(tmp_path):
     first = fp.file_processor(
         {"file_path": str(f), "action": "replace", "find": ITEM_1, "replace": ""}
     )
-    after = f.read_text(encoding="utf-8", newline="")
+    after = _read_exact(f)
     assert ToolResult.from_any(first).success, first
     assert "File System Errors" not in after
 
@@ -190,7 +195,7 @@ def test_repeated_deletion_is_no_change_not_failure(tmp_path):
     )
     assert ToolResult.from_any(again).success, again
     assert again.startswith("No change needed") and "already gone" in again
-    assert f.read_text(encoding="utf-8", newline="") == after
+    assert _read_exact(f) == after
 
 
 def test_repeated_replacement_is_no_change_not_failure(tmp_path):

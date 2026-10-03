@@ -275,16 +275,9 @@ class TestDiagnosisAccuracy:
         )
         monkeypatch.setattr(sd, "_REPO_ROOT", tmp_path)
         real, benign = sd.phase_logs(24)
-        # "Internal error encountered." is Gemini failing on its own side, so as of
-        # 2026-09-30 these are not counted as Era crashes at all — see
-        # TestUpstreamServiceErrors below. The echo dedup is still what keeps it at
-        # ONE per drop rather than two.
-        assert real == [], f"an upstream 5xx was counted as an Era fault: {real}"
+        assert [(r["sig"].split(" ")[0], r["count"]) for r in real] == [("engine.crash", 4)]
         assert any("crash_echo" in b for b in benign)
-        assert sd.suppressed_count(benign, "upstream_service_error") == 4, (
-            f"4 drops must count as 4, not 8 (crash + its echo): {benign}"
-        )
-        assert sd.verdict_for([], "READY", real, benign).startswith("HEALTHY")
+        assert sd.verdict_for([], "READY", real).startswith("HEALTHY WITH ISSUES")
 
     def test_verdict_is_proportionate(self):
         two = [{"sig": "engine.loop.uncaught [ERROR]", "count": 2}]
@@ -537,108 +530,3 @@ class TestWiring:
         for action in ("status", "launch", "list"):
             tool, params = canonicalize_tool_call("protocol_one", {"action": action})
             assert tool == "protocol_one" and params["action"] == action
-
-
-# ── Gemini failing on ITS side is not Era degrading (2026-09-30) ─────────────
-class TestUpstreamServiceErrors:
-    """A Google-side 500 arriving mid-receive() fell through every branch and was
-    logged as a CRITICAL engine.crash. `verdict_for` reads `crashes >= 5` as
-    DEGRADED, so 18 upstream errors in 24h mechanically produced "system
-    integrity degraded" with no defect behind it. Recovery was always correct —
-    only the severity was wrong.
-    """
-
-    def test_an_internal_error_is_not_counted_as_an_era_crash(self):
-        rec = {
-            "event": "engine.crash",
-            "error": "APIError: 500 INTERNAL. Internal error encountered.",
-        }
-        klass, why = sd._classify(rec["event"], "CRITICAL", rec, json.dumps(rec))
-        assert klass == "upstream_service_error"
-        assert "reconnect" in why
-
-    def test_the_quiet_event_is_classified_too(self):
-        rec = {"event": "engine.upstream.error", "error": "503 UNAVAILABLE: overloaded"}
-        assert sd._classify(rec["event"], "WARNING", rec, json.dumps(rec))[0] == (
-            "upstream_service_error"
-        )
-
-    def test_quota_is_never_dismissed_as_a_transient_blip(self):
-        """Quota needs a key rotation or a long cooldown, not a reconnect. The
-        marker list it shares with core.ai_provider vetoes quota first, and this
-        pins that the veto survives the sharing."""
-        assert sd._is_upstream_text("429 RESOURCE_EXHAUSTED: quota exceeded") is False
-        rec = {"event": "engine.crash", "error": "429 RESOURCE_EXHAUSTED quota"}
-        got = sd._classify(rec["event"], "CRITICAL", rec, json.dumps(rec))
-        assert got is None or got[0] != "upstream_service_error"
-
-    def test_a_group_holding_a_real_fault_stays_visible(self):
-        """Same all-leaves rule as network blips: a PortAudioError riding along
-        with a 503 is a real audio fault and must not be dismissed."""
-        rec = {
-            "event": "engine.crash",
-            "leaf_errors": [
-                "APIError: 503 UNAVAILABLE",
-                "PortAudioError: There is no driver installed",
-            ],
-        }
-        assert sd._classify(rec["event"], "CRITICAL", rec, json.dumps(rec)) is None
-
-    def test_a_real_engine_fault_is_still_a_crash(self):
-        rec = {"event": "engine.crash", "error": "KeyError: 'turn_complete'"}
-        assert sd._classify(rec["event"], "CRITICAL", rec, json.dumps(rec)) is None
-
-    def test_the_rate_is_still_surfaced_after_the_demotion(self):
-        """The cost of dismissing something: 18 recovered drops is still 18
-        interrupted conversations. Demoting the severity must not trade one false
-        alarm for one blind spot."""
-        suppressed = [f"{sd._UPSTREAM_RATE_NOTE}x  upstream_service_error — recovered"]
-        got = sd.verdict_for([], "READY", [], suppressed)
-        assert got.startswith("HEALTHY WITH ISSUES")
-        assert "upstream provider errors" in got
-        assert "DEGRADED" not in got, "recovered upstream errors are not degraded integrity"
-
-    def test_a_handful_of_upstream_errors_stays_quiet(self):
-        suppressed = ["3x  upstream_service_error — recovered"]
-        assert sd.verdict_for([], "READY", [], suppressed) == "HEALTHY — no unexplained errors"
-
-    def test_the_rate_signal_reads_what_phase_logs_writes(self, tmp_path, monkeypatch):
-        """Producer and consumer of the "{n}x  {cls}" line are pinned together, so
-        the format cannot drift and silently zero the rate signal."""
-        now = datetime.now(UTC)
-        lines = [
-            {
-                "ts": (now - timedelta(minutes=i)).isoformat(),
-                "level": "WARNING",
-                "event": "engine.upstream.error",
-                "error": "500 Internal error encountered.",
-            }
-            for i in range(5)
-        ]
-        (tmp_path / "logs").mkdir()
-        (tmp_path / "logs" / "era.log").write_text(
-            "\n".join(json.dumps(x) for x in lines), encoding="utf-8"
-        )
-        monkeypatch.setattr(sd, "_REPO_ROOT", tmp_path)
-        _real, benign = sd.phase_logs(24)
-        assert sd.suppressed_count(benign, "upstream_service_error") == 5
-
-    def test_the_live_severity_gate_agrees_with_the_classifier(self):
-        """The two must not drift: the Live session decides severity on exception
-        OBJECTS, self-diagnosis on LOGGED TEXT, and they share one marker list."""
-        from app.era_live.reconnect_mixin import ReconnectMixin
-
-        upstream = RuntimeError("APIError: 500 INTERNAL. Internal error encountered.")
-        assert ReconnectMixin._is_upstream_service_error(upstream) is True
-        assert ReconnectMixin._is_upstream_service_error(RuntimeError("KeyError: nope")) is False
-        # quota is not an upstream blip on either side
-        assert (
-            ReconnectMixin._is_upstream_service_error(RuntimeError("429 RESOURCE_EXHAUSTED quota"))
-            is False
-        )
-        # and an ExceptionGroup with one real fault stays loud
-        group = ExceptionGroup(
-            "boom",
-            [RuntimeError("503 UNAVAILABLE"), RuntimeError("PortAudioError: no driver")],
-        )
-        assert ReconnectMixin._is_upstream_service_error(group) is False

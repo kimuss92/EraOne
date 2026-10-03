@@ -299,7 +299,14 @@ class AudioIOMixin:
 
     async def _listen_audio(self):
         print("[era] [MIC] Mic started")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        # Capture THIS connection's queues. A late PortAudio callback must not
+        # put old speech into a replacement session's queue.
+        outgoing = self.out_queue
+
+        def enqueue(queue, item):
+            if queue is not None and not queue.full():
+                queue.put_nowait(item)
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
@@ -326,7 +333,10 @@ class AudioIOMixin:
                     return
                 if self._wake_queue is not None:
                     data = indata.tobytes()
-                    loop.call_soon_threadsafe(self._wake_queue.put_nowait, data)
+                    try:
+                        loop.call_soon_threadsafe(enqueue, self._wake_queue, data)
+                    except RuntimeError:
+                        pass  # event loop already shutting down
                 else:
                     now_ts = time.time()
                     if now_ts - self._last_wake_queue_missing_log_ts > 5.0:
@@ -377,64 +387,41 @@ class AudioIOMixin:
                 try:
                     # Thread-safe try-push without exploding if the loop lags
                     loop.call_soon_threadsafe(
-                        lambda: (
-                            self.out_queue.put_nowait(
-                                {"data": data, "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}"}
-                            )
-                            if not self.out_queue.full()
-                            else None
-                        )
+                        enqueue,
+                        outgoing,
+                        {"data": data, "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}"},
                     )
                 except Exception:
                     pass
 
-        try:
-            with sd.InputStream(
-                samplerate=SEND_SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=CHUNK_SIZE,
-                callback=callback,
-            ):
-                print("[era] [MIC] Mic stream open")
-                while True:
-                    if self._go_away_event.is_set():
-                        break
-                    await asyncio.sleep(0.1)
-        except Exception as e:
-            print(f"[era] [ERROR] Mic: {e}")
-            raise
-
-    def _log_turn_latency(self) -> None:
-        """One structured line per turn saying where the wait went. (Item 22.)
-
-        The configured `silence_ms` rides along with the measured
-        `endpoint_wait_ms` so the two can be compared — that comparison is the
-        whole point, because it is what separates "Era is being patient, turn
-        the dial" from "the model is slow, the dial will not help". See
-        core/turn_latency.py.
-
-        The tracker is reset in a `finally`: a turn that logged nothing must not
-        leak its marks into the next one and report a latency of several turns.
-        """
-        from core.turn_latency import enabled as latency_enabled
-
-        try:
-            if not latency_enabled():
-                return
-            silence_ms = None
+        retry_delay = 1.0
+        while not self._go_away_event.is_set() and not self._shutdown_requested:
             try:
-                from core.vad import get_endpointing_config
-
-                ep = get_endpointing_config()
-                silence_ms = ep["silence_ms"] if ep.get("enabled") else None
-            except Exception:
-                pass
-            summary = self.turn_latency.summary(silence_ms=silence_ms)
-            if summary:
-                log_event(main_logger, "turn.latency", "INFO", **summary)
-        finally:
-            self.turn_latency.reset()
+                with sd.InputStream(
+                    samplerate=SEND_SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="int16",
+                    blocksize=CHUNK_SIZE,
+                    callback=callback,
+                ) as stream:
+                    print("[era] [MIC] Mic stream open")
+                    retry_delay = 1.0
+                    while not self._go_away_event.is_set() and not self._shutdown_requested:
+                        if getattr(stream, "active", True) is False:
+                            raise sd.PortAudioError("Microphone stream became inactive")
+                        await asyncio.sleep(0.1)
+            except (sd.PortAudioError, OSError) as e:
+                # A missing/unplugged mic is local. Keep the Live connection and
+                # typed commands working while retrying just the input device.
+                print(f"[era] [MIC] Device unavailable; retrying in {retry_delay:.0f}s: {e}")
+                self.ui.write_log(
+                    "SYS: Microphone unavailable; typed commands still work. Retrying audio input."
+                )
+                try:
+                    await asyncio.wait_for(self._go_away_event.wait(), timeout=retry_delay)
+                except TimeoutError:
+                    pass
+                retry_delay = min(retry_delay * 2.0, 8.0)
 
     async def _receive_audio(self):
         print("[era] [RECV] Recv started")
@@ -445,7 +432,9 @@ class AudioIOMixin:
 
         try:
             while True:
+                received = False
                 async for response in self.session.receive():
+                    received = True
                     # Any message from the Live session (audio, transcript,
                     # tool call, ...) is genuine activity. Without this, a
                     # voice-only session never touches
@@ -521,10 +510,6 @@ class AudioIOMixin:
                         # heard anything — core/live_turn_state.py explains why
                         # that distinction is the whole recovery decision.
                         self.live_turn.note_audio_received(len(response.data))
-                        # First byte of the answer = she started answering
-                        # (board item 22). Idempotent, so the stream of later
-                        # chunks costs nothing and cannot move the mark.
-                        self.turn_latency.note_model_output()
                         if self._turn_done_event and self._turn_done_event.is_set():
                             self._turn_done_event.clear()
                         # Swallow Gemini's audio while a CM hand-off window is
@@ -565,7 +550,6 @@ class AudioIOMixin:
                             # Recorded so the reconnect never "finishes" a turn
                             # they chose to stop.
                             self.live_turn.note_interrupted()
-                            self.turn_latency.note_interrupted()
                             self._barge_in_requested = True
                             hud.barge_in("model")
                             self._flush_audio_in_queue()
@@ -576,12 +560,6 @@ class AudioIOMixin:
                                 out_buf.append(txt)
                                 self._live_turn_text = " ".join(out_buf)  # for barge-in resume
                                 self.live_turn.note_text(txt)
-                                # Also "she started answering": in the
-                                # transcript-synthesis voice modes Gemini's own
-                                # audio is discarded above, so TEXT is the first
-                                # sign of the answer and response.data may never
-                                # come at all. Idempotent with the audio mark.
-                                self.turn_latency.note_model_output()
                                 hud.response_delta(txt)
                                 # ── fish_audio: the TRANSCRIPT is the speech ──
                                 # Gemini's own audio was discarded above, so this
@@ -609,13 +587,6 @@ class AudioIOMixin:
                                 # continuation we were about to send: a recovered
                                 # answer must never be spoken over a live human.
                                 self.live_turn.note_user_speaking(True)
-                                # Board item 22: the transcript streams while the
-                                # user talks, so the LAST delta is the closest
-                                # thing Era has to "they stopped making sound" —
-                                # the local VAD only runs while SHE is speaking.
-                                # See core/turn_latency.py on why that makes
-                                # endpoint_wait_ms a proxy, not a measurement.
-                                self.turn_latency.note_user_delta()
                                 self._user_spoke_since_drop = True
                                 if not in_buf:
                                     # When the user STARTED saying it: a gate asking
@@ -648,9 +619,6 @@ class AudioIOMixin:
                             and in_buf
                         ):
                             hud.user_speech_finished(" ".join(in_buf))
-                            # The endpointing wait ended here: everything after
-                            # this is the model, not Era's patience (item 22).
-                            self.turn_latency.note_user_finished()
 
                         # ── The model finished the ANSWER ──
                         # Distinct from turn_complete, which also fires when the
@@ -859,27 +827,6 @@ class AudioIOMixin:
                             # so a later drop cannot inherit this turn's verdict.
                             self.live_turn.note_turn_complete()
                             self.live_turn.reset()
-                            # Board item 22: one line per turn saying where the
-                            # time went. Emitted HERE, beside live_turn's own
-                            # reset, so the two can never drift out of step over
-                            # what counts as a turn boundary. Never load-bearing:
-                            # any fault in measuring is swallowed, because the
-                            # alternative is diagnostics that end the session.
-                            try:
-                                self._log_turn_latency()
-                            except Exception as e:
-                                print(f"[era] [LATENCY] ignored: {e}")
-                            # Board item 19: the turn is over, so whatever it did
-                            # not recover from is now worth saying. Deliberately
-                            # AFTER the model's own reply has been generated —
-                            # that ordering is the entire point of deferring it.
-                            # Wrapped although the method already swallows its
-                            # own faults: this is the receive loop, and an
-                            # exception escaping here costs Era her hearing.
-                            try:
-                                self._flush_failure_notices()
-                            except Exception as e:
-                                print(f"[era] [RECOVERY] flush ignored: {e}")
                             # The fallback window for this turn is over; release the
                             # held Gemini audio so it can never play late.
                             self._clear_cloud_audio_buffer()
@@ -913,6 +860,10 @@ class AudioIOMixin:
                 # Exit outer loop on GoAway — lets TaskGroup unwind cleanly
                 if self._go_away_event.is_set():
                     break
+                if not received:
+                    # A closed stream returning immediately otherwise spins at
+                    # 100% CPU and never gives the reconnect loop an error.
+                    raise ConnectionError("Live receive stream ended without messages")
 
         except Exception as e:
             # Gemini's routine ~2.5 min Live-session rotation (1008 policy
@@ -931,24 +882,6 @@ class AudioIOMixin:
                 log_event(
                     main_logger,
                     "engine.network.blip",
-                    "WARNING",
-                    source="receive_audio",
-                    error_type=type(e).__name__,
-                    error=str(e)[:200],
-                )
-            elif self._is_upstream_service_error(e):
-                # Gemini failed on its own side (500 "Internal error encountered",
-                # 503, overloaded). run()'s handler reconnects exactly as it does
-                # for a rotation or a blip, so this was never a crash — but it
-                # fell through to log_crash below and minted a CRITICAL
-                # engine.crash per occurrence, which is what drove self-diagnosis
-                # to DEGRADED on 2026-09-30 with nothing wrong. Kept as its own
-                # event, NOT engine.network.blip: an upstream outage and a bad
-                # Wi-Fi connection need to stay countable apart.
-                print(f"[era] [UPSTREAM] Recv: Gemini service error ({e}); reconnecting.")
-                log_event(
-                    main_logger,
-                    "engine.upstream.error",
                     "WARNING",
                     source="receive_audio",
                     error_type=type(e).__name__,
@@ -1294,11 +1227,6 @@ class AudioIOMixin:
                 # kill it. Diagnostics are never load-bearing.
                 try:
                     self.live_turn.note_audio_played(len(chunk))
-                    # The first byte the user could actually HEAR — the end of
-                    # the wait they are complaining about (item 22). Inside the
-                    # same guard, for the reason written directly above: a
-                    # counter must never be able to kill the session.
-                    self.turn_latency.note_audio_played()
                 except Exception:
                     pass
         except Exception as e:
@@ -1311,6 +1239,10 @@ class AudioIOMixin:
             # a pending task at teardown is an "Task was destroyed but it is
             # pending" warning, and inside a TaskGroup an unretrieved failure is
             # worse than noise.
-            if reclaim_probe is not None and not reclaim_probe.done():
-                reclaim_probe.cancel()
+            probes = [p for p in (reclaim_probe, reenum_probe) if p is not None]
+            for probe in probes:
+                if not probe.done():
+                    probe.cancel()
+            if probes:
+                await asyncio.gather(*probes, return_exceptions=True)
             output.close()  # swallows stop/close errors from a vanished device

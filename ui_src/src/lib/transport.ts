@@ -239,6 +239,15 @@ function onEvent(e: AgentEvent): void {
   const md = (e.metadata || {}) as Record<string, any>;
   noticeFromEvent(e);
   switch (e.type) {
+    case 'visual.changed':
+      window.dispatchEvent(new Event('era:visual'));
+      break;
+    case 'development.changed':
+      window.dispatchEvent(new Event('era:development'));
+      break;
+    case 'schedule.changed':
+      window.dispatchEvent(new Event('era:schedule'));
+      break;
     case 'agent.state.changed':
       if (e.seq > lastStateSeq) {
         lastStateSeq = e.seq;

@@ -174,6 +174,8 @@ def scheduled_task_state() -> str | None:
 
 
 def autostart_status() -> dict:
+    if not os.environ.get("APPDATA"):
+        return {"startup_shortcut": False, "scheduled_task": None, "enabled": False}
     lnk = startup_dir() / f"{APP_NAME}.lnk"
     task = scheduled_task_state()
     return {

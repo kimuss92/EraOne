@@ -9,6 +9,8 @@ requests
 beautifulsoup4
 ddgs
 playwright
+rapidfuzz
+PyYAML
 pyautogui
 pyperclip
 pygetwindow
@@ -18,12 +20,12 @@ numpy
 mss
 psutil
 nvidia-ml-py
-comtypes
-pycaw
-win10toast
+comtypes; platform_system == "Windows"
+pycaw; platform_system == "Windows"
+win10toast; platform_system == "Windows"
 send2trash
 youtube-transcript-api
-pywinauto
+pywinauto; platform_system == "Windows"
 python-pptx
 python-docx
 pandas
@@ -50,3 +52,6 @@ google-api-python-client
 google-auth
 google-auth-oauthlib
 pywin32; platform_system == "Windows"
+
+# Candidate verification
+ruff>=0.12,<1

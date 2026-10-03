@@ -41,6 +41,8 @@ def _epoch(value: Any) -> float | None:
 
 
 def _row(task: dict, running: bool, live_next_run, describe_action) -> dict:
+    from app.hud.schedule_control import preview, version
+
     schedule = task.get("schedule") or {}
     enabled = bool(task.get("enabled"))
     live = live_next_run(task["id"]) if running and enabled else None
@@ -55,6 +57,9 @@ def _row(task: dict, running: bool, live_next_run, describe_action) -> dict:
     except Exception:
         summary = ""
     return {
+        "version": version(task),
+        "preview": preview(task)[:12000],
+        "previewComplete": len(preview(task)) <= 12000,
         "id": str(task.get("id", "")),
         "name": _clip(task.get("name"), 60),
         "kind": str(task.get("kind") or "tool"),

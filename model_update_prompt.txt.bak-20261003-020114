@@ -1,0 +1,5 @@
+Claude, I am encountering a persistent "404 NOT_FOUND" error when attempting to generate code proposals using the `self_improve` tool. The error message indicates that the model 'gemini-2.5-flash' is no longer available; please use the specified replacement model. This error is triggered because an outdated model version is hardcoded or configured somewhere within the Era One codebase, which breaks standard procedure and requires immediate remote correction.
+
+I need you to scan the Era One source files and update every instance of this outdated model (and any other similarly deprecated models) to standard, supporting your ability to self-improve. Relevant files may include `app/era_live/model_route.py` or other configuration files, but you should check all potential locations.
+
+Additionally, it is crucial that you demonstrate dynamic knowledge of the entire repository structure and individual file paths. Use this comprehensive understanding to pinpoint precisely where the model versions are declared. You must autonomously locate, modify, or add improvements to any part of the file system required to solve this issue and ensure system stability.

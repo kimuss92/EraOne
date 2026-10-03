@@ -59,6 +59,11 @@ class HudApi:
         r.add_post("/api/settings", self.post_settings)
         r.add_get("/api/weather", self.weather)
         r.add_get("/api/schedule", self.schedule)
+        r.add_post("/api/schedule/action", self.schedule_action)
+        r.add_get("/api/visual", self.visual)
+        r.add_post("/api/visual", self.visual_update)
+        r.add_get("/api/development", self.development)
+        r.add_post("/api/development", self.development_action)
         r.add_get("/api/diagnostics", self.diagnostics)
         r.add_post("/api/message", self.message)
         r.add_post("/api/interrupt", self.interrupt)
@@ -110,6 +115,73 @@ class HudApi:
 
     async def schedule(self, _r: web.Request):
         return web.json_response(await asyncio.to_thread(schedule_view.snapshot), dumps=_dumps)
+
+    async def schedule_action(self, r: web.Request):
+        self._need_engine()
+        from app.hud.schedule_control import control
+        from core.task_scheduler import TaskError
+
+        try:
+            result = await asyncio.to_thread(control, await _json_body(r))
+            hud._emit("schedule.changed")
+            return web.json_response(result, dumps=_dumps)
+        except (ValueError, TaskError) as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+
+    async def visual(self, _r: web.Request):
+        import hashlib
+
+        from core import visual_engine
+
+        data = await asyncio.to_thread(visual_engine.snapshot)
+        from app.websocket_server import DIST_INDEX
+
+        data["bundle"] = await asyncio.to_thread(
+            lambda: (
+                hashlib.sha256(DIST_INDEX.read_bytes()).hexdigest()[:16]
+                if DIST_INDEX.exists()
+                else ""
+            )
+        )
+        return web.json_response(data)
+
+    async def visual_update(self, r: web.Request):
+        from core import visual_engine
+
+        try:
+            return web.json_response(
+                await asyncio.to_thread(visual_engine.apply, await _json_body(r))
+            )
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def development(self, _r: web.Request):
+        from core import development
+
+        return web.json_response({"jobs": await asyncio.to_thread(development.list_jobs)})
+
+    async def development_action(self, r: web.Request):
+        self._need_engine()
+        from core import development
+
+        body = await _json_body(r)
+        try:
+            if body.get("action") == "propose":
+                result = await asyncio.to_thread(development.propose, body.get("request", ""))
+            elif body.get("action") == "approve":
+                result = await asyncio.to_thread(
+                    development.activate,
+                    body.get("id"),
+                    body.get("approval"),
+                    confirmed=body.get("confirmed"),
+                )
+            elif body.get("action") == "reject":
+                result = await asyncio.to_thread(development.reject, body.get("id"))
+            else:
+                raise ValueError("Use propose, approve, or reject")
+            return web.json_response(result)
+        except (ValueError, OSError) as exc:
+            return web.json_response({"error": str(exc)}, status=409)
 
     async def memory_search(self, r: web.Request):
         q = (r.query.get("q") or "").strip()

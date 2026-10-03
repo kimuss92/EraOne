@@ -1,0 +1,13 @@
+# Core versions exercised during the stability audit. Windows-only packages
+# still need verification on the target PC; this is not a complete lock file.
+google-genai==2.28.0
+httpx==0.28.1
+aiohttp==3.13.5
+sounddevice==0.5.6
+playwright==1.63.0
+rapidfuzz==3.14.6
+websockets==16.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-timeout==2.4.0
+sherpa-onnx==1.13.8

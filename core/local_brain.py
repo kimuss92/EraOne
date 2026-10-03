@@ -26,6 +26,7 @@ SHORT MEMORY
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import re
 import threading
@@ -34,7 +35,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from core.llm.types import LlmRequest, PromptBlock, StreamEvent
+from core.llm.types import LlmError, LlmRequest, PromptBlock, StreamEvent
 from core.local_tool_calls import (  # noqa: F401  (re-exported for callers/tests)
     _ASK_YES,
     CONFIRM_TOOLS,
@@ -228,25 +229,79 @@ class LocalBrain:
         )
         self._active_request = request.request_id
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue(maxsize=64)
+        stopped = threading.Event()
+        provider_done = threading.Event()
+        deadline = loop.time() + max(0.01, self._timeout_s)
+
+        def publish(event: StreamEvent | None) -> bool:
+            # Backpressure belongs on the provider thread, never the voice loop.
+            if stopped.is_set() or loop.is_closed():
+                return False
+            coro = queue.put(event)
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                coro.close()
+                return False
+            while not stopped.is_set():
+                try:
+                    future.result(timeout=0.1)
+                    return True
+                except concurrent.futures.TimeoutError:
+                    continue
+                except (concurrent.futures.CancelledError, RuntimeError):
+                    return False
+            future.cancel()
+            return False
 
         def pump() -> None:
+            error = None
             try:
                 for ev in self._provider.stream(request):
-                    loop.call_soon_threadsafe(queue.put_nowait, ev)
+                    if not publish(ev):
+                        break
+            except Exception as exc:
+                error = (
+                    exc
+                    if isinstance(exc, LlmError)
+                    else LlmError(
+                        "invalid_response",
+                        f"Model stream failed ({type(exc).__name__})",
+                        alias=self._alias,
+                    )
+                )
             finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                provider_done.set()
+                if error is not None:
+                    publish(StreamEvent(kind="error", error=error))
+                publish(None)
 
         worker = threading.Thread(target=pump, name="era-local-brain", daemon=True)
         worker.start()
         try:
-            while True:
-                ev = await queue.get()
+            while not self._cancel.is_set():
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise LlmError("timeout", "Model response deadline exceeded", alias=self._alias)
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=min(0.1, remaining))
+                except TimeoutError:
+                    continue
                 if ev is None:
                     return
+                if ev.kind == "error" and ev.error is not None:
+                    raise ev.error
                 yield ev
         finally:
-            self._active_request = ""
+            stopped.set()
+            if not provider_done.is_set():
+                try:
+                    self._provider.cancel(request.request_id)
+                except Exception:
+                    pass
+            if self._active_request == request.request_id:
+                self._active_request = ""
 
     # -- a full turn ---------------------------------------------------------
     async def respond(

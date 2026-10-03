@@ -52,11 +52,6 @@ def test_apply_routes_through_claude_generator(sandbox, monkeypatch):
         return "def broken(:\n"
 
     monkeypatch.setattr(cs, "_generate_via_claude_cli", fake_generate)
-    # The repair pass after a failed verify calls the REAL model. With a working
-    # key it simply fixed the broken code and the apply succeeded, so this test
-    # passed only on machines where no model was reachable. A repair that fails
-    # to fix anything is the case under test, so say so.
-    monkeypatch.setattr(si, "_generate_repair", lambda *a, **k: "def broken(:\n")
 
     result = si.self_improve(
         {

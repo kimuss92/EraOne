@@ -1,0 +1,16 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> react-vite-tailwind@0.0.0 build
+> vite build
+
+vite v7.3.2 building client environment for production...
+transforming...
+✓ 1806 modules transformed.
+rendering chunks...
+[plugin vite:singlefile] 
+
+[plugin vite:singlefile] Inlining: index-yaN7ZNLa.js
+[plugin vite:singlefile] Inlining: style-C1Wvr_J9.css
+computing gzip size...
+../ui/dist/index.html  478.70 kB │ gzip: 200.76 kB
+✓ built in 1.63s

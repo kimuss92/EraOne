@@ -56,7 +56,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.utils import get_music_api_key  # noqa: E402
-from core.win_subprocess import NO_WINDOW
 
 # Lyria RealTime's public model id on the Gemini Developer API (NOT Vertex AI —
 # the SDK's live.music.connect() explicitly raises NotImplementedError under
@@ -188,7 +187,6 @@ def _transcode_if_needed(wav_path: Path, final_path: Path) -> Path:
         capture_output=True,
         text=True,
         timeout=120,
-        creationflags=NO_WINDOW,
     )
     if result.returncode != 0:
         raise MusicGenerationError(

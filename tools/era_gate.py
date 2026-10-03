@@ -72,7 +72,7 @@ SLOW_FILES: tuple[str, ...] = (
 
 def load_manifest() -> dict:
     if not MANIFEST.exists():
-        raise SystemExit(
+        raise FileNotFoundError(
             f"{MANIFEST.relative_to(REPO)} is missing. Run: python tools/era_manifest.py"
         )
     return json.loads(MANIFEST.read_text(encoding="utf-8"))

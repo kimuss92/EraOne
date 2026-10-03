@@ -203,44 +203,6 @@ def test_the_confidence_floor_is_where_the_measurement_put_it():
     )
 
 
-# ── part-of-a-feature words: "HUD interface" is app/hud/api.py ─────────────
-
-# Plain-language requests that name a feature AND one of its parts. None of them
-# spells the filename; each must still land on the one module that part lives in.
-PART_REQUESTS = [
-    ("improve the HUD interface", "app/hud/api.py"),
-    ("make the HUD endpoints faster", "app/hud/api.py"),
-    ("improve the HUD preferences", "app/hud/settings.py"),
-    ("improve the HUD health checks", "app/hud/status.py"),
-    ("fix the HUD event stream", "app/hud/events.py"),
-]
-
-
-@pytest.mark.parametrize("desc, expected", PART_REQUESTS)
-def test_a_feature_plus_one_of_its_parts_resolves_to_that_part(desc, expected):
-    target, status, msg = resolve_request("", desc)
-    assert status == "ok", f"{status}: {msg}"
-    assert target.as_posix().endswith(expected)
-
-
-def test_aliases_never_lower_the_confidence_floor():
-    """An alias is evidence, not a waiver: the bare feature name (one word) and
-    a part word with no feature (also one word) must both still be refused."""
-    for desc in ("improve the HUD", "improve the interface", "improve the preferences"):
-        _t, status, _m = resolve_request("", desc)
-        assert status != "ok", f"{desc!r} resolved on a single word"
-
-
-def test_every_alias_target_is_a_real_module_name():
-    """An alias pointing at a word no module has is dead weight that reads like
-    coverage. Rename a module and this says which alias to fix."""
-    from actions.self_improve_targets import _PART_ALIASES
-
-    names = set().union(*(_name_tokens(p) for p in _candidate_files()))
-    dead = {w for targets in _PART_ALIASES.values() for w in targets} - names
-    assert not dead, f"aliases point at names no module has: {sorted(dead)}"
-
-
 # ── the manifest is the source, and it degrades safely ─────────────────────
 
 

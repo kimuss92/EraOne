@@ -55,6 +55,11 @@ def test_committed_artifacts_are_fresh(data: dict) -> None:
     )
 
 
+def test_transient_verifier_source_does_not_change_manifest(data: dict) -> None:
+    assert era_manifest._excluded(era_manifest.REPO / "tools" / "_verifier_selftest.py")
+    assert not any(m["path"] == "tools/_verifier_selftest.py" for m in data["modules"])
+
+
 def test_every_declared_tool_has_an_implementation(data: dict) -> None:
     """Era cannot be offered a tool the index cannot point at.
 

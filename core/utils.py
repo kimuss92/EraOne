@@ -1,9 +1,11 @@
 # core/utils.py
 import json
+import math
+import ntpath
 import os
 import platform
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 # ----------------------------------------------------------------------
@@ -19,6 +21,21 @@ def get_base_dir() -> Path:
 BASE_DIR = get_base_dir()
 CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 API_CONFIG_PATH = CONFIG_PATH
+
+
+def env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    """Ignore malformed/nonfinite timing overrides rather than crash or hot-loop."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+        if math.isfinite(value) and minimum <= value <= maximum:
+            return value
+    except ValueError:
+        pass
+    print(f"[era] [CONFIG] Invalid {name}; using the default.")
+    return default
 
 
 def get_memory_dir() -> Path:
@@ -58,17 +75,15 @@ def get_config_dir() -> Path:
 def load_config() -> dict:
     """Load the API keys / settings JSON file."""
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
 def get_api_key() -> str:
     """Retrieve the primary Gemini API key from config."""
-    key = load_config().get("gemini_api_key", "")
-    if not key:
-        raise RuntimeError("gemini_api_key not found in config/api_keys.json")
-    return key
+    return get_api_keys()[0]
 
 
 # Config keys searched, in order, for Live-session credentials. The first is the
@@ -103,8 +118,19 @@ def get_api_keys() -> list[str]:
     keys: list[str] = []
 
     def _add(value) -> None:
-        if isinstance(value, str) and value.strip() and value.strip() not in keys:
-            keys.append(value.strip())
+        if not isinstance(value, str):
+            return
+        value = value.strip()
+        upper = value.upper()
+        if (
+            not value
+            or upper in {"PLACEHOLDER", "CHANGE_ME"}
+            or upper.startswith("YOUR_")
+            or value.startswith("<")
+        ):
+            return
+        if value not in keys:
+            keys.append(value)
 
     for name in _LIVE_KEY_NAMES:
         _add(cfg.get(name, ""))
@@ -439,6 +465,28 @@ def _get_local_drives() -> list[Path]:
 LOCAL_DRIVES: list[Path] = _get_local_drives()
 
 
+def is_windows_system_path(target: str | Path, *, include_app_data: bool = False) -> bool:
+    # Windows paths in a task/imported record must retain their system-path
+    # meaning on a non-Windows validator; POSIX resolve() would treat C:\\Windows
+    # as a harmless relative filename inside this repo.
+    raw = str(target)
+    if ntpath.isabs(raw) and ntpath.splitdrive(raw)[0]:
+        windows_target = PureWindowsPath(ntpath.normpath(raw))
+        for root in (
+            os.environ.get("WINDIR", r"C:\Windows"),
+            os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+            os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+            *(
+                os.environ.get(name, "")
+                for name in ("APPDATA", "LOCALAPPDATA", "PROGRAMDATA")
+                if include_app_data
+            ),
+        ):
+            if root and windows_target.is_relative_to(PureWindowsPath(root)):
+                return True
+    return False
+
+
 def is_safe_path(target: str | Path, allow_protected: bool = False) -> bool:
     """Return True only for paths inside allowed user/project roots.
 
@@ -447,6 +495,8 @@ def is_safe_path(target: str | Path, allow_protected: bool = False) -> bool:
     When allow_protected=True (for read-only open action), AppData/ProgramData
     paths on local drives are allowed, but Windows/Program Files remain blocked.
     """
+    if is_windows_system_path(target):
+        return False
     try:
         resolved = _resolve_existing_or_parent(Path(target))
     except Exception:

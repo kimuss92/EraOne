@@ -82,6 +82,7 @@ FIRST_PARTY = {
     "agent",
     "app",
     "core",
+    "features",
     "memory",
     "src",
     "tools",
@@ -106,6 +107,11 @@ FIRST_PARTY_ROOT_MODULES = {
 
 
 def _excluded(path: Path) -> bool:
+    # Self-improvement tests temporarily create this fake source in the repo.
+    # It is not a shipped capability and must not make the manifest drift while
+    # verification is running (or if a killed test leaves the fixture behind).
+    if path.relative_to(REPO).as_posix() == "tools/_verifier_selftest.py":
+        return True
     for part in path.relative_to(REPO).parts:
         if part in EXCLUDE_DIRS or part.startswith(EXCLUDE_PREFIXES):
             return True
@@ -366,13 +372,6 @@ def build(_argv: list[str] | None = None) -> dict[str, Any]:
             "source_lines": sum(m["lines"] for m in source_modules),
         },
         "capabilities": load_capabilities(),
-        # Carried in the data so a RUNTIME reader (actions/self_improve_locator.py)
-        # routes a request by the same hand-curated table the markdown map prints.
-        # `tools/` is not a package Era imports, and a second copy would drift.
-        "subsystems": [
-            {"name": heading, "prefixes": list(prefixes), "when": when}
-            for heading, prefixes, when in SUBSYSTEMS
-        ],
         "modules": sorted(modules, key=lambda m: m["path"]),
         "reverse_deps": build_reverse_deps(modules),
         "unparseable": broken,

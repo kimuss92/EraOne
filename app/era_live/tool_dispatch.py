@@ -5,6 +5,7 @@ config builder, and memory-save authorization. Operates on self.* state.
 """
 
 import asyncio
+import json
 import re
 import threading
 import time
@@ -917,19 +918,7 @@ class ToolDispatchMixin:
                 "ActionError",
                 "ConfirmationFailed",
             ):
-                # Board item 19: ARM the announcement, do not speak it. This used
-                # to be `self.speak_error(name, result.error)` right here, which
-                # on the Fish voice reached the speakers literally — before the
-                # model had even been handed the failure. A workaround could only
-                # ever contradict something the user had already heard, so "try
-                # workarounds before asking" was impossible by construction.
-                # Flushed at the turn boundary by _flush_failure_notices().
-                self._note_tool_failure(name, hud_args, error_type, result.error)
-        elif result.success:
-            # A later success of the SAME tool+action cancels the armed notice:
-            # a retry or a re-route that worked is not a failure the user needs
-            # read out. Narrow on purpose — see core/tool_recovery.py.
-            self._note_tool_success(name, hud_args)
+                self.speak_error(name, result.error)
 
         print(f"[era] [OUT] {name} -> {result.short_message(80)}")
         # Task trace (core/task_trace.py, 25/09/2026): the whole procedure of
@@ -962,15 +951,6 @@ class ToolDispatchMixin:
             hud_call, name, hud_args, result, routed_to=(_routed[0] if _routed else None)
         )
         self._trace_routed = self._trace_safety = None
-        # Board item 22: attribute this tool's time to the turn that ran it, so a
-        # slow reply can be read as "the model thought" or "a tool blocked" from
-        # the turn.latency line instead of by correlating timestamps by hand.
-        # One call site, because this is the funnel EVERY tool result passes
-        # through — success, failure and unknown-tool alike.
-        try:
-            self.turn_latency.note_tool(result.duration_ms)
-        except Exception:
-            pass
         if result.success:
             log_event(
                 main_logger,
@@ -1122,6 +1102,8 @@ class ToolDispatchMixin:
         with when a task parked. Any complete input also ends an in-progress voice
         fragment, so a stale partial can never outrank what was said after it."""
         self._last_user_text = text
+        # A new, genuine user input releases the analysis-only fallback latch.
+        self._autopilot_analysis_only = False
         self._inflight_user_text = ""
         if text and text.strip():
             # Held for the conversation recap until Era actually replies (see
@@ -1299,12 +1281,9 @@ class ToolDispatchMixin:
         # the only thing standing between an unresolved target and a false claim.
         return (
             f"NOT started — I have not touched any of my code, and nothing is running "
-            f"in the background. {message} Do NOT say you are working on it. Do not ask "
-            f"the user for a filename yet — they cannot know one. First call self_improve "
-            f'with action="locate" and the same description: if it names one file, call '
-            f"apply again with that file_path and tell the user which file you chose. Only "
-            f"if locate finds no single clear file, tell the user you could not tell which "
-            f"file to change, so you did nothing, and ask which file they mean."
+            f"in the background. {message} Tell the user exactly this: you could not "
+            f"tell which file to change, so you did nothing, and ask which file they "
+            f"mean. Do NOT say you are working on it."
         )
 
     def _reload_after_self_edit(self, outcome: dict) -> None:
@@ -1421,6 +1400,9 @@ class ToolDispatchMixin:
 
         # -- Proceeding: nothing running, OR the user confirmed. --
         self._shutdown_requested = True
+        cancel_autopilot = getattr(self, "cancel_autopilot", None)
+        if cancel_autopilot is not None:
+            cancel_autopilot()
         self._shutdown_awaiting_confirm = False
 
         if relaunch:
@@ -1777,6 +1759,14 @@ class ToolDispatchMixin:
 
     async def _execute_tool_result_inner(self, fc) -> ToolResult:
         tool_name = fc.name
+        from app.era_live.autopilot import LOCAL_EXECUTION
+
+        if getattr(self, "_autopilot_analysis_only", False) and not LOCAL_EXECUTION.get():
+            return ToolResult.fail(
+                message="The coding fallback is analysis-only; tool execution is disabled for this turn.",
+                error_type="BlockedAction",
+                tool_name=tool_name,
+            )
         parameters = fc_args_to_dict(fc)
         original_name, original_params = tool_name, dict(parameters)
 
@@ -2121,93 +2111,6 @@ class ToolDispatchMixin:
 
         return result
 
-    # ── board item 19: the deferred failure announcement ─────────────────────
-    #
-    # Three small methods rather than inline code, because the flush is called
-    # from TWO turn boundaries that know nothing about each other — the cloud
-    # turn in app/era_live/audio.py and the local-brain turn in
-    # app/era_live/local_fallback.py. Both must behave identically or a failure
-    # announced on one voice goes silent on the other.
-
-    def _recovery(self):
-        """The turn's notice store, or None where there isn't one.
-
-        `getattr` rather than a plain attribute: this mixin's methods are borrowed
-        onto bare objects in tests, and a half-built EraLive has no store either.
-        A missing store costs the DEFERRAL and nothing else — _note_tool_failure
-        falls back to announcing immediately, which is the behaviour this change
-        replaced. Premature is bad; silent is worse, and raising inside the tool
-        funnel is worst of all.
-        """
-        return getattr(self, "tool_recovery", None)
-
-    def _note_tool_failure(self, tool: str, params: dict, error_type: str, message: str) -> None:
-        store = self._recovery()
-        if store is None:
-            # No store (a stub, or construction failed): fall back to the old
-            # immediate announcement rather than losing the failure entirely.
-            # Premature is bad; silent is worse.
-            try:
-                self.speak_error(tool, message)
-            except Exception:
-                pass
-            return
-        try:
-            action = str((params or {}).get("action", ""))
-            store.note_failure(tool, action, error_type, message)
-        except Exception as e:  # never change a tool's outcome
-            print(f"[era] [RECOVERY] could not arm the notice: {e}")
-
-    def _note_tool_success(self, tool: str, params: dict) -> None:
-        store = self._recovery()
-        if store is None:
-            return
-        try:
-            store.note_success(tool, str((params or {}).get("action", "")))
-        except Exception as e:
-            print(f"[era] [RECOVERY] could not clear the notice: {e}")
-
-    def _flush_failure_notices(self) -> None:
-        """Speak whatever the turn did not recover from, then forget it.
-
-        Called at a turn boundary. The `finally` is what makes a missed flush
-        impossible to turn into a leak: whatever happens while speaking, the
-        store is emptied, because a notice that survives its own turn is a
-        failure announced into the middle of the next conversation.
-        """
-        store = self._recovery()
-        if store is None:
-            return
-        try:
-            notices = store.take()
-            if store.dropped_stale or store.overflow:
-                # Both are silent losses, so neither may be invisible: a flush
-                # that keeps dropping notices is a missing flush site somewhere.
-                log_event(
-                    main_logger,
-                    "tool.recovery.dropped",
-                    "WARNING",
-                    stale=store.dropped_stale,
-                    overflow=store.overflow,
-                )
-            for n in notices:
-                log_event(
-                    main_logger,
-                    "tool.recovery.unrecovered",
-                    "INFO",
-                    tool=n.tool,
-                    action=n.action,
-                    error_type=n.error_type,
-                )
-                self.speak_error(n.tool, n.message)
-        except Exception as e:
-            print(f"[era] [RECOVERY] flush skipped: {e}")
-        finally:
-            try:
-                store.reset()
-            except Exception:
-                pass
-
     def _log_caught_exception(self, tool_name: str, parameters: dict, result) -> None:
         """A tool that caught its own exception returned a string, so no stack
         reached era.log and core/self_heal could not see the defect. If the
@@ -2299,7 +2202,9 @@ class ToolDispatchMixin:
         except Exception as e:
             print(f"[era] [WARN] could not log the plan for confirmation: {e}")
 
-        speak = getattr(self, "speak", None)
+        from app.era_live.autopilot import LOCAL_EXECUTION
+
+        speak = None if LOCAL_EXECUTION.get() else getattr(self, "speak", None)
         if speak:
             # One line for speech: the log keeps the readable layout.
             spoken = _sanitize_spoken(
@@ -2916,8 +2821,11 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "window_control":
+            from app.era_live.autopilot import LOCAL_EXECUTION
+
+            window_speak = None if LOCAL_EXECUTION.get() else self.speak
             r = await loop.run_in_executor(
-                None, lambda: window_control(parameters=args, player=self.ui, speak=self.speak)
+                None, lambda: window_control(parameters=args, player=self.ui, speak=window_speak)
             )
             result = r or "Done."
 
@@ -3236,16 +3144,82 @@ class ToolDispatchMixin:
                     "against my prompt. I'll brief you on anything it changes."
                 )
 
+        elif tool_name == "visual_engine":
+            from core import visual_engine
+
+            command = json.loads(args.get("command", "{}"))
+            result = json.dumps(
+                await asyncio.to_thread(
+                    visual_engine.snapshot
+                    if command.get("action") == "snapshot"
+                    else lambda: visual_engine.apply(command)
+                )
+            )
+
+        elif tool_name == "autonomous_development":
+            from core import development, feature_engine
+
+            action = args.get("action", "status")
+            if action == "propose":
+                paths = json.loads(args.get("file_paths", "[]"))
+                if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+                    raise ValueError("file_paths must be a JSON array of strings")
+                job = await asyncio.to_thread(
+                    development.propose,
+                    args.get("request", ""),
+                    paths,
+                    reload=args.get("reload", True),
+                )
+                result = f"Development {job['id']} started in staging. Review verified changes in the HUD; final approval is required."
+            elif action == "reject":
+                result = json.dumps(
+                    await asyncio.to_thread(development.reject, args.get("job_id", ""))
+                )
+            elif action == "status":
+                await asyncio.to_thread(feature_engine.restore)
+                result = json.dumps(
+                    {
+                        "jobs": await asyncio.to_thread(development.list_jobs),
+                        "features": feature_engine.catalog(),
+                    }
+                )
+            else:
+                raise ValueError(
+                    "Only propose/status/reject are allowed; final approval belongs to the user in the HUD"
+                )
+
+        elif tool_name == "run_feature":
+            from core import feature_engine
+
+            arguments = json.loads(args.get("arguments", "{}"))
+            if not isinstance(arguments, dict):
+                raise ValueError("Feature arguments must be an object")
+            await asyncio.to_thread(feature_engine.restore)
+            result = json.dumps(await feature_engine.run(args.get("feature_id", ""), arguments))
+
         elif tool_name == "self_improve":
+            from app.era_live.autopilot import LOCAL_EXECUTION
+
             improve_args = dict(args)
             improve_action = str(improve_args.get("action") or "propose").lower().strip()
 
-            if improve_action in ("propose", "list_backups", "find", "locate", ""):
+            if improve_action in ("propose", "list_backups", ""):
                 # Read-only and fast enough to answer inline.
                 r = await asyncio.to_thread(
                     self_improve, improve_args, None, self.ui, None, self.speak
                 )
                 result = r or "Done."
+            elif improve_action == "apply":
+                from core import development
+
+                target = improve_args.get("file_path")
+                job = await asyncio.to_thread(
+                    development.propose,
+                    improve_args.get("description", ""),
+                    [target] if target else [],
+                    reload=improve_args.get("reload", True),
+                )
+                result = f"Candidate {job['id']} is being generated and verified in staging. Final approval is required in the HUD."
             elif refusal := await asyncio.to_thread(self._self_improve_refusal, improve_args):
                 # She cannot write, so she must not say she is working. See
                 # _self_improve_refusal — this is the whole of item 25.
@@ -3257,14 +3231,22 @@ class ToolDispatchMixin:
                     try:
                         outcome: dict = {}
                         r = await asyncio.to_thread(
-                            self_improve, improve_args, None, self.ui, None, self.speak, outcome
+                            self_improve,
+                            improve_args,
+                            None,
+                            self.ui,
+                            None,
+                            None if LOCAL_EXECUTION.get() else self.speak,
+                            outcome,
                         )
-                        self.speak(r or "Self-improvement finished.")
+                        report = self._autopilot_reply if LOCAL_EXECUTION.get() else self.speak
+                        report(r or "Self-improvement finished.")
                         if outcome.get("reload_requested"):
                             self._reload_after_self_edit(outcome)
                     except Exception as e:
                         print(f"[era] [IMPROVE] background self-improve failed: {e}")
-                        self.speak(
+                        report = self._autopilot_reply if LOCAL_EXECUTION.get() else self.speak
+                        report(
                             "The self-improvement attempt hit an error — my code was "
                             "not left modified. Check the log."
                         )

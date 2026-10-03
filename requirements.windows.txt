@@ -1,5 +1,5 @@
 # MARK-XXXIX Windows requirements
-# Recommended: Python 3.10 or 3.11 on Windows
+# Recommended: Python 3.12 on Windows
 
 sounddevice
 google-genai
@@ -9,6 +9,8 @@ requests
 beautifulsoup4
 ddgs
 playwright
+rapidfuzz
+PyYAML
 pyautogui
 pyperclip
 pygetwindow
@@ -38,6 +40,8 @@ spotipy
 vosk
 pytest
 pytest-timeout
+pytest-asyncio
+pytest-cov
 apscheduler
 ruamel.yaml
 # Gmail lane (core/gmail_service.py) — optional; Era runs without them.
@@ -53,3 +57,6 @@ websockets
 # Optional, install only if needed:
 # pyaudio
 # python-vlc
+
+# Candidate verification
+ruff>=0.12,<1

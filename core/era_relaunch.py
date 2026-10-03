@@ -167,25 +167,12 @@ def is_supervised() -> bool:
 def spawn_supervisor(wait_pid: int) -> bool:
     """Era was started by hand, so nothing would bring her back after she exits.
     Start a detached supervisor that waits for this process to die first (two
-    Eras at once would fight over the mic and the dispatch lock).
-
-    CREATE_NO_WINDOW, not DETACHED_PROCESS (fixed 2026-10-03). Both detach the
-    supervisor from this console, but DETACHED_PROCESS leaves it with NO console
-    at all — and the supervisor launches Era with inherited stdio, so Era had
-    none either. Every PowerShell / taskkill / ffmpeg helper Era ran after such
-    a restart had to create its own console, and each one BLINKED A WINDOW on
-    screen. CREATE_NO_WINDOW detaches just as completely but hands down a real
-    windowless console for those helpers to attach to silently.
-
-    The flags are spelled out here rather than imported from core.win_subprocess
-    because this module is standard library only, on purpose (see the module
-    docstring): the watchdog path must keep working when Era's own code is broken.
-    """
+    Eras at once would fight over the mic and the dispatch lock)."""
     if not SUPERVISOR_PY.exists():
         return False
     flags = 0
     if os.name == "nt":
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     try:
         subprocess.Popen(
             [sys.executable, str(SUPERVISOR_PY), "--wait-pid", str(wait_pid)],

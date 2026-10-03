@@ -32,8 +32,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.win_subprocess import NO_WINDOW
-
 _RUFF_TIMEOUT_S = 60
 
 # Returned as the error when ruff itself cannot be run. Callers treat this as
@@ -168,7 +166,6 @@ def _run(args: list[str], repo_root: Path) -> subprocess.CompletedProcess | None
             cwd=str(repo_root),
             encoding="utf-8",
             errors="replace",
-            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
         return None

@@ -12,6 +12,10 @@ import re
 import sys
 import threading
 
+# Match pywinauto/comtypes before either library initializes COM at import.
+# Otherwise import order can abort startup with "Cannot change thread mode".
+sys.coinit_flags = 0  # COINIT_MULTITHREADED
+
 # --- Console encoding: prevent mojibake in PowerShell ---
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -146,6 +150,7 @@ from app.hud.events import hud
 from app.notify import (  # noqa: F401  (re-export: preserves public + internal names)
     _tg_notify,
 )
+from core.async_submit import submit_coroutine
 from core.conversation_log import ConversationLog
 from core.era_state import EraState
 from core.input_safety_gate import CLARIFICATION_PHRASE, InputSafetyGate
@@ -154,12 +159,10 @@ from core.logger import log_crash, log_event, main_logger
 from core.pending_confirmation import get_shared_store
 from core.session_manager import SessionManager
 from core.speaker_recognition import get_verifier
-from core.tool_recovery import TurnRecovery
-from core.turn_latency import TurnLatency
 from core.turn_memory import TurnMemory
 
 # ──────────────────────────────────────────────────────────────
-from core.utils import BASE_DIR, get_api_key, get_api_keys, log
+from core.utils import BASE_DIR, env_float, get_api_key, get_api_keys, log
 from core.vad import build_barge_in_detector, get_barge_in_fade_ms, get_resume_config
 from core.voice_gate import WakeAudioTap, WakeVerifier
 
@@ -206,6 +209,7 @@ get_queue().set_executor_factory(lambda: AgentExecutor())
 
 
 from app.era_live.audio import AudioIOMixin
+from app.era_live.autopilot import AutopilotMixin
 from app.era_live.cascade import CascadeMixin
 from app.era_live.cm_flow import CMFlowMixin
 from app.era_live.dispatch import DispatchMixin
@@ -214,6 +218,7 @@ from app.era_live.mic_mute import MicMuteMixin
 from app.era_live.model_route import ModelRouteMixin
 from app.era_live.panic import PanicStopMixin
 from app.era_live.reconnect_mixin import ReconnectMixin
+from app.era_live.session_runtime import live_model, managed_live_connection, stop_on_renewal
 from app.era_live.speech_out import SpeechOut
 from app.era_live.tool_batch import ToolBatchMixin
 from app.era_live.tool_dispatch import ToolDispatchMixin
@@ -230,6 +235,7 @@ from core.voice_mode import MODE_FISH_AUDIO, VOICE_CFG
 
 
 class EraLive(
+    AutopilotMixin,
     ToolDispatchMixin,
     ToolBatchMixin,
     ModelRouteMixin,
@@ -271,6 +277,13 @@ class EraLive(
             # "did my setting survive the relaunch?" must be answerable from the log.
             state = "ON" if verifier.enabled else "OFF"
             print(f"[VOICE-LOCK] Voice recognition {state} — restored from memory/user_prefs.json")
+            ready, why = verifier.readiness()
+            if verifier.enabled and not ready:
+                self.ui.write_log(
+                    f"SYS: Voice verification is blocking spoken input ({why}). "
+                    "Typed commands still work. Configure the speaker model and run "
+                    "python tools/enroll_speaker.py; see docs/speaker_recognition_integration.md."
+                )
         except Exception as e:
             print(f"[VOICE-LOCK] Could not restore persisted state: {e}")
         # ---------------------------------------------------------------------
@@ -326,19 +339,6 @@ class EraLive(
         # reconnect tell "the answer finished" from "the socket cut it off".
         # See core/live_turn_state.py for the signal semantics and their source.
         self.live_turn = LiveTurnState()
-        # Where each turn's time actually went (board item 22). Sits beside
-        # live_turn because they mark the same moments for different reasons:
-        # live_turn asks "what did the user hear, and does a reconnect owe them
-        # a continuation", this one asks "why did that take so long". Purely
-        # observational — nothing reads it back into a decision.
-        self.turn_latency = TurnLatency()
-        # Tool failures waiting to see whether the turn recovers from them
-        # (board item 19). Beside turn_latency because both are per-turn and both
-        # are flushed at the same two turn boundaries — but this one IS
-        # behavioural: what it holds back is a sentence the user would otherwise
-        # have heard before any workaround could be tried. See
-        # core/tool_recovery.py for why the announcement had to move.
-        self.tool_recovery = TurnRecovery()
         # Snapshot taken at the instant the transport died; consumed once by the
         # recovery decision on the next successful connect.
         self._disconnect_snapshot: TurnSnapshot | None = None
@@ -507,8 +507,8 @@ class EraLive(
         # more quota and never succeeds. Instead we wait a long, growing cooldown
         # and recover automatically once quota returns. Start at 15 min, double
         # each time it's still exhausted, cap at 2 hours, never give up.
-        self._quota_cooldown_base: float = float(
-            os.environ.get("ERA_QUOTA_COOLDOWN_SECONDS", "") or 900.0
+        self._quota_cooldown_base: float = env_float(
+            "ERA_QUOTA_COOLDOWN_SECONDS", 900.0, minimum=1.0, maximum=7200.0
         )
         self._quota_cooldown_max: float = 7200.0  # 2 hours
         self._quota_cooldown_current: float = self._quota_cooldown_base
@@ -644,13 +644,19 @@ class EraLive(
                 if turn is not None and self._loop and self.session:
                     self._note_user_utterance(text)
                     self._last_interaction_timestamp = time.time()
-                    asyncio.run_coroutine_threadsafe(
+                    submit_coroutine(
                         self.session.send_realtime_input(
                             text=build_resume_note(turn.spoken, turn.remainder)
                         ),
                         self._loop,
                     )
                     return
+
+        # Hermes' offline front gate runs before model pins and the cloud-session
+        # check, so volume/files/windows and coding also work during reconnects.
+        autopilot = getattr(self, "_try_autopilot_text", None)
+        if autopilot is not None and autopilot(text):
+            return
 
         # === Claude dispatch (phase 10, feature-flagged, default OFF) ===
         # Only fires when the flag is on AND the user has explicitly pinned a
@@ -712,12 +718,10 @@ class EraLive(
             if _wake_intent_matches(clean_cmd):
                 print("[WAKE] Remote wake phrase detected via network shortcut!")
                 if self._loop and self._loop.is_running():
-                    asyncio.run_coroutine_threadsafe(
+                    submit_coroutine(
                         self._resume_from_standby("remote_wake", speak_ack=True), self._loop
                     )
-                    asyncio.run_coroutine_threadsafe(
-                        send_era_notification_async("ERA", _RESUME_ACK), self._loop
-                    )
+                    submit_coroutine(send_era_notification_async("ERA", _RESUME_ACK), self._loop)
                 # That notification is itself a Telegram message, so the wake is already
                 # acknowledged in the chat; mirroring the spoken ack would double it.
                 self._tg_reply_pending = False
@@ -743,6 +747,9 @@ class EraLive(
             # answers typed and Telegram orders instead of "session isn't up".
             if self.local_submit_text(text):
                 return
+            self.ui.write_log(
+                "SYS: No active model connection. Era is reconnecting; try again shortly."
+            )
             if self._tg_reply_pending:
                 self._tg_reply_pending = False
                 _tg_notify("I'm not fully awake yet — my session isn't up. Try again shortly.")
@@ -791,7 +798,7 @@ class EraLive(
                 # path below does — asyncio.create_task would raise here.
                 self._note_user_utterance(text)
                 self._last_interaction_timestamp = time.time()
-                asyncio.run_coroutine_threadsafe(
+                submit_coroutine(
                     self._run_cm_flow(payload),
                     self._loop,
                 )
@@ -821,7 +828,7 @@ class EraLive(
             wrapped = _build_paste_clarify_instruction(paste_kind, text)
             print(f"[PASTE] Classified typed input as {paste_kind}; asking user what to do.")
             if self._loop and self.session:
-                asyncio.run_coroutine_threadsafe(
+                submit_coroutine(
                     self.session.send_realtime_input(text=wrapped),
                     self._loop,
                 )
@@ -864,7 +871,7 @@ class EraLive(
                 self._note_user_utterance(text)
                 self._last_interaction_timestamp = time.time()
                 wrapped = _build_paste_clarify_instruction("UNCLEAR", text)
-                asyncio.run_coroutine_threadsafe(
+                submit_coroutine(
                     self.session.send_realtime_input(text=wrapped),
                     self._loop,
                 )
@@ -910,7 +917,7 @@ class EraLive(
         # silently opened — she needs to see it to ask what you want done
         # with it, and to be able to answer "did you get that path?" later.
 
-        asyncio.run_coroutine_threadsafe(self._route_text_through_hermes(text), self._loop)
+        submit_coroutine(self._route_text_through_hermes(text), self._loop)
 
     _UPLOAD_DIR = BASE_DIR / "runtime" / "uploads"
     _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB — generous for images/PDFs/docs
@@ -970,9 +977,7 @@ class EraLive(
                     )
 
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self.session.send_realtime_input(text=note), self._loop
-            )
+            submit_coroutine(self.session.send_realtime_input(text=note), self._loop)
 
     def _on_browser_mic_toggle(self, active: Any = None):
         # Prefer an ABSOLUTE state from the UI when it sends one ("active": bool).
@@ -1209,7 +1214,7 @@ class EraLive(
 
         if not self._loop or not self.session:
             return
-        asyncio.run_coroutine_threadsafe(self.session.send_realtime_input(text=text), self._loop)
+        submit_coroutine(self.session.send_realtime_input(text=text), self._loop)
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -1482,9 +1487,7 @@ class EraLive(
                         current_loop = asyncio.get_running_loop()
                         self._wake_task = current_loop.create_task(self._run_wake_listener())
                     except RuntimeError:
-                        self._wake_task = asyncio.run_coroutine_threadsafe(
-                            self._run_wake_listener(), self._loop
-                        )
+                        self._wake_task = submit_coroutine(self._run_wake_listener(), self._loop)
 
                 # --- Post-speech: flush stale audio, reset recognizer, arm wake ---
                 flushed = self._flush_wake_queue()
@@ -1508,7 +1511,7 @@ class EraLive(
                 current_loop = asyncio.get_running_loop()
                 current_loop.create_task(wait_and_mute())
             except RuntimeError:
-                asyncio.run_coroutine_threadsafe(wait_and_mute(), self._loop)
+                submit_coroutine(wait_and_mute(), self._loop)
         else:
             self._standby_entering = False
             self._standby_active = True
@@ -1545,7 +1548,13 @@ class EraLive(
         # Quota is per-KEY, so a spare key is a far better answer to a 1011 than
         # a cooldown. The client is rebuilt per attempt (see _current_client)
         # rather than once here, because swapping the key means a new client.
-        self._api_keys = get_api_keys()
+        try:
+            self._api_keys = get_api_keys()
+        except RuntimeError:
+            self._api_keys = []
+            self.ui.write_log(
+                "SYS: No Gemini key configured. Add GEMINI_API_KEY or config/api_keys.json; Era will re-check automatically."
+            )
         self._api_key_index = 0
         if len(self._api_keys) > 1:
             print(f"[era] [AUTH] {len(self._api_keys)} Gemini keys available for failover.")
@@ -1578,6 +1587,7 @@ class EraLive(
             # and Gemini Live connects below exactly as before.
             if await self.serve_cascade():
                 continue
+            resumed_with_handle = False
             try:
                 print("[era] [CONNECT] Connecting...")
                 # Background reconnects during standby must not flash the UI
@@ -1591,12 +1601,21 @@ class EraLive(
                 # (retrying is futile) — they report the same INVALID_ARGUMENT.
                 resumed_with_handle = self.session_manager.get_resumption_token() is not None
                 config = self._build_config()
+                # Re-read credentials on each attempt so an auth fix takes
+                # effect without restarting. Preserve the active key on rotation.
+                keys = get_api_keys()
+                if keys != self._api_keys:
+                    self._api_keys = keys
+                    self._api_key_index = 0
+                    self._api_keys_tried = 0
                 # Bound to whichever key is currently in play, so a rotation
                 # after a quota drop actually takes effect on the next attempt.
                 client = self._current_client()
 
                 async with (
-                    client.aio.live.connect(model=LIVE_MODEL, config=config) as session,
+                    managed_live_connection(
+                        client, model=live_model(LIVE_MODEL), config=config
+                    ) as session,
                     asyncio.TaskGroup() as tg,
                 ):
                     self.session = session
@@ -1715,11 +1734,13 @@ class EraLive(
                     except Exception as _vo_err:
                         print(f"[era] [AUDIO] device refresh skipped: {_vo_err}")
 
-                    tg.create_task(self._send_realtime())
-                    tg.create_task(self._listen_audio())
-                    tg.create_task(self._receive_audio())
-                    tg.create_task(self._play_audio())
-                    tg.create_task(self._monitor_idle_state())
+                    session_tasks = [
+                        tg.create_task(self._send_realtime()),
+                        tg.create_task(self._listen_audio()),
+                        tg.create_task(self._receive_audio()),
+                        tg.create_task(self._play_audio()),
+                        tg.create_task(self._monitor_idle_state()),
+                    ]
 
                     # ── Finish what the drop cut off ──
                     # The handle restored what the MODEL knows; this restores
@@ -1730,6 +1751,13 @@ class EraLive(
                     # disconnect actually caught Era mid-reply — see
                     # _resume_after_disconnect for every case it refuses.
                     await self._resume_after_disconnect()
+                    # receive() may be blocked waiting for the server when a
+                    # local model/voice switch requests renewal. Explicitly
+                    # cancel the workers; TaskGroup does not cancel on normal exit.
+                    await stop_on_renewal(self._go_away_event, session_tasks)
+                self._capture_turn_cut_by_drop()
+                self._renewal_deadline = None
+                self.session = None
 
             except Exception as e:
                 # Stash the half-spoken reply BEFORE anything else looks at the
@@ -1872,27 +1900,6 @@ class EraLive(
                         log_event(
                             main_logger,
                             "engine.network.blip",
-                            "WARNING",
-                            source="run_connect_loop",
-                            standby=self._standby_active,
-                            error_type=type(leaves[0]).__name__ if leaves else type(e).__name__,
-                            error=detail[:200],
-                        )
-                    elif self._is_upstream_service_error(e):
-                        # Gemini's own 5xx. Recovery is unchanged (still a
-                        # "transient" kind on the normal backoff) — but the
-                        # service failing is not Era crashing, and logging it as
-                        # engine.reconnect_error made self-diagnosis read an
-                        # upstream bad patch as degraded integrity. The leaf
-                        # message is extracted for the same reason as above: an
-                        # ExceptionGroup only ever str()s as its sub-exception
-                        # count.
-                        leaves = self._flatten_exc(e)
-                        detail = str(leaves[0]) if leaves else str(e)
-                        print(f"[era] [UPSTREAM] Gemini service error ({detail}) — reconnecting.")
-                        log_event(
-                            main_logger,
-                            "engine.upstream.error",
                             "WARNING",
                             source="run_connect_loop",
                             standby=self._standby_active,
@@ -2106,7 +2113,7 @@ class EraLive(
                         f"[era] [RETRY] Reconnecting in {delay:.1f}s... "
                         f"(attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})"
                     )
-                    await asyncio.sleep(delay)
+                    await self._interruptible_sleep(delay)
             else:
                 # Standby: never give up — the Vosk wake listener only hears
                 # audio while a live session TaskGroup owns the mic, so keep
@@ -2188,7 +2195,7 @@ def remote_voice_input():
         if active_era_instance._loop and active_era_instance._loop.is_running():
             # Check if it's not a wake-up command to prevent duplicate notifications
             if not active_era_instance._standby_active:
-                asyncio.run_coroutine_threadsafe(
+                submit_coroutine(
                     send_era_notification_async("Remote Task Executed", f"Command: {text_command}"),
                     active_era_instance._loop,
                 )

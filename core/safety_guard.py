@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.utils import is_windows_system_path
+
 if TYPE_CHECKING:
     from core.vision_types import VisionResult
 
@@ -115,6 +117,8 @@ def _is_protected_path(target: str) -> bool:
     if not target:
         return False
     try:
+        if is_windows_system_path(target, include_app_data=True):
+            return True
         resolved = Path(target).resolve()
         for danger in _DANGER_PATHS:
             try:
@@ -653,6 +657,19 @@ def classify_action(
             "reason": f"Window/desktop close: {action}",
         }
 
+    if tool in {"visual_engine", "autonomous_development"}:
+        return {
+            "risk_level": LOW,
+            "requires_confirmation": False,
+            "reason": "Declarative HUD update or staged development; activation needs final HUD approval.",
+        }
+    if tool == "run_feature":
+        return {
+            "risk_level": HIGH,
+            "requires_confirmation": True,
+            "reason": "Execute user-approved custom feature code.",
+        }
+
     # --- Protocol One (actions/protocol_one.py) ---
     # status/briefing only read runtime/hive. launch edits Era's code, but only
     # through self_improve's backup/verify/rollback pipeline, never the safety
@@ -737,7 +754,7 @@ def classify_action(
     # the supervisor are exactly what the pipeline cannot protect Era from
     # breaking, so touching those must be confirmed by the user out loud.
     if tool == "self_improve":
-        if action in ("propose", "list_backups", "find", "locate", ""):
+        if action in ("propose", "list_backups", "find", ""):
             return {
                 "risk_level": LOW,
                 "requires_confirmation": False,

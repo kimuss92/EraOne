@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { FileUp, WifiOff } from 'lucide-react';
 import HudHeader from './components/HudHeader';
 import CoreStage from './components/CoreStage';
+import VisualWorkspace from './components/VisualWorkspace';
 import ActivityPanel from './components/ActivityPanel';
 import SystemPanel from './components/SystemPanel';
 import ContextPanel, { MemoryPanel, SourcesPanel, WeatherPanel } from './components/ContextPanel';
@@ -219,6 +220,7 @@ export default function App() {
           className="relative flex min-w-0 flex-1 flex-col"
           onPointerDown={() => { if (getState().overlay) setState({ overlay: null }); }}
         >
+          <VisualWorkspace />
           <CoreStage nodes={nodes} />
           <div className="relative z-[var(--z-stage)] shrink-0 space-y-3 pt-2">
             <ApprovalPrompt />

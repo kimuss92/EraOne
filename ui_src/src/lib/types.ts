@@ -213,6 +213,9 @@ export interface Notice {
 /** One user task from GET /api/schedule (app/hud/schedule_view.py) — read-only. */
 export interface ScheduledTask {
   id: string;
+  version: string;
+  preview?: string;
+  previewComplete?: boolean;
   name: string;
   kind: 'reminder' | 'tool' | 'chain' | string;
   summary: string;

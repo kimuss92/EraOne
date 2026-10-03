@@ -253,10 +253,15 @@ def _wire_text_command_entrypoint(era, main_module, monkeypatch):
     era._maybe_record_feedback = lambda text: None
 
     scheduled = []
+    def schedule(coro, loop):
+        task = asyncio.ensure_future(coro)
+        scheduled.append(task)
+        return task
+
     monkeypatch.setattr(
         main_module.asyncio,
         "run_coroutine_threadsafe",
-        lambda coro, loop: scheduled.append(asyncio.ensure_future(coro)),
+        schedule,
     )
     return scheduled
 

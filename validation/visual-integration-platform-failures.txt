@@ -1,0 +1,146 @@
+....................................................FFF..FFFFF.......... [ 15%]
+........................................................................ [ 30%]
+........................................................................ [ 46%]
+........................................................................ [ 61%]
+........................................................................ [ 77%]
+........................................................................ [ 92%]
+...................................                                      [100%]
+=================================== FAILURES ===================================
+_________________ test_open_mode_opens_a_document_with_its_app _________________
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_open_mode_opens_a_documen0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_open_mode_opens_a_documen0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_open_mode_opens_a_documen0/ABC'))
+
+    def test_open_mode_opens_a_document_with_its_app(server, opener):
+        calls, doc, _, _ = opener
+        status, data = _reveal(server, {"cardId": "c-notes.txt", "mode": "open"})
+>       assert status == 200 and data["action"] == "open"
+E       assert (404 == 200)
+
+tools/test_hud_server.py:207: AssertionError
+______________ test_open_mode_never_runs_code_it_only_reveals_it _______________
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_open_mode_never_runs_code0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_open_mode_never_runs_code0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_open_mode_never_runs_code0/ABC'))
+
+    def test_open_mode_never_runs_code_it_only_reveals_it(server, opener):
+        calls, _, script, _ = opener
+        status, data = _reveal(server, {"cardId": "c-run.bat", "mode": "open"})
+>       assert status == 200 and data["action"] == "reveal"
+E       assert (404 == 200)
+
+tools/test_hud_server.py:214: AssertionError
+______ test_open_is_an_allowlist_unknown_runnable_types_are_only_revealed ______
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_open_is_an_allowlist_unkn0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_open_is_an_allowlist_unkn0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_open_is_an_allowlist_unkn0/ABC'))
+
+    def test_open_is_an_allowlist_unknown_runnable_types_are_only_revealed(server, opener):
+        calls, *_ = opener
+        for card in ("c-tool.pyz", "c-fix.diagcab"):
+            _, data = _reveal(server, {"cardId": card, "mode": "open"})
+>           assert data["action"] == "reveal"
+                   ^^^^^^^^^^^^^^
+E           KeyError: 'action'
+
+tools/test_hud_server.py:222: KeyError
+__________________ test_open_mode_opens_a_folder_in_explorer ___________________
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_open_mode_opens_a_folder_0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_open_mode_opens_a_folder_0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_open_mode_opens_a_folder_0/ABC'))
+
+    def test_open_mode_opens_a_folder_in_explorer(server, opener):
+        calls, _, _, folder = opener
+        _reveal(server, {"cardId": "c-ABC", "mode": "open"})
+>       assert calls == [("popen", f'explorer "{folder}"')]
+E       assert [] == [('popen', 'e...lder_0/ABC"')]
+E         
+E         Right contains one more item: ('popen', 'explorer "/tmp/pytest-of-root/pytest-23/test_open_mode_opens_a_folder_0/ABC"')
+E         Use -v to get more diff
+
+tools/test_hud_server.py:242: AssertionError
+_____________________ test_default_mode_still_only_reveals _____________________
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_default_mode_still_only_r0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_default_mode_still_only_r0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_default_mode_still_only_r0/ABC'))
+
+    def test_default_mode_still_only_reveals(server, opener):
+        calls, doc, _, _ = opener
+        _reveal(server, {"cardId": "c-notes.txt"})
+>       assert calls == [("popen", f'explorer /select,"{doc}"')]
+E       assert [] == [('popen', 'e.../notes.txt"')]
+E         
+E         Right contains one more item: ('popen', 'explorer /select,"/tmp/pytest-of-root/pytest-23/test_default_mode_still_only_r0/notes.txt"')
+E         Use -v to get more diff
+
+tools/test_hud_server.py:248: AssertionError
+________________ test_source_rows_open_only_absolute_file_paths ________________
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_source_rows_open_only_abs0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_source_rows_open_only_abs0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_source_rows_open_only_abs0/ABC'))
+
+    def test_source_rows_open_only_absolute_file_paths(server, opener):
+        calls, doc, _, _ = opener
+        ok, _ = _reveal(server, {"sourceId": "s-doc", "mode": "open"})
+        rel, _ = _reveal(server, {"sourceId": "s-rel", "mode": "open"})
+        web, _ = _reveal(server, {"sourceId": "s-web", "mode": "open"})
+>       assert (ok, rel, web) == (200, 404, 404)
+E       assert (404, 404, 404) == (200, 404, 404)
+E         
+E         At index 0 diff: 404 != 200
+E         Use -v to get more diff
+
+tools/test_hud_server.py:256: AssertionError
+_______________ test_raw_path_opens_only_an_exact_published_path _______________
+
+server = <app.websocket_server.WebSocketServer object at 0x7f31f90fbe60>
+opener = ([], PosixPath('/tmp/pytest-of-root/pytest-23/test_raw_path_opens_only_an_ex0/notes.txt'), PosixPath('/tmp/pytest-of-r...t_raw_path_opens_only_an_ex0/run.bat'), PosixPath('/tmp/pytest-of-root/pytest-23/test_raw_path_opens_only_an_ex0/ABC'))
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-23/test_raw_path_opens_only_an_ex0')
+
+    def test_raw_path_opens_only_an_exact_published_path(server, opener, tmp_path):
+        calls, doc, _, folder = opener
+        base = doc.parent
+        secret = base / "never-shown.txt"
+        secret.write_text("x")
+        codes = [
+            _reveal(server, {"path": str(doc), "mode": "open"})[0],  # Era said it
+            _reveal(server, {"path": str(secret), "mode": "open"})[0],  # never shown
+            _reveal(server, {"path": str(base / "said-by-user.txt"), "mode": "open"})[0],  # typed
+            _reveal(server, {"path": str(base), "mode": "open"})[0],  # a prefix of a shown path
+            _reveal(server, {"path": f"{folder}\\..\\notes.txt", "mode": "open"})[0],  # traversal
+            _reveal(server, {"path": r"\\evil\share\x.txt", "mode": "open"})[0],
+            _reveal(server, {"path": "notes.txt", "mode": "open"})[0],
+        ]
+>       assert codes == [200, 404, 404, 404, 404, 404, 404]
+E       assert [404, 404, 40...404, 404, ...] == [200, 404, 40...404, 404, ...]
+E         
+E         At index 0 diff: 404 != 200
+E         Use -v to get more diff
+
+tools/test_hud_server.py:274: AssertionError
+________________ test_checked_path_rejects_windows_name_tricks _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-23/test_checked_path_rejects_wind0')
+
+    def test_checked_path_rejects_windows_name_tricks(tmp_path):
+        from app.hud import api
+    
+        f = tmp_path / "a.txt"
+        f.write_text("x")
+>       assert api._checked_path(str(f)) is not None
+E       AssertionError: assert None is not None
+E        +  where None = <function _checked_path at 0x7f31f8f44a40>('/tmp/pytest-of-root/pytest-23/test_checked_path_rejects_wind0/a.txt')
+E        +    where <function _checked_path at 0x7f31f8f44a40> = <module 'app.hud.api' from '/workspace/scratch/6a3684b3e114/work/EraOne-main/app/hud/api.py'>._checked_path
+E        +    and   '/tmp/pytest-of-root/pytest-23/test_checked_path_rejects_wind0/a.txt' = str(PosixPath('/tmp/pytest-of-root/pytest-23/test_checked_path_rejects_wind0/a.txt'))
+
+tools/test_hud_server.py:283: AssertionError
+=========================== short test summary info ============================
+FAILED tools/test_hud_server.py::test_open_mode_opens_a_document_with_its_app
+FAILED tools/test_hud_server.py::test_open_mode_never_runs_code_it_only_reveals_it
+FAILED tools/test_hud_server.py::test_open_is_an_allowlist_unknown_runnable_types_are_only_revealed
+FAILED tools/test_hud_server.py::test_open_mode_opens_a_folder_in_explorer - ...
+FAILED tools/test_hud_server.py::test_default_mode_still_only_reveals - asser...
+FAILED tools/test_hud_server.py::test_source_rows_open_only_absolute_file_paths
+FAILED tools/test_hud_server.py::test_raw_path_opens_only_an_exact_published_path
+FAILED tools/test_hud_server.py::test_checked_path_rejects_windows_name_tricks
+8 failed, 459 passed in 9.52s

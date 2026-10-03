@@ -1,0 +1,3 @@
+# Optional offline voice and speaker verification. Model weights are separate;
+# see docs/LOCAL_FALLBACK.md and docs/speaker_recognition_integration.md.
+sherpa-onnx

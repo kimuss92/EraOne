@@ -39,7 +39,7 @@ def _strip_fences(code: str) -> str:
     return code.strip() + "\n"
 
 
-def _generate_via_claude_cli(target: Path, original: str, instruction: str) -> str:
+def _generate_via_claude_cli(target: Path, original: str, instruction: str, *, allow_fallback: bool = True) -> str:
     """Generate updated code using the tool-less Claude Code CLI.
 
     Mirrors _build_command in core/llm/adapters/claude_cli.py:
@@ -60,6 +60,8 @@ def _generate_via_claude_cli(target: Path, original: str, instruction: str) -> s
         ok, why = ledger.can_afford(0.75)  # same estimate protocol_one uses
         if not ok:
             log("ClaudeSelfImprove", f"Claude CLI skipped: {why}")
+            if not allow_fallback:
+                raise RuntimeError("Claude coding budget is unavailable")
             return _fallback(target, original, instruction, rel)
 
         provider = ClaudeCliProvider()
@@ -102,7 +104,11 @@ def _generate_via_claude_cli(target: Path, original: str, instruction: str) -> s
             return code
     except Exception as e:
         log("ClaudeSelfImprove", f"Claude CLI generation failed: {e}")
+        if not allow_fallback:
+            raise RuntimeError("Claude coding failed; no alternate generator was used") from e
 
+    if not allow_fallback:
+        raise RuntimeError("Claude returned no code; no alternate generator was used")
     return _fallback(target, original, instruction, rel)
 
 
@@ -133,7 +139,7 @@ def _fallback(target: Path, original: str, instruction: str, rel: str) -> str:
     return _strip_fences(code)
 
 
-def claude_generate_factory() -> Any:
+def claude_generate_factory(*, allow_fallback: bool = True) -> Any:
     """Return a generate= callable for self_improve._apply.
 
     The returned function has the signature
@@ -142,6 +148,8 @@ def claude_generate_factory() -> Any:
     """
 
     def claude_generate(target: Path, original: str, instruction: str) -> str:
-        return _generate_via_claude_cli(target, original, instruction)
+        if allow_fallback:
+            return _generate_via_claude_cli(target, original, instruction)
+        return _generate_via_claude_cli(target, original, instruction, allow_fallback=False)
 
     return claude_generate

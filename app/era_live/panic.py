@@ -77,6 +77,10 @@ class PanicStopMixin:
             except Exception as e:
                 print(f"[ABORT] Local turn cancel skipped: {e}")
 
+        cancel_autopilot = getattr(self, "cancel_autopilot", None)
+        if cancel_autopilot is not None:
+            cancel_autopilot()
+
         # 2. Drop anything half-finished. A confirmation left armed is the real
         #    hazard: the user aborts, says "yes" to something else a minute
         #    later, and the abandoned action runs after all.

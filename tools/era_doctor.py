@@ -80,10 +80,29 @@ def _extract_tool_section(content: str) -> str | None:
 
 
 def check_python_version() -> tuple[str, str]:
-    # The project targets py312 (ruff.toml), and this module uses syntax
-    # that would not import on anything older — so a runtime "too old"
-    # branch is unreachable by construction. Just report what is running.
+    # Doctor itself imports on 3.10/3.11, but main.py uses TaskGroup and the
+    # source tree targets py312. Catch the stale installation instructions.
+    if sys.version_info < (3, 12):  # noqa: UP036 (doctor diagnoses older installs)
+        return _fail("Python 3.12 or newer is required; install Python 3.12 and rebuild the venv")
     return _ok(f"{sys.version}")
+
+
+def check_voice_readiness() -> tuple[str, str]:
+    try:
+        from core.speaker_recognition import get_verifier
+
+        verifier = get_verifier()
+        ready, why = verifier.readiness()
+        if verifier.enabled and not ready:
+            return _warn(
+                f"Spoken input is blocked: {why}. Configure ERA_SPEAKER_MODEL and "
+                "run python tools/enroll_speaker.py. Typed commands remain available."
+            )
+        return _ok(why)
+    except Exception as exc:
+        return _warn(
+            f"Voice verification unavailable ({type(exc).__name__}); inspect speaker setup"
+        )
 
 
 def check_directories() -> tuple[str, str]:
@@ -590,6 +609,7 @@ CHECKS: list[tuple[str, str, callable]] = [
     ("Required directories/files", "CRITICAL", check_directories),
     ("Core module imports", "CRITICAL", check_core_imports),
     ("API key config", "CRITICAL", check_api_key_config),
+    ("Voice verification readiness", "INFO", check_voice_readiness),
     ("Cloudinary media host config", "INFO", check_cloudinary_config),
     ("Tool registry consistency", "INFO", check_registry_consistency),
     ("LLM alias registry", "INFO", check_llm_registry),

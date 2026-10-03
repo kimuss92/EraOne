@@ -45,7 +45,6 @@ from core.utils import (
     get_pictures,
     get_videos,
 )
-from core.win_subprocess import NO_WINDOW
 
 _OS = platform.system()
 
@@ -428,7 +427,6 @@ def _op_open_path(path: object) -> str:
             shell=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=NO_WINDOW,
         )
     return f"Opened {target.name}."
 

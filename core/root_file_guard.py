@@ -58,6 +58,8 @@ def _is_junk_target(path: str | os.PathLike) -> bool:
         raw = os.fspath(path)
         if not isinstance(raw, str):
             raw = os.fsdecode(raw)
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in raw):
+            return False  # undecodable byte paths are not evidence of junk
         # Fast reject (no syscall): anything with an extension, a dotfile, or a
         # path that dives into a subdir is not our junk. This is the common case
         # for essentially every real open(), so the resolve() below almost never

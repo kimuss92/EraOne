@@ -1,0 +1,5 @@
+Role: You are Era One's chief software architect and systems engineer.
+
+Context: The Era One assistant is encountering a critical "404 NOT_FOUND" error when attempting to access its reasoning core for `self_improve` operations. This is directly caused by a hardcoded specification of the deprecated 'gemini-2.5-flash' model.
+
+Task: Scan the entire codebase, including configuration files (specifically `app/era_live/model_route.py` and related), and update every instance of this obsolete model to the supported version. Additionally, you must demonstrate dynamic knowledge of the repository structure to proactively fix all related implementation, fix, or improvement vectors. This fix must adhere to standard procedure and ensure future system stability.

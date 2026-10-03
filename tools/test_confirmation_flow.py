@@ -300,21 +300,35 @@ def test_cancel_pending_low_risk():
 def test_thread_safety():
     store = PendingConfirmationStore()
     errors = []
+    winners = []
+    busy = []
+    barrier = threading.Barrier(10)
+    results_lock = threading.Lock()
 
     def worker():
-        for _ in range(50):
+        try:
+            barrier.wait(timeout=5)
             cid = store.store("test", {}, "LOW", "test")
-            store.get(cid)
-            store.is_pending()
-            store.expire_all()
-            store.clear()
+            with results_lock:
+                winners.append(cid)
+        except PendingConfirmationBusy:
+            with results_lock:
+                busy.append(True)
+        except Exception as exc:
+            with results_lock:
+                errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(10)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=6)
+    assert not any(t.is_alive() for t in threads)
     assert not errors
+    # Exactly one caller owns the approval slot; competitors cannot replace it.
+    assert len(winners) == 1
+    assert len(busy) == 9
+    assert store.peek(winners[0]) is not None
 
 
 # ── PendingConfirmation Dataclass Tests ──

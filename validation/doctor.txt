@@ -1,0 +1,33 @@
+
+============================================================
+  Era One Doctor — Health Check
+============================================================
+
+  [PASS] Python version — 3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]
+  [PASS] Required directories/files
+  [PASS] Core module imports
+  [FAIL] API key config — config/api_keys.json not found and GEMINI_API_KEY env var not set
+  [WARN] Voice verification readiness — Spoken input is blocked: no voice enrolled. Configure ERA_SPEAKER_MODEL and run python tools/enroll_speaker.py. Typed commands remain available.
+  [FAIL] Cloudinary media host config — Cloudinary not configured (CLOUDINARY_URL / CLOUDINARY_CLOUD_NAME+API_KEY+API_SECRET / config/media_host.json) — it is now the only media host, so publishing cannot stage a reel or image at all
+  [PASS] Tool registry consistency — 10 issues: 0 errors, 21 main only
+  [PASS] LLM alias registry — 8/8 aliases available · default era.voice, voice era.voice · budget $2.0/day
+  [FAIL] LLM provider reachability — claude_cli: 'claude' is not on PATH — no Claude alias can run
+  [PASS] Existing test files
+  [WARN] Action module imports — Import issues: spotify_control
+  [WARN] memory/long_term.json — File not found (gitignored, normal for fresh clones)
+  [PASS] Memory backups — No backup files found
+  [PASS] Logs folder — 2 file(s), era.log 0.0 KB
+  [PASS] Root cleanliness — root clean — no zero-byte junk files
+  [PASS] memory/feedback_memory.jsonl — 986 line(s)
+  [WARN] Obsidian vault (CM context) — Vault not found at /root/OneDrive/Documents/obsidian_era/era_brain — CM runs lose vault context
+  [FAIL] Vault consistency (PARA/brand filing) — 1 error(s), 0 warning(s) — ERROR: vault_missing — Vault not found at /root/OneDrive/Documents/obsidian_era/era_brain — every CM brief is running with no vault context at all
+  [WARN] Era day log (01 - Daily Notes) — no day-log folder at /root/OneDrive/Documents/obsidian_era/era_brain/01 - Daily Notes — CM runs aren't day-logged
+  [PASS] CM learned feedback — no lessons recorded yet (learns from revise/approve orders)
+  [PASS] logs/memory_audit.jsonl — 0 line(s)
+  [WARN] Optional packages — Not installed: pywinctl, pyautogui, pyaudio, python_vlc, vosk
+  [WARN] Vosk model — vosk package not installed
+
+============================================================
+  Errors: 4   Warnings: 7
+  Status: NOT READY
+============================================================

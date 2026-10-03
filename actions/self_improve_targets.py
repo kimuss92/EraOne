@@ -31,48 +31,6 @@ _STOPWORDS = frozenset(
 )
 
 
-# Everyday words for a PART of a feature -> the filename word that part lives in.
-#
-# Why this exists: a user says "improve the HUD interface"; the file is
-# app/hud/api.py. "hud" is one shared word, and the confidence floor
-# (_MIN_CONFIDENT_SCORE = 2) rightly refuses one shared word. The user's second
-# word, "interface", IS evidence, it just is not spelled the way the module is.
-# Aliases turn it into evidence the scorer can count — the floor is untouched.
-#
-# Rules for adding an entry:
-# - ADDITIVE only: the original word is still matched literally. An alias can
-#   add a point to a file that already matches; it cannot remove a candidate.
-# - Name a PART, never the whole feature. "hud" must stay unaliased, so a bare
-#   "modify the HUD" keeps scoring 1 and stays ambiguous (board item 26).
-# - Pick the ONE module that part lives in. Two targets tie and refuse, which
-#   is correct but defeats the point.
-# - Do not alias words that appear in the live 2026-09-29 HUD requests (button,
-#   click, folder, location) — test_self_improve_targets pins those as refusals.
-# - Keys are matched after the plural strip below, so write them singular.
-_PART_ALIASES: dict[str, frozenset[str]] = {
-    # the HUD's HTTP surface — what "the interface" means to the Python side
-    # (the visible front end is built JS under ui/, which this tool cannot edit)
-    "interface": frozenset({"api"}),
-    "endpoint": frozenset({"api"}),
-    "route": frozenset({"api"}),
-    "rest": frozenset({"api"}),
-    "backend": frozenset({"api"}),
-    # app/hud/settings.py, "HUD preferences"
-    "preference": frozenset({"settings"}),
-    "option": frozenset({"settings"}),
-    # app/hud/status.py, "real status for the HUD: health, providers, ..."
-    "health": frozenset({"status"}),
-    "diagnostic": frozenset({"status"}),
-    "provider": frozenset({"status"}),
-    # app/hud/events.py, the event stream and agent state machine
-    "stream": frozenset({"events"}),
-    "event": frozenset({"events"}),
-    # app/hud/launcher*.py
-    "startup": frozenset({"launcher"}),
-    "splash": frozenset({"launcher"}),
-}
-
-
 def _manifest_candidates() -> list[Path]:
     """Era's modules as the generated index records them, or [] if unavailable.
 
@@ -157,18 +115,6 @@ def _name_tokens(path: Path) -> set[str]:
     return tokens
 
 
-def description_tokens(text: str) -> set[str]:
-    """The meaningful words of a request, singularised, plus part-aliases.
-
-    Shared by the filename ranker below and by the locator, so "which file" and
-    "which area" read a request the same way."""
-    tokens = {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
-    tokens |= {t.rstrip("s") for t in tokens if len(t) > 3}
-    for word in tuple(tokens):
-        tokens |= _PART_ALIASES.get(word, frozenset())
-    return tokens
-
-
 def find_target_files(text: str, limit: int = 8) -> list[tuple[int, str]]:
     """Rank Era's own modules against a natural-language feature description.
 
@@ -176,7 +122,8 @@ def find_target_files(text: str, limit: int = 8) -> list[tuple[int, str]]:
     name ('vision' hits every core/vision_*.py). Returns [(score, rel_path)],
     best first, only scored > 0.
     """
-    tokens = description_tokens(text)
+    tokens = {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
+    tokens |= {t.rstrip("s") for t in tokens if len(t) > 3}
     if not tokens:
         return []
     ranked: list[tuple[int, str]] = []

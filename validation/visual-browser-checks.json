@@ -1,0 +1,14 @@
+{
+  "browser": "Chromium 153 headless",
+  "tests": [
+    "live field edit",
+    "real canvas widgets",
+    "approval disabled until review",
+    "explicit approval callback",
+    "reminder creation",
+    "task pause",
+    "responsive viewport"
+  ],
+  "page_errors": [],
+  "temporary_backend": "/tmp/era-hud-preview-onfels82"
+}

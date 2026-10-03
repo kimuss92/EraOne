@@ -55,7 +55,6 @@ from core.llm.types import (
     StreamEvent,
     Usage,
 )
-from core.win_subprocess import NO_WINDOW
 
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 
@@ -214,6 +213,12 @@ class ClaudeCliProvider:
             # default tool set, which is exactly what must not happen here.
             "--allowedTools",
             "",
+            # allowedTools controls prompting, not tool availability.
+            "--tools",
+            "",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
         ]
         if entry.model:
             cmd += ["--model", entry.model]
@@ -284,7 +289,6 @@ class ClaudeCliProvider:
                 # whole engine down.
                 encoding="utf-8",
                 errors="replace",
-                creationflags=NO_WINDOW,
             )
         except FileNotFoundError as e:
             raise LlmError(

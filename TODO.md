@@ -9,44 +9,12 @@ proved it. "Written" is not "done".
 
 ---
 
-## ▶ START HERE — resuming in a new session
-
-**Branch:** `claude/kind-babbage-ml3csw` · **Remote:** `kimuss92/EraOne` (private)
-**Last pushed:** `ebe7615` (handoff docs) — plus the flickering-window fix below.
-
-**Waiting on Karim, not on code** — three fixes are built, tested and pushed, but
-none can be proved from a Linux container. All three need him on Windows. The
-plain-language test scripts are in the chat handoff; in short:
-
-| Item | What to test | What must NOT happen |
-|------|--------------|----------------------|
-| flicker | Restart Era, then ask for a few ordinary tasks (volume, open an app, close a window). | **No PowerShell window may blink on screen** — not once, including after Era restarts herself. |
-| 19 | Ask for a file that does not exist. She should try something before announcing a failure. | **Priority:** ask her to delete a file that does not exist, with a real file beside it. She must NOT retry onto the real one. |
-| 41 | Save a fact, ask for it in different words, **wait 6+ minutes**, ask again in different words. | She must not lose it after the wait. |
-| 45 | Restart Era, then say "improve the HUD interface". | She must name `app/hud/api.py` herself and start — NOT ask you for a filename. Bare "improve the HUD" must still be refused. Both are local commits only, **not pushed**. |
-
-**Next unstarted work:** item 20 (continuous learning pipeline).
-
-**Before touching code:** read `CLAUDE.md` (talking to Karim in plain language;
-auto-loading the right skill) and `handoff.md` (what was wrong, what changed, how
-it was verified). `LUNAR_HANDOFF.md` is the wider system map.
-
-**The gate, every time:**
-```bash
-python -m ruff format . && python -m ruff check --fix .
-python tools/era_manifest.py          # AFTER the last edit, never before
-python tools/era_gate.py --changed    # or --all (~5,300 tests, ~10-12 min)
-```
-A gate red is attributed against a baseline worktree, never explained away.
-
----
-
 ## ✅ Done
 
 | # | Item | Objective | Evidence |
 |---|---|---|---|
 | 1 | Baseline audit recorded | 1 | `era_doctor` → READY, 0 errors; full suite **5,105 passed, 1 skipped, 13m07s** (only failure was our own freshness guard) |
-| 2 | Codebase index generator `tools/era_manifest.py` | 13 | 284 modules, 52 tools, 0 unparseable **when built (2026-09-29)**; regenerated 2026-09-30 → **290 modules, 53 tools, 0 unparseable**. The generator is the source of truth, so this row records what it said then and what it says now — the count is expected to move as the repo grows, and a row frozen at the first number is how a "generated, not hand-written" map starts being read as stale |
+| 2 | Codebase index generator `tools/era_manifest.py` | 13 | 284 modules, 52 tools, 0 unparseable |
 | 3 | Navigation map `docs/MANIFEST.md` + `runtime/manifest.json` | 13, 4 | generated, not hand-written |
 | 4 | Anti-drift guard `tools/test_era_manifest.py` | 13, 3 | 7 passed in 13.5s |
 | 5 | `handoff.md` restructured into a technical log | workflow | prior CM content kept verbatim |
@@ -91,17 +59,6 @@ A gate red is attributed against a baseline worktree, never explained away.
 | 30b | **Live** proof of memory recall | 11 | Acceptance point 4 is *"tell her Monday, ask Friday after restarts"*. Saving, persistence and paraphrase recall each verify (9/12, 0/8 noise), but the acceptance test is a **user** doing it across days. Needs Ollama up for the semantic half; it degrades to lexical silently if not. |
 | 31b | **Live** proof of the truthful self-model | 3, 4 | Acceptance point 3 is closed when Karim asks *"what can you actually do?"* and she answers from `capability_check`, **including declining something absent**. The mechanism removes the means to invent; it cannot force the model to call the tool. |
 | 35b | **Windows `era_gate.py --all` owed for 34 + 35** | 10, 1 | This session ran on **Linux**, and Era is a Windows program. Targeted verification is green (53 in the changed file; 928 passed / 15 skipped across what this container can collect) and the gate's 8 reds were each reproduced on a **clean stash**, so none is mine — five `test_file_candidates` Windows-path cases, `test_local_fallback` (local models), a `test_protocol_one` frame, and `test_ads_dispatch::test_route_order_is_each_profile_direct_then_the_gateway`. `era_doctor` reads NOT READY here for 3 environmental errors only (no `.claude-freelance`, no OneDrive vault). What is left is ONE full Windows run: the per-test ceiling touches all 5,300 tests, and only that run shows none sits between 20s and 120s where 928 cannot see it. |
-| 36 | ~~Recall measurement drifts against the live store~~ — **CLOSED 2026-10-01** | 11, 1 | Was RED because the floors were asserted against the LIVE gitignored store, which grows every time Era learns something. Fixed by item 40's frozen 50-entry synthetic corpus, and closed by a measured run on Windows with Ollama/all-minilm at cut 0.36: **top-1 8/12, top-3 11/12, noise 0/8**, now baked as `FIXTURE_TOP1`/`FIXTURE_TOP3`. Run 1 (7/12, 10/12, **noise 1/8**) was deliberately NOT banked — a floor from a run that also reported noise is measured under a condition the noise test forbids. Words-only on the same corpus is 5/12, so semantic recall is worth **+3 on top-1 — the same gain the real store showed (6 → 9)**, which is the evidence the synthetic corpus is a fair stand-in rather than an easier one. |
-| 37 | **Fixed: a provider 5xx was logged as an Era crash, forcing DEGRADED** | 10, 1, 4 | Karim's `diag_20260930_150251.md` read **DEGRADED** off 18 `engine.crash` (Gemini internal errors during audio reception). `verdict_for`'s `crashes >= 5` makes that verdict arithmetic, not a measurement. Recovery was always correct (`_classify_disconnect` → `"transient"`); only SEVERITY was wrong, because `_is_network_blip` — which decides crash-vs-quiet — omitted `internal error`/`500` that **four other modules already treat as transient** (`ai_provider`, `gemini_generate`, `claude_cli`, `openai_compat`). New `_is_upstream_service_error` + a quiet `engine.upstream.error`, kept SEPARATE from `engine.network.blip` so an upstream outage stays countable apart from bad Wi-Fi. Markers are now **exported from `ai_provider`, not copied** — a second copy is how `NETWORK_MARKERS` drifted. **And the dismissal is not a blind spot:** `verdict_for` now reads the suppressed list and reports the 24h upstream rate (≥12 → HEALTHY WITH ISSUES naming the count). Caught a bug in my own first version: `_crash_echo` ran only for UNclassified crashes, so a suppressed crash left no marker and its echo double-counted — 4 drops read as 8. 10 tests, 5 load-bearing; 1,592 passed and **all 17 gate reds byte-identical before/after** (stash-proven) |
-| 38 | ~~1 unhandled `email` exception during OAuth~~ — **DROPPED by Karim 2026-09-30** | 1, 4 | Closed without a fix, deliberately and on his call. The finding stands if it ever recurs: `core/gmail_service.py:12` promises *"Nothing raises. Every entry point returns a result dict"*, and every OAuth path readable from here is already guarded — token load (`gmail_auth.py:175`), refresh (`:184`), `InstalledAppFlow.run_local_server` (`:270`), watcher loop (`gmail_watcher.py:126`). It escaped somewhere the code does not show, and closing it needs the `location` line from a diagnosis report. Not deleted from the board, because a dropped item that recurs should be recognised rather than rediscovered. |
-| 39 | **Item 22's instrument: one `turn.latency` line per turn** | 2 | Karim: *"it responds too late"*. Two answers. **The dial**, which needed no measurement: `core/vad.py` ships `silence_ms: 800` + `end_sensitivity: "low"` and its own docstring calls that *"the core of 'let me finish my sentence'"* — the lateness is bought deliberately to stop her interrupting, and is tunable via `ERA_ENDPOINTING_SILENCE_MS` / `ERA_ENDPOINTING_END` with no code change. **The instrument**, new `core/turn_latency.py`: `response_ms` (last word → first sound) broken into `endpoint_wait_ms` / `model_ms` / `playback_ms` / `tool_ms`. Honest limit, and it shaped the design: the local VAD runs only while SHE speaks, so there is no local speech-end timestamp — `endpoint_wait_ms` is a PROXY off the last transcript delta, logged beside `configured_silence_ms` so the two can be compared. 17 clock-driven tests; 1,074 passed with all 8 gate reds byte-identical before/after. **Wiring verified by reading, not execution** — no mic or Live session here; the live proof is the first `turn.latency` line on Karim's machine |
-| 40 | **Item 36 fixture: the recall measurement no longer drifts** | 11, 1 | `tools/golden/semantic_recall_store.json` — **50 synthetic entries** (11 targets, 12 traps, 27 filler) across the five real categories, `updated`/`access_count` identical everywhere so the tiebreakers in `score_memory_entry` cannot sway it, and nothing answering the 8 UNANSWERABLE queries (enforced by a test that scans the file). **Validated, not just written:** words-only **top-1 5/12, top-3 10/12, noise 0/8**, with every trap firing — `"where do I live"` returns ONLY `live_ui_feed_plan` (item 30's bug, reproduced), and `"what do I do for a living"` returns nothing at all. Better split than planned: the lexical half needs **no Ollama**, so `FIXTURE_LEXICAL_TOP1=5` / `TOP3=10` are baked now with proof and pinned by two model-free tests. 22 passed, 3 skipped; gate ruff+manifest+tests PASS. Also: the brief's `test_prompt_injection_never_embeds` already existed and is a PERFORMANCE invariant (memory→prompt), so the security one was added beside it as `test_injection_shaped_memory_is_data_not_instruction`; atomic cache replace and `ERA_SEMANTIC_RECALL=0` already existed |
-| 41 | ~~The embedding probe times out on a COLD model~~ — **FIXED 2026-10-02** | 11 | Ollama unloads an idle model after 5 minutes; Era's measured cold load is ~4s (`core/vision_config.resolve_ollama_timeout`); the probe allowed **1.5s**. So the first recall after ANY conversational pause timed out, dropped to word-matching, cached that for a minute and repeated — forever, and **silently**, which is why board item 30b's "degrades to lexical silently" had no identified cause. **Not fixed by a bigger timeout**, which the board ruled out in advance: the probe sits mid-sentence, so paying 4s there buys memory at the exact price item 22 exists to remove. Three changes, none on the conversational path. **(1)** `keep_alive` on every embed (verified against the live Ollama API docs for Karim's **0.35.0**, and against `/api/embed` — the non-deprecated endpoint Era already used; default `1h`, `ERA_EMBED_KEEP_ALIVE` overrides, accepts `-1` for indefinite), so a loaded model stops being unloaded at all. **(2)** A cold probe still fails fast but now starts a **background warm-up** with a real 20s cold-load budget, one at a time, daemon, which clears the cached "unavailable" the moment the model answers — so the turn that found it cold is lexical and the NEXT one is not. **(3)** The drop is **logged on change**, because invisibility is what let this run undiagnosed. 10 tests; **8/8 targeted mutations caught** (no keep_alive, no warm-up, warm-up on the probe budget, warm-up not clearing the cache, no one-at-a-time guard, non-daemon thread, logging every probe, silent degradation). 175 memory tests pass. **Live proof owed:** ask her something from memory, wait >5 min, ask again — see item 30b. |
-| 42 | **OPEN: a fresh clone is RED until `era_manifest.py` is run** | 1, 10 | Found 2026-10-01 while attributing a full-suite run. `runtime/` is gitignored (`.gitignore:44`), so a clean checkout has **no `runtime/manifest.json`** — and **26 tests fail for its absence**, across `test_era_manifest`, `test_era_gate`, `test_self_improve_targets`, `test_self_heal`, `test_lint_feedback`, `test_claude_self_improve`, `test_self_improve_verifier`. Proven: generating the manifest in a baseline worktree turned 27 'failures' into 1. `era_gate.py` self-heals the manifest (item 16) so the GATE hides this, but a bare `python -m pytest` does not, and nor would CI — anyone cloning fresh sees 26 red with no hint that one command fixes them. **Fix is a decision:** document it as a required first step, or have `conftest.py` generate the manifest when missing. The second is a behaviour change (a test fixture writing a build artifact) and should not be made as a side effect. **Also parked here:** `test_zz_check_gate::test_script_checks_all_passed[test_execution_layer]` fails at baseline AND HEAD and is not platform-shaped — that file exists because script checks once "sat green for months while asserting the OPPOSITE of correct behaviour", so it deserves a look on Windows. |
-| 43 | **Item 36 closed: floors measured and baked** | 11, 1 | `FIXTURE_TOP1 = 8`, `FIXTURE_TOP3 = 11`, measured 2026-10-01 (Windows, Ollama all-minilm, COSINE_CUT 0.36, 50-entry frozen corpus, noise 0/8). Asserted as `>=` so a better model pushes them up without failing; falling below them on a corpus that cannot drift is now a real regression rather than the store having moved. **One case semantic recall still does not rescue on this corpus, recorded rather than tuned away:** `"where do I live"` returns ONLY `live_ui_feed_plan` — `current_city: Bristol` scores below the 0.36 cut even as a real city, where the live store's `Tunis` cleared it. Raising top-1 to 9 by rewording that entry would be fitting the corpus to the result, which is the same sin as lowering a floor. 22 passed, 3 skipped (model-gated); ruff clean. |
-| 44 | **Item 19: the failure announcement no longer pre-empts the workaround** | 6, 4, 1 | Two defects, both read off the code rather than guessed. **(1) The prompt promised a mechanism that cannot exist.** §4 deferred recovery to "self-healing routing"; `core/self_healing_router.py` is a **pre-dispatch** rewriter — two production call sites, neither after a result, and no parameter for one. Rewritten as **FALLBACK BEFORE ASKING**: ONE attempt down a genuinely different route before reporting anything, naming the fact that nothing else will do it, with a hard carve-out — never auto-retry a HIGH-risk, destructive, irreversible or ConfirmationRequired action. **(2) The announcement came first, from code.** `_execute_tool` called `speak_error` the instant a tool failed; on the Fish voice that reaches the speakers LITERALLY, before the model had even been handed the failure. So "try workarounds before asking" was not unimplemented, it was **impossible by construction** — any recovery could only contradict a sentence the user had already heard. New `core/tool_recovery.py` arms the notice instead; it is flushed at **both** turn boundaries (cloud in `audio.py`, local brain in `local_fallback.py` — the local path never produces a `turn_complete`). A later success of the SAME tool+action cancels it. **Narrow on purpose:** a different tool succeeding does NOT cancel, because "anything succeeding clears everything" would swallow a real failure inside a compound command, and silence about a failure is worse than a late report. The (tool, action) key has a **known false negative** — one tool, two targets, first forgiven — pinned by its own test rather than left to be rediscovered; closing it would break the corrected-parameter retry the whole module exists for. Residual recorded too: a mid-turn disconnect reports late, bounded by `MAX_AGE_S`. 24 tests; **load-bearing proven by reverting, not asserted** — restoring the `speak_error` line fails `test_a_failed_tool_says_nothing_during_the_turn`, deleting either flush site fails the wiring guard, and 6/6 targeted mutations of the store were caught. 24 passed, ruff clean on 697 files, `era_doctor` unchanged at its 3 environmental errors. **Full-suite attribution: 5,139 passed / 56 failed against the baseline worktree's 5,116 / 55 — ZERO introduced and zero accidentally 'fixed'.** Took two runs to get an honest reading, and both corrections were mine: the first run reported `test_build_is_deterministic` red because I was still editing source files WHILE it ran, and that test builds the manifest twice asserting *"any diff means the code moved"* — it caught me moving the tree, so the whole run was discarded rather than explained away. The clean re-run then found a REAL fault in the first commit: `test_committed_artifacts_are_fresh` red, because the manifest had been regenerated BEFORE the last edits and the committed copy was stale by 28 shifted line numbers. Regenerated and fixed in the follow-up commit — the freshness constraint is a gate for exactly this. |
-| 45 | **Era finds the file herself — `self_improve action=locate`** | 8, 13 | Asked to "improve the HUD interface" she listed files and asked Karim for a filename he cannot know. Two causes: "HUD interface" shares one word with `app/hud/api.py` and the floor (rightly) wants two; and nothing told her to look before asking. Now: an additive table of part-words (`interface`→api …) in `self_improve_targets`; new `actions/self_improve_locator.py` (area from the manifest's subsystem table, which `era_manifest` now writes into `manifest.json`; files ranked by filename + their own one-line doc; a pick needs TWO filename words, docs only break ties — a first draft let the doc "Open … the HUD" win the live 09-29 button request for `browser.py`, now pinned by a test). A new ability gets the real 9-file checklist and an honest "self_improve cannot create a file". Also fixed: `find` was read-only to the guard but announced as "working in the background". Prompt rule added, golden file regenerated. 31 new tests (mutation caught by 2). Commits `36f1661`, `0898f0f`. **Not proven live on Windows.** |
-| 46 | **OPEN: `test_semantic_recall::test_injection_shaped_memory_is_data_not_instruction` fails inside its own file** | 11, 1 | Attributed 2026-10-03: fails identically on `1371154` (before item 45), passes alone → order-dependent. Log line `shapes (4,) and (384,) not aligned` says an earlier test leaves a 4-dim fake embedding in the cache. Not caused by 45; not fixed. Full suite otherwise **5,331 passed, 1 skipped** (the other red, `test_claude_self_improve`, was a test that only passed when no AI model was reachable — fixed in `0898f0f`). |
 
 ---
 
@@ -110,10 +67,7 @@ A gate red is attributed against a baseline worktree, never explained away.
 All four defects from the 2026-09-29 live test (24–27) are fixed and gated, and
 **#15 (memory + RAG) and #16 (runtime grounding) are built and measured** —
 evidence in `handoff.md`. **#17 (the Claude bridge, item 32), #17c and #18 are now
-done too**. **#19's mechanism is now built as well (item 44)** — what it owes is a
-live run, not more code — so the next unstarted item is **#20, the continuous
-learning pipeline**. (#20b stays deferred on its own evidence; #22's tuning still
-waits on real `turn.latency` lines; #23 is last by design.)
+done too** — so the next unstarted item is **#19, the intelligent fallback protocol**.
 
 Two of those four were misdiagnosed on this board until the logged tool
 arguments were replayed against the running code — do that first, every time.
@@ -124,11 +78,10 @@ check no unit test can make (see "In progress").
 
 | # | Item | Objective | Why this order |
 |---|------|-----------|----------------|
-| 19 | Intelligent fallback protocol — **mechanism built (44), live proof owed** | 6 | Started 2026-10-02. The audit found the protocol was not merely missing but **contradicted**: `core/prompt.txt` §4 said *"exactly one target tool, no retries"* and *"report the failure … and allow self-healing routing to select a safer existing route"* — and `route_tool_call` has **two production call sites, both PRE-dispatch**, with a signature (`tool, parameters, user_text`) that cannot receive a result. She was told to stand down and wait for a recovery layer that structurally cannot exist. Fixed in 44. **What is left is Karim, out loud:** a tool has to fail on his machine and she has to take the other route. No unit test can claim that — the prompt permits the attempt, it cannot force the model to make it. |
+| 19 | Intelligent fallback protocol (try workarounds before asking) | 6 | — |
 | 20 | Continuous learning pipeline (web + RLHF + error logs) | 5, 7 | Feeds on 15 |
-| 20b | **Quota ledger — proposed, approved, then NOT built on the evidence** | 10 | The plan (shared persisted ledger, wall-clock, key fingerprints never plaintext, read by both `quota_failover` and `main.py:_rotate_api_key`, surfaced in era_doctor) was approved *subject to measuring first*. The 24h counts came back: **`engine.quota.exhausted` = 1**, against 37 `engine.network.blip`, 25 `engine.crash` (historical, pre-item-37) and 4 `engine.upstream.error`. Building persistence for a once-ever event is work the data does not justify, so it is deferred, not dropped. **The three defects behind it stand and are real:** (1) `_rotate_api_key` and `quota_failover._LATCH` are two independent quota memories that never consult each other; (2) `_LATCH` is in-process on `time.monotonic()`, so every relaunch re-tries keys it knew were dead; (3) `quota_failover.status()` exists and **nothing calls it** — quota health is invisible to era_doctor and self_diagnosis. Revisit when the quota count stops being 1. |
 | 21 | Watchdog / self-maintenance routines | 10 | `era_supervisor.py` exists; audit before extending. Note it behaved correctly on 09-29 — the hang check is what caught 24 |
-| 22 | Latency pass — **instrument built (39), tuning now waits on real data** | 2 | Measure first — do not optimize on a guess. As of 2026-09-30 the measurement EXISTS: every turn logs `turn.latency`. Nothing should be optimized until a few days of those lines say which of `endpoint_wait_ms` / `model_ms` / `tool_ms` actually dominates — the first guess ("the model is slow") and the real first suspect (Era's own deliberate 800ms patience) point at opposite fixes. **First measurement already banked (2026-09-29):** the 15 slowest TESTS are all deliberate-timeout paths (19.0s, 15.9s, 4×13.6s…) — roughly 3 minutes of every suite run is sleeping through timeouts that could be injected instead. Clean full suite is **12:10**. |
+| 22 | Latency pass | 2 | Measure first — do not optimize on a guess. **First measurement already banked (2026-09-29):** the 15 slowest tests are all deliberate-timeout paths (19.0s, 15.9s, 4×13.6s…) — roughly **3 minutes of every run is sleeping through timeouts** that could be injected instead. Clean full suite is **12:10**. |
 | 23 | Response-quality pass | 12 | Last: judged against a system that must already be correct |
 
 *(A duplicated block of items 12–19 that repeated 15–23 was removed here on
@@ -153,39 +106,6 @@ actually runs. Note the trap for whoever picks this up: `tools/test_background_l
 passes either way, so the tests are no evidence that the manager runs. Same call
 as above — rewire (boot it from `main.py` and move the timer loops into it) or
 retire. Until then, treat it as a decoy when looking for somewhere to put a loop.
-
-**Wake-word decoys guard the wrong word (found 2026-09-30, item 39):**
-`config/wake_word.json` sets `wake_word: "shazam"`, but its `decoys` are
-`["error", "her", "area", "here", "hey", ...]` — words that sound like **"era"**, the
-previous wake word. So the near-miss protection is inert for the word actually in
-use, and nothing rejects things that sound like "shazam". Harmless today (a decoy
-only ever causes a rejection) which is why it was left alone: changing wake-word
-behaviour on a live voice assistant mid-session is Karim's call, not a side effect
-of a latency investigation. Either refresh the decoys for "shazam" or, if "era" is
-meant to be the wake word again, change it back and the list is already right.
-
-**A third decision, opened 2026-09-30 by board item 36:**
-`tools/test_semantic_recall.py`'s measured numbers (`MEASURED_TOP1 = 9`,
-`MEASURED_TOP3 = 10`) are asserted against a copy of Karim's **live, gitignored**
-`memory/long_term.json`. That makes the one test carrying acceptance point 4's
-numbers unreproducible: it drifts as he uses Era, it cannot be re-measured on any
-other machine, and it has now gone red without a line of relevant code changing.
-Two ways out, and the choice is his because one of them concerns his own data:
-
-  * **Freeze a fixture.** Give this test a committed store under `tools/golden/`
-    and calibrate against that; live drift then cannot break it, and the numbers
-    mean something a year from now. It needs ONE re-measurement on a machine with
-    Ollama to bank the new floors. **Do not simply commit the real store** — it
-    holds his birthday, city and family details, so the fixture must be synthetic
-    entries in the same shape, not a copy. That is the recommendation.
-  * **Keep it live and accept the drift**, treating the floors as a rolling
-    measurement to be re-banked whenever the store grows. Honest, but it means a
-    red gate is sometimes just news about the store, which is exactly the signal
-    a gate is supposed not to send.
-
-What must NOT happen is lowering `MEASURED_TOP3` to 9 to make the red go away:
-that is fitting the assertion to the result, and it would mask the real
-regression this test exists to catch.
 
 ---
 

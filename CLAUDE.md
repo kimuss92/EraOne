@@ -12,40 +12,6 @@
 - Keep files under 500 lines
 - Validate input at system boundaries
 
-## Talking to Karim
-
-Karim is not a coder. Write to him in plain language.
-
-- No jargon in replies. Not "the dispatch funnel pre-empts the recovery path" —
-  "she announced the error before trying anything else".
-- Every time something is fixed, tell him **how to test it**: the exact words to
-  say to Era, what a good result sounds like, what a bad result sounds like.
-- Say plainly what is proven and what is not. Tests passing in a Linux container
-  is not proof that Era works on his Windows machine; say which is which.
-- Technical depth still belongs in `handoff.md`, commit messages and code
-  comments. Keep it out of the chat reply.
-
-## Skills and plugins — use them, don't wait to be asked
-
-This repo ships ~50 skills in `.claude/skills/` and the ECC command set in
-`.claude/commands/ecc/`. Load the relevant one **automatically** when a task
-matches it; do not ask permission first and do not reinvent what a skill covers.
-
-| Working on | Load |
-|------------|------|
-| `era_dispatch.py`, `core/cm_vault.py`, `core/cm_learning.py`, `core/vault_*.py`, `core/daily_note.py`, `music_generate.py`, `obsidian_era/` | `cm-lane` |
-| Any paid Meta campaign (Delta Cuisine, Brico Kitchen, Ceram Quartz) | `era-ads-manager`, then `era-meta-analyst` to read results |
-| Saving/filing anything into the Obsidian vault | `vault-organizer` |
-| Kitchen/wardrobe concepts or renders | `interior-design`; add `wardrobe-reel-workflow` for wardrobe Reels |
-| Magnific flows or Spaces | `magnific-ad-creator`, `magnific-space-expert` |
-| Reels / image sets that must look professional | `reel-art-director` |
-| Before any commit | `/pre-commit-check` |
-| Reviewing a diff or PR | `/ecc:code-review` |
-| Fixing build or import errors | `/ecc:build-fix` |
-| Python-specific review | `/ecc:python-review` |
-
-`brands.yaml` outranks any skill that disagrees with it.
-
 ## Community-Management (CM) lane
 
 Vault knowledge precedence, invariants (brand isolation, degrade-never-raise,

@@ -1886,7 +1886,8 @@ TOOL_DECLARATIONS = [
             "the netflix search'), leave file_path empty and put the feature words "
             "in description — the tool finds the right module itself and says so, "
             "or lists candidates if several match. Never use code_helper on Era's "
-            "own files. Changes take effect after a restart. Secrets and memory "
+            "own files. apply now generates and verifies a staged candidate for final HUD approval. "
+            "Visual changes reload live; other engine Python edits need restart. Secrets and memory "
             "state are never touched; safety-layer files need the user's "
             "confirmation."
         ),
@@ -1897,10 +1898,7 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": (
                         "propose (read-only plan, default) | apply | rollback | "
-                        "find (list which of Era's modules match the description) | "
-                        "locate (read-only: which area and file a change belongs in, or "
-                        "what a brand-new ability must touch; call it BEFORE asking the "
-                        "user for a filename) | list_backups"
+                        "find (list which of Era's modules match the description) | list_backups"
                     ),
                 },
                 "file_path": {
@@ -1917,15 +1915,10 @@ TOOL_DECLARATIONS = [
                 "reload": {
                     "type": "BOOLEAN",
                     "description": (
-                        "Optional, default false. With action='apply', restart Era "
-                        "automatically once the change is verified, so it goes live "
-                        "immediately instead of waiting for the next restart. Pass "
-                        "true when the user wants to SEE the change now — 'change the "
-                        "HUD', 'fix that and make it live', 'add this ability'. Leave "
-                        "false for a change they only want made, and for anything "
-                        "running unattended. Era restarts only if the independent "
-                        "verification passes cleanly and no community-management job "
-                        "is running; otherwise she says so and stays up."
+                        "Optional, default false. apply stages and verifies a candidate. "
+                        "After final user approval, true reloads rebuilt visual UI without "
+                        "restarting the Python engine. Reloadable feature modules activate "
+                        "live. Existing engine Python edits require an explicit restart."
                     ),
                 },
                 "generator": {
@@ -1933,7 +1926,7 @@ TOOL_DECLARATIONS = [
                     "description": (
                         "Optional. 'claude' routes the generated code through the "
                         "tool-less Claude Code CLI (stronger coding model); "
-                        "'default' or omitted uses the Era LLM API as before. "
+                        "'default' or omitted still uses Claude for live tool requests, in staging. "
                         "Only changes WHERE the text comes from — backup, "
                         "verification and rollback are unchanged either way."
                     ),
@@ -2096,6 +2089,45 @@ TOOL_DECLARATIONS = [
                 },
             },
             "required": ["action"],
+        },
+    },
+    {
+        "name": "visual_engine",
+        "description": "Update the running HUD without restart. command is JSON: action upsert/remove/layout/reset; widget {id,kind:text|metric|progress|chart|button|field,label,value,series,binding:cpu_percent|ram_percent|development,action:{drawer:schedule|diagnostics|settings|capabilities|conversation}}; layout {theme:dark|light,density:compact|comfortable,columns:1..3,accent:#hex,left:bool,right:bool}. No HTML/scripts. Use action snapshot to read.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {"command": {"type": "STRING"}},
+            "required": ["command"],
+        },
+    },
+    {
+        "name": "autonomous_development",
+        "description": "Create or improve Era One's own features using tool-less Claude Code. Generates changes in a separate workspace, runs self_improve apply/create, tests and self_diagnosis, then waits for user's final HUD approval. NEVER use code_helper on own source. No live source changes during propose; cannot approve via model.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["propose", "status", "reject"]},
+                "request": {"type": "STRING"},
+                "file_paths": {
+                    "type": "STRING",
+                    "description": "Optional JSON array of repository source paths",
+                },
+                "reload": {"type": "BOOLEAN"},
+                "job_id": {"type": "STRING"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "run_feature",
+        "description": "Run an activated feature from autonomous development. Always needs user confirmation. Use autonomous_development status to list available features.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "feature_id": {"type": "STRING"},
+                "arguments": {"type": "STRING", "description": "JSON object"},
+            },
+            "required": ["feature_id"],
         },
     },
 ]

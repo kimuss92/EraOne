@@ -1,48 +1,11 @@
-"""
-hermes_router.py — Era One's top-level "which lane?" router.
+"""Hermes community-management extension behind the offline Autopilot gate.
 
-WHAT THIS IS (and just as importantly, what it is NOT)
-  Hermes looks at ONE incoming utterance and answers a single question:
-  "Which lane of Era should handle this?"  It returns a CATEGORY and nothing more.
-  It does not do the work, it does not call tools, it does not talk to the user.
-  It is the fast, cheap traffic cop that sits in front of everything:
-
-      you (voice/text) ─► HERMES (category only) ─┬─ "cm"        ─► era_dispatch (Claude Code)
-                                                  └─ "assistant" ─► Era's normal Gemini Live flow
-
-WHY IT EXISTS
-  Community-management work (plan a brand's week, build a campaign, produce/publish
-  posts) is heavy, brand-scoped, and gated — it belongs in a separate Claude Code
-  run per brand (era_dispatch.py). Everything else Era does (open apps, control
-  media, answer questions, remember things) stays in the live voice loop. Hermes
-  is the one place that decides which of those two lanes an utterance goes to, so
-  no single monolithic prompt has to juggle both jobs.
-
-CATEGORIES (top level, deliberately few)
-  cm        — brand / community-management work that must go to era_dispatch.
-              e.g. "plan Delta Cuisine's week", "publish the approved carousel",
-                   "build a promo campaign for Ceram Quartz".
-  assistant — everything else Era already handles in the live flow:
-              device/app/media control, web/search, chat, questions, memory.
-
-DESIGN NOTES
-  - Gemini-first (per Era's Gemini-only voice/brain policy) via core.ai_provider.
-  - Deterministic fallback: if the model errors or returns junk, Hermes falls back
-    to a brand+verb heuristic so a network blip never sends CM work into the wrong
-    lane silently. The fallback is intentionally conservative — it only says "cm"
-    when it sees BOTH a known brand and a CM action word.
-  - Brand-aware: it loads the real brand aliases from brands.yaml so "dc" or
-    "quartz" are recognized exactly like era_dispatch recognizes them.
-  - Pure function surface: route(text) -> RouteDecision. Easy to unit test.
-
-USAGE
-  from hermes_router import route
-  decision = route("prepare this week's content for Delta Cuisine")
-  if decision.category == "cm":
-      from era_dispatch import run_task
-      run_task(decision.text, brand_key=decision.brand)
-  else:
-      ...  # hand back to Era's normal flow
+The three-lane command/coding/conversation classifier lives in core.autopilot.
+This compatibility router keeps the existing cm/assistant dispatch contract.
+Default classification uses deterministic rules, with no Ollama or Gemini call.
+Model-assisted CM classification remains an explicit HERMES_PROVIDER_ORDER
+opt-in. Brand-specific dispatch and missing-brand questions retain their gates.
+See AUTOPILOT_ARCHITECTURE.md for the complete execution and voice boundaries.
 """
 
 from __future__ import annotations
@@ -58,12 +21,9 @@ import era_dispatch as ed
 # The one Gemini entry point Era uses everywhere else.
 from core.ai_provider import DEFAULT_FAST_MODEL, generate_json
 
-# Local Ollama is the DEFAULT classifier so routing never burns the metered Gemini
-# generateContent quota (which is only 20/day on the free tier — it was silently
-# exhausting and forcing the heuristic fallback for every utterance). Gemini stays
-# as a secondary provider; the deterministic heuristic is the final safety net.
-# Order is configurable via HERMES_PROVIDER_ORDER (comma-sep, e.g. "gemini,ollama").
-_DEFAULT_PROVIDER_ORDER = "ollama,gemini"
+# Routing defaults to offline rules. Model-assisted CM classification is an
+# explicit opt-in through HERMES_PROVIDER_ORDER (e.g. "ollama,gemini").
+_DEFAULT_PROVIDER_ORDER = "rules"
 _DEFAULT_LOCAL_MODEL = "qwen2.5-coder:7b"
 
 
@@ -77,13 +37,11 @@ def _resolve_local_model() -> str:
 
 
 def _resolve_local_timeout() -> int:
-    """Generous by default: a cold model load can take 30-60s, and a slow-but-
-    correct first classification beats timing out into the heuristic fallback.
-    Warm calls return in ~1s regardless. Separate from the vision timeout."""
+    """Bound opt-in classifier latency; default is two seconds."""
     try:
-        return int(os.environ.get("HERMES_LOCAL_TIMEOUT_S", "120"))
+        return max(1, min(10, int(os.environ.get("HERMES_LOCAL_TIMEOUT_S", "2"))))
     except (ValueError, TypeError):
-        return 120
+        return 2
 
 
 # --- The top-level lanes. Keep this list SHORT; add a lane only when a genuinely
@@ -350,7 +308,21 @@ def route(text: str, *, model: str = DEFAULT_FAST_MODEL) -> RouteDecision:
 
     prompt = _build_prompt(text, known)
     for provider in _provider_order():
-        if provider == "ollama":
+        if provider == "rules":
+            decision = _fallback(text, cfg)
+            decision.category = "assistant"
+            decision.reason = "rules: no clear CM production order"
+            # Clear brandless production orders keep the existing brand-ask
+            # pipeline. General questions ABOUT marketing remain conversation.
+            import re
+
+            if re.match(r"^(?:prepare|create|produce|publish|schedule|build|plan|write)\b", text, re.I) and re.search(
+                r"\b(?:content plan|content week|campaigns?|captions?|carousels?|reels?|posts?|week)\b", text, re.I
+            ):
+                decision.category = "cm"
+                decision.reason = "rules: explicit CM production order"
+            decision.source = "rules"
+        elif provider == "ollama":
             decision = _classify_local(prompt, text, known)
         elif provider == "gemini":
             decision = _classify_gemini(prompt, text, known, model)
