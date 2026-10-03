@@ -20,6 +20,51 @@ the last edit, because one built mid-edit is already stale at commit time.
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-03 · BUILT — Era works out which file a request means (`self_improve action=locate`)
+**Reported by Karim:** asked to "improve the HUD interface", Era listed several
+`app/hud/` files "without confidence" and asked which one. He does not know her
+filenames and wants her to find where to edit on her own.
+
+**Why she could not.** `find_target_files` counts request words that appear in a
+module's NAME and `resolve_request` refuses below 2 (board item 26, measured).
+"HUD interface" shares only "hud" with `app/hud/api.py`. And nothing told her to
+look for the file herself before asking the user.
+
+**What changed**
+- `actions/self_improve_targets.py` — `_PART_ALIASES` (interface/endpoint/route/
+  rest/backend→api, preference/option→settings, health/diagnostic/provider→status,
+  stream/event→events, startup/splash→launcher) and `description_tokens()`.
+  Additive; "hud" itself is deliberately unaliased so "modify the HUD" still scores
+  1 and is still refused.
+- `actions/self_improve_locator.py` (new) — area from `manifest.json` →
+  `subsystems`; candidates ranked on filename words + the module's own doc line;
+  `decisive()` needs TWO filename words and a lead; `_agreed_with_resolver` so it
+  can never contradict `resolve_request`; non-editable files flagged from the real
+  `_resolve_target`; new-ability requests get `NEW_TOOL_CHECKLIST`.
+- `tools/era_manifest.py` — writes `SUBSYSTEMS` into `manifest.json` (one copy).
+- `core/safety_guard.py` / `app/era_live/tool_dispatch.py` — `locate` read-only;
+  the dispatcher now answers `find` inline too (it was announced as background
+  work); the refusal text tells her to call `locate` before asking.
+- `core/prompt.txt` (CRLF + BOM preserved), `app/tool_declarations.py`, golden file.
+
+**What the first draft got wrong, and the test that now pins it.** `decisive()`
+originally took name+doc points ≥3; the live 2026-09-29 button request then picked
+`app/hud/browser.py` because its doc says "Open … the HUD". Same wrong-file mistake
+as item 26. Fixed by requiring two filename words; descriptions only break ties.
+A loose area match also sent "add a new tool that checks the weather" to
+`core/protocol_checks.py` — new-ability requests now skip file picking entirely.
+
+**Deliberately NOT built:** creating new files / multi-file edits from
+`self_improve`. The apply path rewrites one existing file and its verifier assumes
+that; a new tool touches 9 files incl. the safety class. It says so instead of
+starting. Karim's call whether to build it.
+
+**Verified:** 31 new tests; mutation (floor lowered to 1) caught by 2. Full suite
+**5,331 passed, 1 skipped, 2 failed**: `test_claude_self_improve` was a latent test
+bug (the repair pass called the REAL model; with a working key it fixed the broken
+code) — stubbed, commit `0898f0f`; `test_semantic_recall` fails identically on
+`1371154` (order-dependent, board item 46). **Not tested live / on Windows by Karim.**
+
 ### 2026-10-03 · FIXED — a PowerShell window blinking on screen on every task
 **Reported by Karim:** "there is a powershell window flickering when i ask era to
 do any task". No log evidence was available: `logs/` is gitignored, so the
