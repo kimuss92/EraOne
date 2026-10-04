@@ -39,10 +39,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 from collections.abc import Iterator
 from typing import Any
 
-from core.llm.adapters.claude_cli import ClaudeCliProvider
+from core.llm.adapters.claude_cli import GATEWAY_ENV_VARS, ClaudeCliProvider
 from core.llm.registry import ModelEntry
 from core.llm.types import LlmError, LlmMessage, LlmRequest, StreamEvent
 
@@ -156,6 +157,21 @@ class ClaudeVoiceProvider(ClaudeCliProvider):
 
     def _build_command(self, entry: ModelEntry) -> list[str]:
         return [*super()._build_command(entry), *_LEAN_FLAGS]
+
+    def _build_env(self, entry: ModelEntry, account: Any = None) -> dict[str, str]:
+        """The subscription login, not the gateway: a user environment that points
+        Claude Code at OmniRoute makes `claude -p` exit 1 with no output (60 s
+        timeout before this strip, 4-7 s after). ERA_CLAUDE_KEEP_API_ENV=1 opts out."""
+        env = super()._build_env(entry, account)
+        if os.environ.get("ERA_CLAUDE_KEEP_API_ENV", "").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            for name in GATEWAY_ENV_VARS:
+                env.pop(name, None)
+        return env
 
     @staticmethod
     def _to_text_request(request: LlmRequest) -> LlmRequest:

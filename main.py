@@ -211,6 +211,7 @@ get_queue().set_executor_factory(lambda: AgentExecutor())
 from app.era_live.audio import AudioIOMixin
 from app.era_live.autopilot import AutopilotMixin
 from app.era_live.cascade import CascadeMixin
+from app.era_live.claude_voice import ClaudeVoiceMixin
 from app.era_live.cm_flow import CMFlowMixin
 from app.era_live.dispatch import DispatchMixin
 from app.era_live.local_fallback import LocalFallbackMixin
@@ -230,6 +231,7 @@ from app.system_prompt import (  # noqa: F401  (re-export: preserves public + in
     _load_system_prompt,
 )
 from app.tool_declarations import TOOL_DECLARATIONS  # noqa: F401  (re-export)
+from core.live_health import LiveHealth
 from core.tts_fish import is_configured as _fish_configured
 from core.voice_mode import MODE_FISH_AUDIO, VOICE_CFG
 
@@ -247,6 +249,7 @@ class EraLive(
     AudioIOMixin,
     LocalFallbackMixin,
     CascadeMixin,
+    ClaudeVoiceMixin,
 ):
     def __init__(self, ui: Any):
         self.ui = ui
@@ -481,6 +484,17 @@ class EraLive(
         # ----- GOAWAY GRACEFUL TEARDOWN -----
         self._go_away_event = asyncio.Event()
         # -------------------------------------
+
+        # ----- LIVE-SESSION HEALTH (core/live_health.py) -----
+        # Judges whether a CONNECTED Gemini session is actually answering (deaf /
+        # mute / flaky). Fed by app/era_live/audio.py and the connect loop below;
+        # read by ClaudeVoiceMixin._live_health_watch. Upstream errors are kept
+        # across reconnects on purpose — the pattern spans connections.
+        self.live_health = LiveHealth()
+        # The tasks of the CURRENT Gemini session, so entering Claude voice can end
+        # them at once instead of waiting for Gemini's next message (see run()).
+        self._session_tasks: list[asyncio.Task] = []
+        # -----------------------------------------------------
 
         # ----- RECONNECT BACKOFF -----
         self._reconnect_attempts: int = 0
@@ -1587,6 +1601,14 @@ class EraLive(
             # and Gemini Live connects below exactly as before.
             if await self.serve_cascade():
                 continue
+            # ── Claude voice mode: Gemini is connected-but-silent, or the user asked ──
+            # While a Claude window is open (app/era_live/claude_voice.py) the local
+            # loop serves — mic -> Whisper -> LocalBrain(claude -p) -> Fish/Piper. It
+            # must be offered BEFORE Gemini connects or the window never opens.
+            # Returns False (and Gemini connects below, unchanged) whenever no window
+            # is open, which is always so while routing.claude_voice.enabled is false.
+            if await self.serve_claude_voice():
+                continue
             resumed_with_handle = False
             try:
                 print("[era] [CONNECT] Connecting...")
@@ -1669,6 +1691,7 @@ class EraLive(
 
                     print("[era] [OK] Connected.")
                     self._offline_streak = 0
+                    self.live_health.reset()  # a new connection is judged afresh
                     self.note_cloud_restored()
                     # A successful connection means any prior outage is over —
                     # start the next failure streak from zero and reset the quota
@@ -1740,7 +1763,14 @@ class EraLive(
                         tg.create_task(self._receive_audio()),
                         tg.create_task(self._play_audio()),
                         tg.create_task(self._monitor_idle_state()),
+                        # Ends this session when it is connected but not answering
+                        # (deaf / mute / flaky) and hands the voice to Claude. A
+                        # no-op when ERA_LIVE_HEALTH=0 or claude voice is disabled.
+                        tg.create_task(self._live_health_watch()),
                     ]
+                    # So enter_claude_voice can cancel them NOW: setting the go-away
+                    # event alone does not wake a task parked on receive().
+                    self._session_tasks = session_tasks
 
                     # ── Finish what the drop cut off ──
                     # The handle restored what the MODEL knows; this restores
@@ -1758,8 +1788,10 @@ class EraLive(
                 self._capture_turn_cut_by_drop()
                 self._renewal_deadline = None
                 self.session = None
+                self._session_tasks = []
 
             except Exception as e:
+                self._session_tasks = []
                 # Stash the half-spoken reply BEFORE anything else looks at the
                 # error: every branch below ends in a reconnect, and by then
                 # _receive_audio has been torn down and _live_turn_text is the
@@ -1907,6 +1939,10 @@ class EraLive(
                             error=detail[:200],
                         )
                     else:
+                        # An upstream service failure (not quota, auth, a rotation or
+                        # a local network drop). One reconnects fine; several in a
+                        # short window are the "flaky" verdict (core/live_health.py).
+                        self.live_health.note_upstream_error()
                         print(f"[era] [WARN] {e}")
                         traceback.print_exc()
                         log_crash(

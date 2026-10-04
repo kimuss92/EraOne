@@ -66,9 +66,27 @@ class ClaudeVoiceMixin:
     def _claude_policy(self) -> dict[str, Any]:
         try:
             from core.llm.router import claude_voice_policy
-
+        except ImportError as exc:
+            # A MISSING function is a code bug, not a config choice: it used to hide
+            # behind the bare except below, which left this whole mode silently dead.
+            log_event(
+                main_logger,
+                "engine.claude_voice.policy_missing",
+                "WARNING",
+                error=str(exc),
+                note="claude_voice_policy is missing from core.llm.router - "
+                "code bug, not config. Fallback disabled.",
+            )
+            return {"enabled": False}
+        try:
             return claude_voice_policy()
-        except Exception:
+        except Exception as exc:
+            log_event(
+                main_logger,
+                "engine.claude_voice.policy_raised",
+                "WARNING",
+                error=f"{type(exc).__name__}: {exc}",
+            )
             return {"enabled": False}
 
     def claude_voice_ready(self) -> tuple[bool, str]:

@@ -58,6 +58,18 @@ from core.llm.types import (
 
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 
+# User-level env vars that point Claude Code at a gateway (OmniRoute): API key, base
+# URL, model alias. Left in place, `claude -p` ignores the account's subscription
+# login and exits 1 with no output. The voice provider strips them (unless
+# ERA_CLAUDE_KEEP_API_ENV is set); era_dispatch keeps its own copy of this list for
+# the CM lane and a test pins the two as identical.
+GATEWAY_ENV_VARS = (
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+)
+
 # api_error_status -> Era's ErrorKind. The CLI reports HTTP status in the JSON
 # rather than raising, so this is the primary classification path.
 _STATUS_KIND = {

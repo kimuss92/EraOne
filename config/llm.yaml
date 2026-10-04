@@ -496,3 +496,30 @@ routing:
     low_priority: true # BELOW_NORMAL process priority so Premiere never lags
     stt_threads: 4
     cycle_s: 3600
+
+  # ── Claude voice mode (the rescue when Gemini Live is up but not answering) ─
+  # core/live_health.py judges the Gemini session: "deaf" (the user spoke, Gemini
+  # never transcribed it), "mute" (transcribed, never answered) or "flaky"
+  # (repeated upstream errors). On any of the three — or on "use Claude" —
+  # app/era_live/claude_voice.py runs the local loop (mic -> Silero VAD -> Whisper
+  # -> LocalBrain -> Fish/Piper) with `claude -p` (Claude subscription CLI, no API
+  # key) as the brain, then hands back to Gemini when the window ends.
+  # OFF by default: the CLI is a paid subscription and voice must not reach one
+  # unless the user switches it on. Flip `enabled` to true, or set ERA_CLAUDE_VOICE=1.
+  # `stay_s`..`max_stay_s` are the window lengths (each Gemini failure soon after
+  # the last doubles the window, up to max_stay_s).
+  claude_voice:
+    enabled: false
+    env_override: ERA_CLAUDE_VOICE
+    alias: era.cheap
+    stt_threads: 2
+    history_turns: 8
+    max_tool_rounds: 4
+    timeout_s: 90.0
+    probe_gemini_every_s: 60.0
+    max_turns_per_day: 200
+    min_verdict_hold_s: 5.0
+    stay_s: 180
+    manual_stay_s: 3600
+    healthy_after_s: 600
+    max_stay_s: 1800

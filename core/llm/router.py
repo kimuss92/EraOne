@@ -421,6 +421,35 @@ def cascade_policy() -> dict[str, Any]:
     )
 
 
+def claude_voice_policy() -> dict[str, Any]:
+    """`routing.claude_voice` — Claude (subscription CLI) as the spoken brain on the
+    local voice loop while Gemini Live is connected but not answering (deaf / mute /
+    flaky), or when the user says "use Claude". See app/era_live/claude_voice.py.
+
+    Defaults refuse: with the block missing, Era keeps waiting on Gemini exactly as
+    before. The `*_stay_s` keys are read by ClaudeVoiceMixin.enter_claude_voice; the
+    values below are the ones it falls back to when a key is absent.
+    """
+    return _flag_block(
+        "claude_voice",
+        {
+            "enabled": False,
+            "alias": "era.cheap",
+            "stt_threads": 2,
+            "history_turns": 8,
+            "max_tool_rounds": 4,
+            "timeout_s": 90.0,
+            "probe_gemini_every_s": 60.0,
+            "max_turns_per_day": 200,
+            "min_verdict_hold_s": 5.0,
+            "stay_s": 180,
+            "manual_stay_s": 3600,
+            "healthy_after_s": 600,
+            "max_stay_s": 1800,
+        },
+    )
+
+
 def available_for(**needs: bool) -> list[str]:
     """Aliases that could serve this request right now — what to offer when the
     requested one is out."""

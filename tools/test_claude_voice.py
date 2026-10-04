@@ -701,7 +701,10 @@ def test_eralive_inherits_the_mixin():
 def test_the_run_loop_serves_claude_voice_before_connecting_gemini():
     src = _run_source()
     assert "serve_claude_voice" in src
-    assert src.index("serve_claude_voice") < src.index("live.connect"), (
+    # run() reaches Gemini through managed_live_connection (app/era_live/
+    # session_runtime.py, which owns the one `live.connect` call), so that is the
+    # marker for "Gemini connects here".
+    assert src.index("serve_claude_voice") < src.index("managed_live_connection"), (
         "Claude voice must be offered BEFORE Gemini connects, or the window never opens"
     )
 
@@ -1050,3 +1053,220 @@ def test_a_brain_that_returns_nothing_is_still_answered(monkeypatch):
     spoken = asyncio.run(Era()._local_turn("hello"))
     assert spoken, "the user spoke and Era said nothing"
     assert played, "the failure was never played"
+
+
+# ── Phase 2.5 (2026-10-04): the policy function, and what made the mode fire ─────
+# claude_voice_policy was MISSING from core.llm.router; the bare `except Exception` in
+# _claude_policy turned that ImportError into "disabled", so the whole mode was dead
+# and nothing said so. These pin the function, the loud failure, and the wiring the
+# switch needs (verdicts -> enter_claude_voice -> the Claude brain -> hand back).
+
+
+def test_the_claude_voice_policy_exists_and_refuses_by_default(monkeypatch):
+    from core.llm.router import claude_voice_policy
+
+    monkeypatch.delenv("ERA_CLAUDE_VOICE", raising=False)
+    pol = claude_voice_policy()
+    assert pol["enabled"] is False, "voice must not reach a paid CLI unless the user says so"
+    assert pol["alias"] == "era.cheap"
+    for key in (
+        "stt_threads",
+        "history_turns",
+        "max_tool_rounds",
+        "timeout_s",
+        "probe_gemini_every_s",
+        "max_turns_per_day",
+        "min_verdict_hold_s",
+        # read by ClaudeVoiceMixin.enter_claude_voice, so they must be configurable
+        "stay_s",
+        "manual_stay_s",
+        "healthy_after_s",
+        "max_stay_s",
+    ):
+        assert key in pol, key
+    monkeypatch.setenv("ERA_CLAUDE_VOICE", "1")
+    assert claude_voice_policy()["enabled"] is True
+    monkeypatch.setenv("ERA_CLAUDE_VOICE", "0")
+    assert claude_voice_policy()["enabled"] is False
+
+
+def test_enabled_claude_voice_is_ready_when_its_pieces_exist(monkeypatch):
+    monkeypatch.setenv("ERA_CLAUDE_VOICE", "1")
+    monkeypatch.setattr("core.claude_headless.available", lambda: True)
+    monkeypatch.setattr("core.local_stt.available", lambda: (True, ""))
+    monkeypatch.setattr("core.local_tts.available", lambda: (True, ""))
+    assert ClaudeVoiceMixin().claude_voice_ready() == (True, "")
+
+
+def test_a_missing_policy_function_is_logged_as_a_code_bug_not_swallowed(monkeypatch):
+    import core.llm.router as router
+
+    seen = []
+    monkeypatch.setattr(
+        "app.era_live.claude_voice.log_event", lambda _logger, event, *a, **k: seen.append(event)
+    )
+    monkeypatch.delattr(router, "claude_voice_policy")
+    assert ClaudeVoiceMixin()._claude_policy() == {"enabled": False}
+    assert seen == ["engine.claude_voice.policy_missing"]
+
+
+def test_a_policy_that_raises_is_logged_and_disables(monkeypatch):
+    import core.llm.router as router
+
+    def boom():
+        raise RuntimeError("bad yaml")
+
+    seen = []
+    monkeypatch.setattr(
+        "app.era_live.claude_voice.log_event", lambda _logger, event, *a, **k: seen.append(event)
+    )
+    monkeypatch.setattr(router, "claude_voice_policy", boom)
+    assert ClaudeVoiceMixin()._claude_policy() == {"enabled": False}
+    assert seen == ["engine.claude_voice.policy_raised"]
+
+
+def test_live_health_is_on_unless_it_is_switched_off(monkeypatch):
+    """No launch config needs ERA_LIVE_HEALTH=1: absent means ON."""
+    from core import live_health
+
+    monkeypatch.delenv("ERA_LIVE_HEALTH", raising=False)
+    assert live_health.enabled() is True
+    monkeypatch.setenv("ERA_LIVE_HEALTH", "0")
+    assert live_health.enabled() is False
+
+
+def test_the_default_thresholds_are_the_documented_ones():
+    """mute at reply_timeout_s=25 after the user was heard; flaky at 3 upstream errors."""
+    c = Clock()
+    h = LiveHealth(c)
+    h.note_heard()
+    c.advance(24.0)
+    assert h.verdict() is None
+    c.advance(1.0)
+    assert h.verdict().kind == "mute"
+
+    h2 = LiveHealth(Clock())
+    h2.note_upstream_error()
+    h2.note_upstream_error()
+    assert h2.verdict() is None
+    h2.note_upstream_error()
+    assert h2.verdict().kind == "flaky"
+
+
+@pytest.mark.parametrize("kind", ["deaf", "mute", "flaky"])
+def test_the_watchdog_enters_claude_on_every_kind_of_verdict(kind, monkeypatch):
+    s = Stub()
+    h, c = s.live_health, s.clock
+    if kind == "deaf":
+        speak(h, c, 3.5)  # a long utterance Gemini never transcribed
+        c.advance(12)
+    elif kind == "mute":
+        h.note_heard()
+        c.advance(25)
+    else:
+        for _ in range(3):
+            h.note_upstream_error()
+    entered = []
+    s.enter_claude_voice = lambda k, detail="", **kw: entered.append(k) or True
+
+    async def fast_sleep(_):
+        return None
+
+    monkeypatch.setattr("app.era_live.claude_voice.asyncio.sleep", fast_sleep)
+    asyncio.run(s._live_health_watch())
+    assert entered == [kind]
+
+
+def _claude_era(monkeypatch):
+    """A local loop serving Claude whose brain says nothing; returns (era, played)."""
+    import app.era_live.local_fallback as lf
+
+    class SilentBrain:
+        alias = "era.cheap"
+
+        async def respond(self, text, execute):
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        def cancel(self):
+            pass
+
+    played = []
+
+    class Era(lf.LocalFallbackMixin, ClaudeVoiceMixin):
+        def __init__(self):
+            self.ui = SimpleNamespace(
+                muted=False, write_log=lambda t: None, set_state=lambda s: None
+            )
+            self._standby_active = False
+            self._local_brain = SilentBrain()
+            self._go_away_event = asyncio.Event()
+            self._local_exit = asyncio.Event()
+            self._local_outage_reason = "claude"
+            self._local_mode_active = True
+            self._claude_until = 10**9
+            self._local_turn_task = None
+
+        def _local_fish_ok(self):
+            return True
+
+        async def _local_play(self, pcm):
+            played.append(pcm)
+
+        def _tg_ack(self, m):
+            pass
+
+        def _note_era_question(self, s):
+            pass
+
+        def _is_abort_order(self, t):
+            return False
+
+        def _is_reboot_order(self, t):
+            return False
+
+    async def fake_synth(text, lang, allow_fish=True):
+        return text.encode(), "fake"
+
+    monkeypatch.setattr("core.local_tts.synthesize_best", fake_synth)
+    return Era(), played
+
+
+def test_two_failed_claude_turns_end_the_window_and_say_so(monkeypatch):
+    era, played = _claude_era(monkeypatch)
+    asyncio.run(era._local_turn("hello"))
+    assert not era._local_exit.is_set(), "one failure must not end the window"
+    asyncio.run(era._local_turn("hello"))
+    assert era._local_exit.is_set() and era._claude_until == 0.0
+    assert "Gemini" in b" ".join(played).decode(), "the user must be told why it changed"
+
+
+def test_the_reconnect_order_closes_the_claude_window(monkeypatch):
+    era, _played = _claude_era(monkeypatch)
+    asyncio.run(era._local_on_utterance("reconnect", "en", 0.0))
+    assert era._claude_until == 0.0, "left open, 'reconnect' would re-enter Claude at once"
+    assert era._local_exit.is_set()
+
+
+def test_the_claude_reasons_have_their_own_announcement():
+    import app.era_live.local_fallback as lf
+
+    for reason in ("claude", "claude_manual"):
+        assert reason in lf._ANNOUNCE
+        assert "internet" not in lf._ANNOUNCE[reason].lower(), "not the network-outage line"
+
+
+def test_claude_is_the_brain_only_when_enabled_and_ready():
+    import app.era_live.local_fallback as lf
+
+    class NotReady(lf.LocalFallbackMixin, ClaudeVoiceMixin):
+        def claude_voice_ready(self):
+            return False, "disabled"
+
+    class Ready(lf.LocalFallbackMixin, ClaudeVoiceMixin):
+        def claude_voice_ready(self):
+            return True, ""
+
+    assert asyncio.run(NotReady()._claude_brain_wanted("quota")) is False
+    assert asyncio.run(Ready()._claude_brain_wanted("quota")) is True
+    assert asyncio.run(Ready()._claude_brain_wanted("network")) is False

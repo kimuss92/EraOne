@@ -384,6 +384,16 @@ class AudioIOMixin:
             # Normal operation: send audio to Gemini only if not muted
             if not self.ui.muted and self._browser_mic_active:
                 data = indata.tobytes()
+                # Evidence for core/live_health.py that the user spoke into a session
+                # that is supposed to be listening (only audio actually sent counts).
+                if hasattr(self, "live_health"):
+                    try:
+                        self.live_health.note_voice(
+                            float(np.sqrt(np.mean(np.square(indata, dtype=np.float32)))) / 32768.0,
+                            frames / SEND_SAMPLE_RATE,
+                        )
+                    except Exception:
+                        pass
                 try:
                     # Thread-safe try-push without exploding if the loop lags
                     loop.call_soon_threadsafe(
@@ -510,6 +520,8 @@ class AudioIOMixin:
                         # heard anything — core/live_turn_state.py explains why
                         # that distinction is the whole recovery decision.
                         self.live_turn.note_audio_received(len(response.data))
+                        if hasattr(self, "live_health"):
+                            self.live_health.note_reply()  # it answered: not "mute"
                         if self._turn_done_event and self._turn_done_event.is_set():
                             self._turn_done_event.clear()
                         # Swallow Gemini's audio while a CM hand-off window is
@@ -560,6 +572,8 @@ class AudioIOMixin:
                                 out_buf.append(txt)
                                 self._live_turn_text = " ".join(out_buf)  # for barge-in resume
                                 self.live_turn.note_text(txt)
+                                if hasattr(self, "live_health"):
+                                    self.live_health.note_reply()  # a spoken transcript is an answer
                                 hud.response_delta(txt)
                                 # ── fish_audio: the TRANSCRIPT is the speech ──
                                 # Gemini's own audio was discarded above, so this
@@ -587,6 +601,8 @@ class AudioIOMixin:
                                 # continuation we were about to send: a recovered
                                 # answer must never be spoken over a live human.
                                 self.live_turn.note_user_speaking(True)
+                                if hasattr(self, "live_health"):
+                                    self.live_health.note_heard()  # Gemini can hear: not "deaf"
                                 self._user_spoke_since_drop = True
                                 if not in_buf:
                                     # When the user STARTED saying it: a gate asking
@@ -632,6 +648,8 @@ class AudioIOMixin:
                             self.live_turn.note_generation_complete()
 
                         if sc.turn_complete:
+                            if hasattr(self, "live_health"):
+                                self.live_health.note_reply()  # the turn ended: it responded
                             # A turn boundary always clears the barge-in latch, so
                             # a cut-off turn cannot leave Era's voice gated off for
                             # the next reply.
@@ -835,6 +853,8 @@ class AudioIOMixin:
 
                     # --- HANDLE TOOL CALLS ---
                     if response.tool_call and response.tool_call.function_calls:
+                        if hasattr(self, "live_health"):
+                            self.live_health.note_reply()  # a tool call is an answer too
                         # One response per call, always — see ToolBatchMixin.
                         # A gated or turn-ending call now reports that it did
                         # not run rather than going silent, which is what keeps

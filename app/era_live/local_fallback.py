@@ -50,7 +50,14 @@ _ANNOUNCE = {
     "auth": "My cloud key was rejected, sir. I'm running on my local backup brain.",
     "config": "My cloud session is refusing to start, sir. I'm on my local backup brain.",
     "network": "The internet connection is down, sir. I'm running on my local backup brain.",
+    # Claude voice mode (app/era_live/claude_voice.py). Without these two the
+    # fallback line above would announce "the internet connection is down".
+    "claude": "My cloud voice stopped answering, sir. I'm using my Claude backup brain.",
+    "claude_manual": "Switching to my Claude brain, sir.",
 }
+# Outage reasons for which Claude (when enabled and ready) is the brain instead of
+# Ollama. "network" is deliberately absent: Claude needs the network too.
+_CLAUDE_BRAIN_REASONS = ("claude", "claude_manual", "quota", "auth", "config")
 _BACK = "Cloud connection restored, sir."
 _PLAY_SLICE = RECEIVE_SAMPLE_RATE // 10 * 2  # 100 ms of int16 mono
 
@@ -133,6 +140,8 @@ class LocalFallbackMixin:
         # the Ollama one is kept aside for the next real outage.
         if reason == "cascade":
             self._local_brain = self._cascade_brain()
+        elif await self._claude_brain_wanted(reason):
+            self._local_brain = self._claude_brain()
         elif getattr(self, "_fallback_brain", None) is not None:
             self._local_brain = self._fallback_brain
         elif getattr(self, "_local_brain", None) is None or reason:
@@ -145,6 +154,21 @@ class LocalFallbackMixin:
             )
         await asyncio.to_thread(self._local_listener.load)
         await asyncio.to_thread(PIPER.warm)
+
+    async def _claude_brain_wanted(self, reason: str) -> bool:
+        """Claude (subscription CLI) is the brain for every reason it can help with,
+        but only when claude voice is enabled and ready. ClaudeVoiceMixin is optional
+        here — a Stub or a bare mixin without it must keep the Ollama brain."""
+        if reason not in _CLAUDE_BRAIN_REASONS:
+            return False
+        ready = getattr(self, "claude_voice_ready", None)
+        if ready is None:
+            return False
+        try:
+            ok, _why = await asyncio.to_thread(ready)
+        except Exception:
+            return False
+        return bool(ok)
 
     async def _local_warm_brain(self) -> None:
         """Load the model + tool prefix (~20 s cold) while Era is announcing."""
@@ -190,7 +214,14 @@ class LocalFallbackMixin:
         if not self._standby_active:
             self.ui.set_state("LISTENING")
         print(f"[LOCAL] Serving locally for up to {seconds / 60:.0f} min ({reason}).")
-        warm = asyncio.create_task(self._local_warm_brain()) if first else None
+        # Nothing to load for the Claude brain (a CLI, no model in memory): warming it
+        # would only spend a real turn on a "ping".
+        claude_brain = getattr(self, "_claude_brain_obj", None)
+        warm = (
+            asyncio.create_task(self._local_warm_brain())
+            if first and not (claude_brain is not None and self._local_brain is claude_brain)
+            else None
+        )
         deadline = time.monotonic() + seconds
         try:
             if first:
@@ -279,6 +310,11 @@ class LocalFallbackMixin:
             await self._local_say("Trying the cloud again, sir.")
             if self._in_cascade():
                 self._cascade_pause()
+            # Closes a Claude window too: left open, the run loop would serve this
+            # same local loop again at once and "reconnect" would not reconnect.
+            release = getattr(self, "release_claude_voice", None)
+            if release is not None:
+                release()
             self._local_exit.set()
             return
         if self._local_turn_task is not None and not self._local_turn_task.done():
@@ -322,26 +358,40 @@ class LocalFallbackMixin:
         queue: asyncio.Queue[tuple[str, bytes] | None] = asyncio.Queue(maxsize=4)
         reply: list[str] = []
         fish = self._local_fish_ok()
+        produced = False
+        failed = False
+
+        async def say_failure() -> None:
+            msg = (
+                "My brain isn't answering right now, sir. Try again in a moment."
+                if self._in_cascade()
+                else "My backup brain isn't responding, sir."
+            )
+            try:
+                pcm, _ = await synthesize_best(msg, "en", allow_fish=fish)
+            except Exception:
+                pcm = b""  # a TTS outage must still produce a visible reply
+            await queue.put((msg, pcm))
 
         async def produce() -> None:
+            nonlocal produced, failed
             try:
                 async for sentence in self._local_brain.respond(text, self._local_execute_tool):
+                    produced = True
                     pcm, _backend = await synthesize_best(
                         sentence, guess_lang(sentence), allow_fish=fish
                     )
                     await queue.put((sentence, pcm))
+                if not produced:
+                    # No exception AND no words used to be total silence: the live
+                    # symptom was "hears me and ignores me". Say so instead.
+                    failed = True
+                    print("[LOCAL] Brain returned nothing.")
+                    await say_failure()
             except Exception as e:
+                failed = True
                 print(f"[LOCAL] Brain failed: {type(e).__name__}: {e}")
-                msg = (
-                    "My brain isn't answering right now, sir. Try again in a moment."
-                    if self._in_cascade()
-                    else "My backup brain isn't responding, sir."
-                )
-                try:
-                    pcm, _ = await synthesize_best(msg, "en", allow_fish=fish)
-                except Exception:
-                    pcm = b""  # a TTS outage must still produce a visible reply
-                await queue.put((msg, pcm))
+                await say_failure()
             finally:
                 if not asyncio.current_task().cancelling():
                     await queue.put(None)
@@ -367,6 +417,18 @@ class LocalFallbackMixin:
                 self._note_era_question(spoken)
             except Exception:
                 pass
+        # Claude voice mode: two failed turns in a row end the Claude window, so a
+        # brain that cannot answer is not the one left in charge. A no-op unless this
+        # loop is serving Claude (the mixin is optional here).
+        turn_result = getattr(self, "claude_turn_result", None)
+        if turn_result is not None:
+            try:
+                if await turn_result(not failed):
+                    await self._local_say(
+                        "Claude isn't answering either, sir. Trying Gemini again."
+                    )
+            except Exception as e:  # never let bookkeeping break a spoken turn
+                print(f"[LOCAL] claude_turn_result failed: {type(e).__name__}: {e}")
         return spoken
 
     def _local_cancel_turn(self) -> None:
