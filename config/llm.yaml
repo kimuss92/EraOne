@@ -523,3 +523,31 @@ routing:
     manual_stay_s: 3600
     healthy_after_s: 600
     max_stay_s: 1800
+
+  # ── Crew routing (crew/router.py) ─────────────────────────────────────────
+  # A crew turn is classified on five axes (tool calling, context length, output
+  # verification, hops, cost of error) into a TIER; the tier names the providers to try,
+  # in order, and the first one that is available AND under its daily budget answers.
+  #   * A tier whose providers are all unavailable or spent FAILS. It crosses to another
+  #     tier only when the TASK sets allow_cross_tier, and every crossing is logged.
+  #   * `on_exhaust: next_tier` = skip that provider, try the next one in the SAME tier.
+  #   * A provider with no budget row is unusable (fail closed).
+  #   * `nous` is budgeted as `nous_portal`. nous and openai have no adapter in Era yet, so
+  #     they are skipped (with the reason) until one exists.
+  #   * Mixture of Agents is OFF, permanently: a fallback chain only.
+  # Every crew turn logs: [crew] bot= tier= provider= tokens_in= tokens_out= cached=
+  tiers:
+    trivial: [ollama, nous]
+    standard: [nous, claude_cli, openai]
+    critical: [claude_cli, openai, nous]
+    offline: [ollama]
+  budget:
+    nous_portal: { daily_turns: 500, on_exhaust: next_tier }
+    claude_cli: { daily_turns: 200, on_exhaust: next_tier }
+    openai: { daily_turns: 200, on_exhaust: next_tier }
+    # keep_alive is informational here: Era's ollama adapter already sends "30m" per request.
+    ollama: { always_available: true, keep_alive: "30m" }
+  cache:
+    tool_ttl_s: 60 # vault.read, dropped by any verified vault write
+    response_ttl_s: 600 # persisted to memory/crew_cache/; only answers that DID nothing
+    provider_ttl_s: 120 # full request -> reply, in memory

@@ -471,6 +471,12 @@ def main(argv: list[str] | None = None) -> int:
         log.info("Launching Era...")
         # Tells Era a supervisor will bring her back (core/era_relaunch.py).
         env = {
+            # Keep the local model resident between turns (a cold start is 3-8 s on a
+            # shared GPU). A default only: a value already in the environment wins.
+            # NOTE this is Era's process. The Ollama SERVER reads its own copy at its
+            # own start, and Era's ollama adapter already sends keep_alive="30m" on
+            # every request, which is what actually holds the model warm.
+            "OLLAMA_KEEP_ALIVE": "30m",
             **os.environ,
             "ERA_SUPERVISED": "1",
             "ERA_SUPERVISOR_PID": str(os.getpid()),

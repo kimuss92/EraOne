@@ -181,12 +181,24 @@ def _settle_s() -> float:
         return 0.25
 
 
+_WRITE_GEN = 0
+
+
+def write_generation() -> int:
+    """How many verified vault writes this process has made. A cache of vault reads
+    (crew/cache.py) records it with each entry and drops the entry once it moves, so a
+    write — including a user-approved `replace`, which is applied outside the crew —
+    is never hidden behind a stale cached read."""
+    return _WRITE_GEN
+
+
 def write_verified(path: Path, text: str) -> None:
     """Atomic write, then compare what is on disk to what we meant to write.
 
     Keeps the note's existing line endings (new notes use LF). Raises OSError — and
     VaultWriteMismatch when the read-back differs — so callers report failure.
     """
+    global _WRITE_GEN
     path = Path(path)
     eol = "\n"
     try:
@@ -202,6 +214,7 @@ def write_verified(path: Path, text: str) -> None:
         for attempt in range(4):
             try:
                 os.replace(tmp, path)
+                _WRITE_GEN += 1  # changed on disk, whatever the read-back below says
                 break
             except PermissionError:  # Obsidian/OneDrive holding the target open
                 if attempt == 3:

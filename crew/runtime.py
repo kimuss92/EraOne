@@ -30,6 +30,8 @@ from core.confirmation_preview import PREVIEW_KEY
 from core.logger import log_event, setup_logger
 from core.tool_result import ToolResult
 from crew import nabar
+from crew import router as crew_router
+from crew.cache import CrewCaches
 from crew.capabilities import CAPABILITIES, CapabilityContext, caller_for, describe
 from crew.registry import load_specs
 from crew.transport import BotSpec, HealthStatus, Transport, Turn, fail
@@ -103,8 +105,25 @@ def _render(result: ToolResult) -> str:
 class InProcessTransport(Transport):
     name = "in_process"
 
-    def __init__(self, llm: LLM | None = None):
+    def __init__(
+        self,
+        llm: LLM | None = None,
+        *,
+        routed: crew_router.RoutedLLM | None = None,
+        caches: CrewCaches | None = None,
+    ):
+        # An injected `llm` always wins and keeps the exact old behaviour, caches and
+        # all: tests and any other transport depend on that. Otherwise the model path is
+        # the tiered router from config/llm.yaml `routing.tiers`; with none configured
+        # the old Gemini path (default_llm) is kept.
         self._llm: LLM = llm or default_llm
+        if llm is not None:
+            self._routed = None
+        else:
+            self._routed = routed if routed is not None else crew_router.build_default()
+        self._caches: CrewCaches | None = (
+            caches if caches is not None else (self._routed.caches if self._routed else None)
+        )
         self._bots: dict[str, BotSpec] = {}
         self._lock = threading.Lock()
 
@@ -135,13 +154,36 @@ class InProcessTransport(Transport):
             # handoff — otherwise 6 handoffs x 6 steps x 180 s of tests has no ceiling.
             turn = replace(turn, deadline=time.monotonic() + MAX_CALL_S)
         try:
+            # Layer 2 (crew/cache.py): only an answer that DID nothing was ever stored.
+            cached = self._caches.response.get(spec, turn) if self._caches else None
+            if cached is not None:
+                crew_router.log_turn(spec.id, "cache", "response_cache", 0, 0, True)
+                return cached
             result = self._run_turn(spec, turn)
             if result.success:
                 result = self._attach_review(spec, turn, result)
+                if self._caches:
+                    self._caches.response.put(spec, turn, result)
             return result
         except Exception as exc:  # noqa: BLE001 — the contract: never raise
             log_event(runtime_logger, "crew.turn.crashed", "ERROR", bot=spec.id, error=repr(exc))
             return fail("BotError", f"{spec.id} failed internally: {type(exc).__name__}")
+
+    # ── the model call ──────────────────────────────────────────────────────
+    def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
+        """One model call. EVERY path emits the required `[crew] ...` line."""
+        if self._routed is not None:
+            return self._routed.ask(spec, turn, system, user)
+        reply = self._llm(system, user, spec.model_tier)
+        crew_router.log_turn(
+            spec.id,
+            spec.model_tier,
+            "gemini" if self._llm is default_llm else "injected",
+            crew_router.estimate_tokens(system + user),
+            crew_router.estimate_tokens(json.dumps(reply, default=str)) if reply else 0,
+            False,
+        )
+        return reply
 
     # ── the turn loop ───────────────────────────────────────────────────────
     def _run_turn(self, spec: BotSpec, turn: Turn) -> ToolResult:
@@ -153,9 +195,11 @@ class InProcessTransport(Transport):
         for step in range(1, MAX_STEPS + 1):
             if turn.deadline and time.monotonic() > turn.deadline:
                 return fail("StepLimit", f"{spec.id} ran out of time for this request.")
-            reply = self._llm(_system(spec, self._bots), _user(turn, observations), spec.model_tier)
+            reply = self._ask(spec, turn, _system(spec, self._bots), _user(turn, observations))
             if not isinstance(reply, dict) or not reply:
                 return fail("LLMUnavailable", f"{spec.id} could not reach a model.")
+            if "__unavailable__" in reply:  # the router found no provider that may answer
+                return fail("LLMUnavailable", f"{spec.id}: {reply['__unavailable__']}")
             if "final" in reply:
                 final = reply["final"]
                 text = (
@@ -218,13 +262,24 @@ class InProcessTransport(Transport):
             dispatch=self.dispatch,
             review=self.review_artifact,
         )
+        # Layer 1 (crew/cache.py): `vault.read`, 60 s, keyed on the caller's brand scope and
+        # dropped by any verified vault write.
+        cache_key = None
+        if name == "vault.read" and self._caches is not None:
+            cache_key = self._caches.tool.key(ctx.caller, args)
+            hit = self._caches.tool.get(cache_key)
+            if hit is not None:
+                return hit
         try:
-            return ToolResult.from_any(CAPABILITIES[name].fn(ctx, args))
+            result = ToolResult.from_any(CAPABILITIES[name].fn(ctx, args))
         except Exception as exc:  # noqa: BLE001 — a capability bug is an observation
             log_event(runtime_logger, "crew.capability.crashed", "ERROR", cap=name, error=repr(exc))
             return ToolResult.fail(
                 message=f"{name} failed internally: {type(exc).__name__}", error_type="BotError"
             )
+        if cache_key is not None:
+            self._caches.tool.put(cache_key, result)
+        return result
 
     # ── Nabar ───────────────────────────────────────────────────────────────
     def review_artifact(self, kind: str, artifact: str, extra: dict | None = None):
@@ -379,7 +434,7 @@ async def await_with_ack(awaitable, ack: Callable[[], None], after_s: float | No
         return await asyncio.wait_for(
             asyncio.shield(task), ACK_AFTER_S if after_s is None else after_s
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             ack()
         except Exception:  # noqa: BLE001 — a failed ack must never fail the call
