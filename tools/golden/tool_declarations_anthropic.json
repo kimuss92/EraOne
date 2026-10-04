@@ -1380,7 +1380,7 @@
     "name": "record_feedback"
   },
   {
-    "description": "Write something into Era's Obsidian vault — her SECOND BRAIN and the only source of truth for community management. Use this whenever the user tells you something that must outlive this conversation: a standing rule, a brand fact, a preference about how content should be made, research, or the answers they give you in an interview. The vault is NOT memory/ — save_memory stores a short fact for Era herself; vault_note stores brand and strategy knowledge the community manager reads before every job. If the user says 'remember that Delta never mixes two stone families', that is vault_note, not save_memory. Default action='save'. Give `title` to pick the note (an existing note is APPENDED to, not replaced); give `brand` only when it belongs to one brand; give `section` to update one '## heading' in place — that is how you fill in the Profile section of VAULT-INDEX after interviewing the user. action='read' reads a note back.",
+    "description": "Write something into Era's Obsidian vault — her SECOND BRAIN and the only source of truth for community management. Use this whenever the user tells you something that must outlive this conversation: a standing rule, a brand fact, a preference about how content should be made, research, or the answers they give you in an interview. The vault is NOT memory/ — save_memory stores a short fact for Era herself; vault_note stores brand and strategy knowledge the community manager reads before every job. If the user says 'remember that Delta never mixes two stone families', that is vault_note, not save_memory. Default action='save'. Give `title` to pick the note (an existing note is APPENDED to, not replaced); give `brand` only when it belongs to one brand; give `section` to add a new '## heading' block. This tool NEVER overwrites an existing section: to replace one (e.g. fill in the Profile section of VAULT-INDEX after interviewing the user) use vault_bridge action=replace, which shows the user the exact change and needs their yes. action='read' reads a note back.",
     "input_schema": {
       "properties": {
         "action": {
@@ -1409,7 +1409,7 @@
           "type": "string"
         },
         "section": {
-          "description": "A '## heading' whose body should be REPLACED with content. Omit to append at the end of the note instead.",
+          "description": "A NEW '## heading' to add with content. An existing section is refused here (use vault_bridge action=replace). Omit to append at the end of the note instead.",
           "type": "string"
         },
         "title": {
@@ -1423,6 +1423,95 @@
       "type": "object"
     },
     "name": "vault_note"
+  },
+  {
+    "description": "Work with specific notes in Era's Obsidian vault. action='search' finds notes by keywords in their title and body ('stone families' also finds 'family' notes; it matches words, not meaning) and returns paths with snippets; action='read' returns one note; action='create' makes a new note; action='append' adds to an existing one; action='replace' PROPOSES replacing a note's body or one '## section' — it never writes by itself: it comes back ConfirmationRequired with the exact change, and you must ask the user out loud and only continue (confirm_pending_confirmation) on their own yes. There is no delete. For 'remember this' knowledge capture prefer vault_note; use vault_bridge to FIND things or to edit a named note. A failed write is a failure — never tell the user it was saved unless the result says so.",
+    "input_schema": {
+      "properties": {
+        "action": {
+          "description": "What to do. replace always needs the user's yes.",
+          "enum": [
+            "search",
+            "read",
+            "create",
+            "append",
+            "replace"
+          ],
+          "type": "string"
+        },
+        "brand": {
+          "description": "'Delta Cuisine' or 'Ceram Quartz'. Omit for anything true of both brands.",
+          "type": "string"
+        },
+        "content": {
+          "description": "create/append/replace: the text, in the user's own words.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "search: max results (default 5).",
+          "type": "integer"
+        },
+        "note_type": {
+          "description": "create only.",
+          "enum": [
+            "reference",
+            "guide",
+            "plan"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "read/append/replace: the note's path inside the vault.",
+          "type": "string"
+        },
+        "query": {
+          "description": "search: words to look for.",
+          "type": "string"
+        },
+        "section": {
+          "description": "replace only: the '## heading' whose body is replaced.",
+          "type": "string"
+        },
+        "title": {
+          "description": "read/append/replace: a note's title (loose match); create: the new note's title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "vault_bridge"
+  },
+  {
+    "description": "Hand a request to Era's crew. Laura (chief of staff) coordinates by default and routes to Drew (vault research), Maya (social drafts), Tom (creative direction), Cody (code and tests) and Nabar (independent review, the skeptic). Use it when the user names a crew member ('Drew, find what we decided about…', 'Laura, plan this') or asks for research, a draft or a review that needs a specialist. action='ask' with task=… (and bot=… to address one directly); action='list' names the crew; action='status' says whether anything awaits approval. The crew never deletes and never approves its own changes: anything that replaces note content comes back ConfirmationRequired — ask the user and wait. Report what came back faithfully, including any Nabar concern.",
+    "input_schema": {
+      "properties": {
+        "action": {
+          "description": "ask hands over a task; list names the crew; status checks.",
+          "enum": [
+            "ask",
+            "list",
+            "status"
+          ],
+          "type": "string"
+        },
+        "bot": {
+          "description": "ask: address one crew member by name (laura, drew, maya, tom, cody, nabar, or any added later; action='list' shows them). Default laura.",
+          "type": "string"
+        },
+        "task": {
+          "description": "ask: what the crew should do.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "crew"
   },
   {
     "description": "Persist or revoke a STANDING user preference that must survive restarts. Use when the user grants or cancels a durable exception or rule, e.g. 'don't ask my confirmation when closing Spotify' -> action='waive_close_confirmation', app='spotify'; 'from now on Spotify needs my confirmation before closing' -> action='require_close_confirmation', app='spotify'; 'waive confirmation for file creation' / 'stop asking before you create files' -> action='waive_file_creation_confirmation'; 'enable confirmation for file creation' / 'ask me again before creating files' -> action='require_file_creation_confirmation'; 'stop asking before you shut down the computer' -> action='waive_high_risk_confirmation', category='shutdown'; 'ask me again before shutting down' -> action='require_high_risk_confirmation', category='shutdown'; 'stop asking before you close windows' -> action='waive_high_risk_confirmation', category='close'; 'ask me again before closing windows' -> action='require_high_risk_confirmation', category='close'. High-risk waivers are PER CATEGORY and only these exist: shutdown, restart, close. Deleting files, killing processes, running code and sending email/messages can NOT be waived — tell the user so. 'minimize Spotify when you're done with it' -> action='add_rule', rule='minimize spotify when done using it'; 'forget that rule about minimizing spotify' -> action='remove_rule', rule='minimize spotify'. Also toggles autonomous memory saving, live: 'stop saving things to memory without asking me' -> action='disable_auto_memory'; 'you can save memories on your own again' -> action='enable_auto_memory'. action='list' reads back everything stored. These preferences are applied automatically in every future session.",
