@@ -25,10 +25,16 @@ def _clear_shared_pending_store():
     """The executor and EraLive share ONE process-wide slot, and it no longer
     silently overwrites. A test that leaves a confirmation armed would block
     the next test's store() — so clear it either side."""
-    from core.pending_confirmation import get_shared_store
+    from core.pending_confirmation import get_shared_store, set_user_approval_probe
 
     get_shared_store().clear()
+    # These tests are about the confirmation MECHANICS (what a "yes" runs, the single
+    # slot). Consuming a pending confirmation now needs the USER's yes, which only
+    # EraLive can vouch for and which fails closed without it, so the tests state it:
+    # the user has said yes. Who may approve is pinned in test_confirm_self_approval.py.
+    set_user_approval_probe(lambda pending: True)
     yield
+    set_user_approval_probe(None)
     get_shared_store().clear()
 
 

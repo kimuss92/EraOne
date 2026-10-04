@@ -29,8 +29,10 @@ from core.confirmation_preview import (
 from core.logger import executor_logger, log_event
 from core.pending_confirmation import (
     BUSY_CONFIRMATION_MESSAGE,
+    NOT_USER_APPROVED_MESSAGE,
     PendingConfirmationBusy,
     get_shared_store,
+    user_approved,
 )
 from core.safety_guard import classify_action
 from core.self_healing_router import route_tool_call
@@ -40,6 +42,29 @@ from core.verification import verify_tool_result
 # Shared with EraLive so confirmations created on either path are mutually
 # resolvable (previously two independent stores caused confirm RuntimeErrors).
 _pending_store = get_shared_store()
+
+
+def _unapproved_result(pending, tool: str, action: str | None = None) -> ToolResult:
+    """Refuse to consume `pending`: the USER has not approved it (core/
+    pending_confirmation.user_approved). The slot is left armed."""
+    print(
+        f"[Executor] 🛑 confirm refused: no user approval since "
+        f"{pending.tool} id={pending.confirmation_id} was armed"
+    )
+    log_event(
+        executor_logger,
+        "tool.confirmation.unapproved",
+        "WARNING",
+        tool=pending.tool,
+        confirmation_id=pending.confirmation_id,
+    )
+    return ToolResult.fail(
+        message=NOT_USER_APPROVED_MESSAGE,
+        error=NOT_USER_APPROVED_MESSAGE,
+        error_type="BlockedAction",
+        tool_name=tool,
+        action_name=action,
+    )
 
 
 def _run_generated_code(description: str, speak: Callable | None = None) -> str:
@@ -300,6 +325,11 @@ def _call_tool_result(
 
         if confirmed and confirmation_id:
             if not _confirmed_once:
+                # The id is shown to the model, so presenting it proves nothing: the
+                # same user-approval check as confirm_pending_confirmation.
+                armed = _pending_store.peek(confirmation_id)
+                if armed is not None and not user_approved(armed):
+                    return _unapproved_result(armed, tool, parameters.get("action"))
                 pending = _pending_store.confirm(confirmation_id)
                 if pending is None:
                     return ToolResult.fail(
@@ -549,13 +579,22 @@ def _call_tool_result(
             raw = flight_finder(parameters=parameters, player=None, speak=speak) or "Done."
 
         elif tool == "confirm_pending_confirmation":
-            confirmation_id = parameters.get("confirmation_id", "")
-            # allow_sole: the store is single-slot, so there is never ambiguity
-            # about *which* action is being confirmed. Without it, a spoken "yes"
-            # whose id the model omitted or invented was rejected outright — the
-            # live path (main.py) already passes it; this path did not, which is
-            # what produced the `confirm_pending_confirmation` RuntimeErrors.
-            pending = _pending_store.confirm(confirmation_id, allow_sole=True)
+            # The store is single-slot, so there is never ambiguity about *which*
+            # action is being confirmed: the sole pending one is taken even when the
+            # model omitted or invented its id (a spoken "yes" used to be rejected
+            # outright, which produced the `confirm_pending_confirmation`
+            # RuntimeErrors). The id is therefore not read here at all.
+            pending = _pending_store.peek()
+            if pending is None:
+                raise RuntimeError("There is no pending action to confirm.")
+            # The slot is shared with the live session, so an agent path that merely
+            # EMITS this step must not be able to consume an approval the user has not
+            # given (a crew-staged replace, a HIGH-risk action). Refused: it stays armed
+            # so the user's real "yes" can still confirm it.
+            if not user_approved(pending):
+                return _unapproved_result(pending, "confirm_pending_confirmation")
+            # Consume exactly the action that was checked, never a newer one.
+            pending = _pending_store.confirm(pending.confirmation_id)
             if pending is None:
                 raise RuntimeError("There is no pending action to confirm.")
             stored_params = dict(pending.parameters)

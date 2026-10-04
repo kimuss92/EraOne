@@ -156,7 +156,7 @@ from core.era_state import EraState
 from core.input_safety_gate import CLARIFICATION_PHRASE, InputSafetyGate
 from core.live_turn_state import LiveTurnState, TurnSnapshot
 from core.logger import log_crash, log_event, main_logger
-from core.pending_confirmation import get_shared_store
+from core.pending_confirmation import get_shared_store, set_user_approval_probe
 from core.session_manager import SessionManager
 from core.speaker_recognition import get_verifier
 from core.turn_memory import TurnMemory
@@ -222,7 +222,7 @@ from app.era_live.reconnect_mixin import ReconnectMixin
 from app.era_live.session_runtime import live_model, managed_live_connection, stop_on_renewal
 from app.era_live.speech_out import SpeechOut
 from app.era_live.tool_batch import ToolBatchMixin
-from app.era_live.tool_dispatch import ToolDispatchMixin
+from app.era_live.tool_dispatch import ToolDispatchMixin, _user_approved_pending
 from app.reconnect import (  # noqa: F401  (re-export: preserves public + internal names)
     grow_cooldown,
     reconnect_acknowledgment_text,
@@ -423,6 +423,12 @@ class EraLive(
 
         # ----- PENDING CONFIRMATION -----
         self._pending_store = get_shared_store()
+        # The agent executor (agent/executor.py) shares this slot. It may only CONSUME a
+        # pending confirmation when this says the USER said yes since it was armed —
+        # the same rule as the live path — and it fails closed when nothing is
+        # registered, so a crew-staged approval cannot be taken by an unrelated agent
+        # step that merely emits confirm_pending_confirmation.
+        set_user_approval_probe(lambda pending: _user_approved_pending(self, pending))
         self._shutdown_requested = False
         # True once Era has asked "a job is running, confirm shutdown?" and is
         # waiting for the user's yes. Gates the `confirmed` flag so a stray

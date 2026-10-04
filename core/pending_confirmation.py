@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 # Must comfortably exceed Gemini's Live-session rotation interval (~2.5 min).
@@ -190,3 +191,30 @@ def get_shared_store() -> PendingConfirmationStore:
             if _shared_store is None:
                 _shared_store = PendingConfirmationStore()
     return _shared_store
+
+
+# ── Who may say yes ─────────────────────────────────────────────────────
+# The slot is shared by the live session and the autonomous agent (above), which is
+# exactly why CONSUMING it needs its own proof that the USER approved: a staged
+# approval — a crew-armed replace, any HIGH-risk action — must not be consumable by an
+# unrelated agent path that merely emits `confirm_pending_confirmation` inside the
+# confirm window. EraLive registers the one real probe (it owns what the user said:
+# app/era_live/tool_dispatch._user_approved_pending). With NO probe — headless, a
+# test — nobody can approve: this fails CLOSED.
+_user_approval_probe: Callable[[PendingConfirmation], bool] | None = None
+
+
+def set_user_approval_probe(probe: Callable[[PendingConfirmation], bool] | None) -> None:
+    global _user_approval_probe
+    _user_approval_probe = probe
+
+
+def user_approved(pending: PendingConfirmation | None) -> bool:
+    """True only when the registered probe says the USER approved `pending`."""
+    probe = _user_approval_probe
+    if probe is None or pending is None:
+        return False
+    try:
+        return bool(probe(pending))
+    except Exception:
+        return False

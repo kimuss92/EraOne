@@ -266,3 +266,105 @@ def test_confirmed_recall_after_the_users_yes_runs(monkeypatch):
     _recall(era, cid)
     assert era.ran == ["file_controller"]
     assert not era._pending_store.is_pending()
+
+
+# ── the AGENT EXECUTOR path (agent/executor.py) ─────────────────────────────
+# The slot is shared with the live session, and the executor used to consume it with no
+# user check at two sites: `confirm_pending_confirmation` (allow_sole) and a gated tool
+# re-called with confirmed=true + the id. So an unrelated agent step could take an
+# approval the user never gave — notably a crew-armed `vault_bridge replace` (the crew
+# only ARMS the slot; the user's own yes is meant to be the only thing that applies it).
+
+
+@pytest.fixture
+def shared_slot():
+    from core.pending_confirmation import get_shared_store, set_user_approval_probe
+
+    get_shared_store().clear()
+    set_user_approval_probe(None)  # headless: nobody registered, so nobody may approve
+    yield get_shared_store()
+    set_user_approval_probe(None)
+    get_shared_store().clear()
+
+
+def _arm_crew_replace(store):
+    """The slot the way crew/capabilities._vault_replace_staged leaves it."""
+    return store.store(
+        tool="vault_bridge",
+        parameters={"action": "replace", "path": "notes/x.md", "_approved_plan": {"plan_id": "p1"}},
+        risk_level="MEDIUM",
+        reason="drew proposes replacing content in notes/x.md",
+    )
+
+
+def test_an_agent_step_cannot_confirm_a_crew_staged_replace(shared_slot):
+    import agent.executor as ex
+
+    cid = _arm_crew_replace(shared_slot)
+    for ident in ("", cid, "invented-id"):  # the sole-slot rule must not be a way in
+        out = ex._call_tool_result("confirm_pending_confirmation", {"confirmation_id": ident}, None)
+        assert out.error_type == "BlockedAction", ident
+        assert NOT_USER_APPROVED_MESSAGE in (out.message or "")
+        assert shared_slot.is_pending(), "a refusal must leave it armed for the user's real yes"
+
+
+def test_an_agent_step_cannot_recall_the_gated_tool_with_the_shown_id(shared_slot):
+    import agent.executor as ex
+
+    cid = _arm_crew_replace(shared_slot)
+    out = ex._call_tool_result(
+        "vault_bridge",
+        {"action": "replace", "path": "notes/x.md", "confirmed": True, "confirmation_id": cid},
+        None,
+    )
+    assert out.error_type == "BlockedAction"
+    assert shared_slot.is_pending()
+
+
+def test_a_probe_that_says_no_refuses_even_with_the_right_id(shared_slot):
+    import agent.executor as ex
+    from core.pending_confirmation import set_user_approval_probe
+
+    set_user_approval_probe(lambda pending: False)
+    cid = _arm_crew_replace(shared_slot)
+    out = ex._call_tool_result("confirm_pending_confirmation", {"confirmation_id": cid}, None)
+    assert out.error_type == "BlockedAction" and shared_slot.is_pending()
+
+
+def test_a_probe_that_raises_fails_closed(shared_slot):
+    from core.pending_confirmation import set_user_approval_probe, user_approved
+
+    def boom(pending):
+        raise RuntimeError("probe bug")
+
+    set_user_approval_probe(boom)
+    _arm_crew_replace(shared_slot)
+    assert user_approved(shared_slot.peek()) is False
+    assert user_approved(None) is False
+
+
+def test_the_users_yes_lets_the_executor_consume_exactly_the_checked_action(
+    shared_slot, monkeypatch
+):
+    import agent.executor as ex
+    from core.pending_confirmation import set_user_approval_probe
+
+    seen = []
+    approved_for = []
+    set_user_approval_probe(lambda pending: approved_for.append(pending.tool) or True)
+    cid = _arm_crew_replace(shared_slot)
+    real = ex._call_tool_result
+    monkeypatch.setattr(ex, "_call_tool_result", lambda *a, **k: seen.append((a, k)))
+    real("confirm_pending_confirmation", {"confirmation_id": ""}, None)
+    assert approved_for == ["vault_bridge"], "the probe is asked about the armed action"
+    assert not shared_slot.is_pending(), "approved: the slot is consumed"
+    ((args, kwargs),) = seen
+    assert args[0] == "vault_bridge" and kwargs.get("_confirmed_once") is True
+    assert args[1]["confirmation_id"] == cid and args[1]["confirmed"] is True
+
+
+def test_eralive_registers_the_real_probe():
+    """The live session is the one place that knows what the user said; without this
+    registration the executor would fail closed for the user too."""
+    src = (Path(__file__).resolve().parents[1] / "main.py").read_text("utf-8-sig")
+    assert "set_user_approval_probe(" in src and "_user_approved_pending(self, pending)" in src
