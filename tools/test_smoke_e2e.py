@@ -35,7 +35,14 @@ os.environ["ERA_LOG_DIR"] = str(_LOG_DIR)
 # 2. Now import era_one modules (logger init reads ERA_LOG_DIR)
 # ---------------------------------------------------------------------------
 from agent.executor import _call_tool_result, _pending_store
+from core.pending_confirmation import set_user_approval_probe
 from core.tool_result import ToolResult
+
+# This script tests the confirmation MECHANICS. Consuming a pending confirmation now needs
+# the USER's yes, which only EraLive can vouch for and which fails closed without it, so the
+# script states it: the user has said yes. Who may approve is pinned in
+# tools/test_confirm_self_approval.py.
+set_user_approval_probe(lambda pending: True)
 
 # ---------------------------------------------------------------------------
 # Test harness
