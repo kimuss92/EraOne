@@ -47,6 +47,7 @@ ERROR_TYPES = frozenset(
         "ConfirmationRequired",
         "ConfirmationBusy",
         "TransportDown",
+        "MissingCredential",
         "BotError",
     }
 )

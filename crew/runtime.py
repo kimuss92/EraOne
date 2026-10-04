@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -359,7 +360,15 @@ def get_transport() -> Transport:
     global _transport
     with _transport_lock:
         if _transport is None:
-            t = InProcessTransport()
+            # In-process unless the user opts in. The Hermes transport (Mode A: Hermes is
+            # the brain, Era the gate) refuses to run without its own key and with any
+            # tool enabled on the era_one profile; see crew/hermes_transport.py.
+            if os.environ.get("ERA_CREW_TRANSPORT", "").strip().lower() == "hermes_agent":
+                from crew.hermes_transport import HermesAgentTransport
+
+                t = HermesAgentTransport()
+            else:
+                t = InProcessTransport()
             report = load_specs()
             for bot_id, spec in report.specs.items():
                 t.register(bot_id, spec)
