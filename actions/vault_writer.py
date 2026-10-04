@@ -310,20 +310,35 @@ def _perform_save(parameters: dict) -> tuple[bool, str]:
         )
 
     try:
-        if created:
-            body = _frontmatter_block(brand_key, note_type, title) + content + "\n"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body, encoding="utf-8")
-        else:
-            existing = path.read_text(encoding="utf-8")
-            replaced = _replace_section(existing, section, content) if section else None
-            if replaced is not None:
-                body = replaced
+        # The shared vault lock + verified write (core/vault_bridge): the read-modify-
+        # write below is one critical section, so two writers cannot lose each other's
+        # line, and a write that OneDrive rewrote underneath us raises (an OSError, so
+        # the handler below holds the note instead of reporting it saved).
+        from core import vault_bridge
+
+        with vault_bridge.vault_write_lock():
+            if created and not path.exists():
+                body = _frontmatter_block(brand_key, note_type, title) + content + "\n"
+                vault_bridge.write_verified(path, body)
             else:
-                stamp = datetime.now().astimezone().strftime("%Y-%m-%d")
-                lead = f"\n\n## {section}\n\n" if section else f"\n\n<!-- added {stamp} -->\n"
-                body = existing.rstrip() + lead + content + "\n"
-            path.write_text(body, encoding="utf-8")
+                created = False  # a creation race lost inside the lock: append instead
+                existing = path.read_text(encoding="utf-8")
+                replaced = _replace_section(existing, section, content) if section else None
+                if replaced is not None:
+                    # Overwriting existing content is the ONE write that needs the user's
+                    # yes and a staged diff (core/vault_bridge `replace`). This tool is
+                    # ungated by design, so it must not do it: that would be a fast path
+                    # around the gate. A section that does not exist yet is still appended.
+                    return True, (
+                        f"Could not overwrite the existing '{section}' section here, sir — "
+                        "replacing content needs your approval. I'll propose it with "
+                        "vault_bridge action=replace, which shows you the change first."
+                    )
+                else:
+                    stamp = datetime.now().astimezone().strftime("%Y-%m-%d")
+                    lead = f"\n\n## {section}\n\n" if section else f"\n\n<!-- added {stamp} -->\n"
+                    body = existing.rstrip() + lead + content + "\n"
+                vault_bridge.write_verified(path, body)
     except OSError as exc:
         log_event(writer_logger, "vault.write_failed", "WARNING", path=str(path), error=str(exc))
         # Not a decision — the vault was there and the write still failed

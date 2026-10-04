@@ -5,7 +5,7 @@ DIRECTION OF DEPENDENCY, AND WHY
 
   core.ai_provider is imported without a try/except by six modules
   (design_studio, self_diagnosis, self_improve, agent/{planner,executor,
-  error_handler}) and by hermes_router, which routes every utterance. Inverting
+  error_handler}) and by lane_router, which routes every utterance. Inverting
   the dependency — making that file delegate here — would put a brand-new code
   path underneath Era's live routing on day one of the migration.
 

@@ -101,11 +101,11 @@ def test_broken_policy_is_disabled(monkeypatch, tmp_path):
     ("write a postmortem of this crash", "assistant"),
 ])
 def test_default_cm_extension_does_not_call_models(monkeypatch, text, category):
-    import hermes_router
-    monkeypatch.delenv("HERMES_PROVIDER_ORDER", raising=False)
-    monkeypatch.setattr(hermes_router, "_classify_local", lambda *a: pytest.fail("Local model called"))
-    monkeypatch.setattr(hermes_router, "_classify_gemini", lambda *a: pytest.fail("Cloud model called"))
-    result = hermes_router.route(text)
+    import lane_router
+    monkeypatch.delenv("ERA_LANE_PROVIDER_ORDER", raising=False)
+    monkeypatch.setattr(lane_router, "_classify_local", lambda *a: pytest.fail("Local model called"))
+    monkeypatch.setattr(lane_router, "_classify_gemini", lambda *a: pytest.fail("Cloud model called"))
+    result = lane_router.route(text)
     assert result.category == category
     assert result.source == "rules"
 

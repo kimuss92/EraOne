@@ -116,7 +116,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-# brands.yaml parse cache, keyed by file mtime: Hermes + dispatch call
+# brands.yaml parse cache, keyed by file mtime: the lane router + dispatch call
 # load_brands() several times per utterance, and re-parsing the YAML each time
 # was pure waste. Editing the file still takes effect immediately (mtime moves).
 _BRANDS_CACHE: tuple[float, dict] | None = None

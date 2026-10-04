@@ -54,8 +54,21 @@ def _desktop_control_preview(parameters: dict) -> tuple[str, dict]:
     return plan_desktop_preview(parameters)
 
 
+def _vault_bridge_preview(parameters: dict) -> tuple[str, dict]:
+    """A `replace` is staged HERE, before the question: the user hears the real diff
+    summary, and the staged plan (kept server-side, keyed by an unguessable id) is what
+    approval later executes — never the caller's echoed parameters."""
+    if str(parameters.get("action") or "").lower().strip() != "replace":
+        return "", {}
+    from core.vault_bridge import plan_replace_preview
+
+    text, carried = plan_replace_preview(parameters)
+    return (f"{text} Should I proceed?" if carried else text), carried
+
+
 _BUILDERS: dict[str, Callable[[dict], tuple[str, dict]]] = {
     "desktop_control": _desktop_control_preview,
+    "vault_bridge": _vault_bridge_preview,
 }
 
 

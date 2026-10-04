@@ -79,7 +79,7 @@
 | Ceram Quartz ad account | **act_1698581228193609** |
 | Audiences | Build **"Claude DC Audience"** and **"Claude CQ AUDIENCE"** (specs below, derived from the two brand reports). |
 | Review gate | **Everything created PAUSED.** Present review summary, stop. Activate only after explicit user approval, never in the same run. |
-| Scope | Full: skill + brands.yaml + era_dispatch/hermes_router voice orders. |
+| Scope | Full: skill + brands.yaml + era_dispatch/lane_router voice orders. |
 | Reports | Performance report as **PDF emailed to each brand's `notify_email`** (copy kept in brand `project_dir`). Findings feed back into the CM (learning loop). |
 
 ## Step 1 — Register Meta Ads MCP in Claude Code
@@ -148,7 +148,7 @@ Flat single file, `name:` + `description:` frontmatter, mirroring `interior-desi
 ## Step 5 — Era dispatch integration (voice/CLI orders) — DONE 2026-07-20
 - `era_dispatch.py`: `_DEFAULT_ALLOWED_TOOLS["ads"]` allowlists `mcp__facebook-ads` + `mcp__composio`; `run_task()` overrides `claude_config_dir` to `defaults.ads_claude_config_dir` (freelance) for every ads task regardless of brand, and refuses when `ads.enabled` is false; `_build_ads_brief()` is a dedicated brief (not injected into the organic one — see its docstring for why) built from `brands.<key>.ads`.
 - `main.py`: `_ADS_INTENT` regex + `_infer_cm_task_type`, checked before `_CAMPAIGN_INTENT` so organic vs. paid "campaign" don't collide; `community_manager` tool's task_type validation tuple includes `"ads"`.
-- `hermes_router.py`: `_CM_KEYWORDS` extended with "ads", "publicité", "sponsoring", "boost", "ad budget", "campagne sponsorisée" (closes the one gap where a bare budget question has no other CM-recognized word).
+- `lane_router.py`: `_CM_KEYWORDS` extended with "ads", "publicité", "sponsoring", "boost", "ad budget", "campagne sponsorisée" (closes the one gap where a bare budget question has no other CM-recognized word).
 - Test coverage: `tools/test_ads_dispatch.py` (17 tests — intent classification, brief separation/content, account-lock/exclusion rendering, budget-ask mandate, cross-brand isolation, the `ads.enabled` gate, the freelance config-dir override, allowed-tools).
 - `docs/CM_COMMANDS.md`: ads order phrasing documented.
 

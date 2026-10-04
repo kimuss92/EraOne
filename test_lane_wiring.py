@@ -1,8 +1,8 @@
 """
-test_hermes_wiring.py — Stage 3 wiring proof: hermes_dispatch behind Era's typed
-text path (main.py's _on_text_command -> _route_text_through_hermes -> _run_cm_flow).
+test_lane_wiring.py — Stage 3 wiring proof: lane_dispatch behind Era's typed
+text path (main.py's _on_text_command -> _route_text_through_lanes -> _run_cm_flow).
 
-Voice is intentionally NOT covered here (see [[era-hermes-routing]] for why it's
+Voice is intentionally NOT covered here (see [[era-lane-routing]] for why it's
 deferred to its own stage). These four scenarios are the agreed acceptance tests
 for THIS pass:
 
@@ -13,11 +13,11 @@ for THIS pass:
   4. CM text while another job is running speaks the "queued behind" line before
      dispatching.
 
-`era_dispatch` and `hermes_dispatch` are faked in sys.modules before `main` is
-imported, same isolation style as test_hermes_router.py, so this runs without a
+`era_dispatch` and `lane_dispatch` are faked in sys.modules before `main` is
+imported, same isolation style as test_lane_router.py, so this runs without a
 live Gemini/Claude account and without touching the real subprocess lock.
 
-Run:  pytest test_hermes_wiring.py -v
+Run:  pytest test_lane_wiring.py -v
 """
 
 import asyncio
@@ -56,10 +56,10 @@ class _FakeEraDispatch:
         return dict(self.run_task_return)
 
 
-# --- Fake hermes_dispatch -----------------------------------------------------
-class _FakeHermesDispatch:
+# --- Fake lane_dispatch -----------------------------------------------------
+class _FakeLaneDispatch:
     """`handle()` mirrors the real contract but is driven by test-set fields
-    instead of a real Hermes classification / era_dispatch call."""
+    instead of a real the lane router classification / era_dispatch call."""
 
     def __init__(self, fake_ed: _FakeEraDispatch):
         self._ed = fake_ed
@@ -85,8 +85,8 @@ class _FakeHermesDispatch:
 @pytest.fixture()
 def fakes(monkeypatch):
     fake_ed = _FakeEraDispatch()
-    fake_hd_module = types.ModuleType("hermes_dispatch")
-    fake_hd = _FakeHermesDispatch(fake_ed)
+    fake_hd_module = types.ModuleType("lane_dispatch")
+    fake_hd = _FakeLaneDispatch(fake_ed)
     fake_hd_module.handle = fake_hd.handle
 
     fake_ed_module = types.ModuleType("era_dispatch")
@@ -96,13 +96,13 @@ def fakes(monkeypatch):
     fake_ed_module.run_task = fake_ed.run_task
 
     monkeypatch.setitem(sys.modules, "era_dispatch", fake_ed_module)
-    monkeypatch.setitem(sys.modules, "hermes_dispatch", fake_hd_module)
+    monkeypatch.setitem(sys.modules, "lane_dispatch", fake_hd_module)
     return types.SimpleNamespace(ed=fake_ed, hd=fake_hd)
 
 
 @pytest.fixture(scope="module")
 def main_module():
-    # era_dispatch/hermes_dispatch are imported lazily INSIDE the methods under
+    # era_dispatch/lane_dispatch are imported lazily INSIDE the methods under
     # test (matching main.py's existing defensive style), so this plain import
     # is safe before the fakes exist — the fakes are looked up at call time.
     import main
@@ -148,7 +148,7 @@ def era(main_module, fakes):
     # Collaborators the CM path picked up after this stub was first written.
     # A CM report that finishes with no live session is HELD for the next
     # reconnect rather than dropped, so the flow needs somewhere to park it
-    # and a log sink; the safety gate now sits on the hermes route itself,
+    # and a log sink; the safety gate now sits on the lane route itself,
     # not only behind _on_text_command.
     from core.input_safety_gate import InputSafetyGate
 
@@ -213,7 +213,7 @@ def era(main_module, fakes):
 
     # Bind the real (unmodified) unbound methods from EraLive onto the stub.
     stub._consume_pending_cm_ask = main_module.EraLive._consume_pending_cm_ask.__get__(stub)
-    stub._route_text_through_hermes = main_module.EraLive._route_text_through_hermes.__get__(stub)
+    stub._route_text_through_lanes = main_module.EraLive._route_text_through_lanes.__get__(stub)
     stub._run_cm_flow = main_module.EraLive._run_cm_flow.__get__(stub)
     stub._on_text_command = main_module.EraLive._on_text_command.__get__(stub)
     stub._arm_cm_handoff = main_module.EraLive._arm_cm_handoff.__get__(stub)
@@ -273,7 +273,7 @@ async def _run_and_drain(era, text):
     # running loop here: a CM report only gets SPOKEN when a loop and session
     # are live, and "connected" is the state these tests describe.
     era._loop = asyncio.get_running_loop()
-    await era._route_text_through_hermes(text)
+    await era._route_text_through_lanes(text)
     if era._background_tasks:
         await asyncio.gather(*list(era._background_tasks))
 
@@ -304,7 +304,7 @@ async def test_cm_text_with_brand_dispatches_and_speaks_result(era, fakes):
     assert era.spoken == ["Plan is ready."]
     assert (
         fakes.ed.run_task_calls == []
-    )  # went through hermes_dispatch.handle, not a direct run_task call
+    )  # went through lane_dispatch.handle, not a direct run_task call
     assert era._pending_cm_ask is None
 
 
@@ -325,7 +325,7 @@ async def test_ambiguous_brand_then_bare_brand_reply_redispatches(era, fakes):
     era.spoken.clear()
 
     # Bare brand-name reply — resolves via era_dispatch.resolve_brand and goes
-    # straight to a direct run_task call (bypassing hermes_dispatch.handle,
+    # straight to a direct run_task call (bypassing lane_dispatch.handle,
     # since the brand is already known — no need to re-classify).
     await _run_and_drain(era, "Delta Cuisine")
 
@@ -434,7 +434,7 @@ async def test_pending_ask_nonbrand_reply_falls_through_to_safety_gate(
     }
 
     # "the weather" resolves to no brand -> pending consumed, then it's a normal
-    # standalone input -> safety gate + Hermes, which does not claim it.
+    # standalone input -> safety gate + the lane router, which does not claim it.
     era._on_text_command("the weather")
     await asyncio.gather(*scheduled)
 
@@ -448,7 +448,7 @@ async def test_pending_ask_nonbrand_reply_falls_through_to_safety_gate(
 
 # --------------------------------------------------------------------------- #
 # 7. Brand-less CM entry: a clearly-CM phrase with NO brand named ("prepare this
-#    week's content plan"), classified cm by Hermes, must enter the SAME
+#    week's content plan"), classified cm by the lane router, must enter the SAME
 #    ambiguous-brand pending-ask flow as the brand-named case — driven through
 #    the real entry point (_on_text_command), never handed to Gemini. This is the
 #    typed-case gap from the live test (Gemini used to pick agent_task instead).
@@ -456,7 +456,7 @@ async def test_pending_ask_nonbrand_reply_falls_through_to_safety_gate(
 async def test_brandless_cm_phrase_enters_pending_ask_flow(era, fakes, main_module, monkeypatch):
     scheduled = _wire_text_command_entrypoint(era, main_module, monkeypatch)
 
-    # Hermes classifies it as CM; era_dispatch can't resolve a brand -> need_brand.
+    # The lane router classifies it as CM; era_dispatch can't resolve a brand -> need_brand.
     fakes.hd.classify_is_cm = True
     fakes.hd.dispatch_result = {"ok": False, "need_brand": True, "message": "which brand?"}
 

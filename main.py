@@ -458,8 +458,8 @@ class EraLive(
         self._auto_memory_saves: list[float] = []
         # --------------------------------------------------------
 
-        # ----- HERMES / CM DISPATCH (Stage 3 — typed text only; voice is its own
-        # later stage, see [[era-hermes-routing]] for why) -----
+        # ----- LANE ROUTER / CM DISPATCH (Stage 3 — typed text only; voice is its own
+        # later stage, see [[era-lane-routing]] for why) -----
         self._background_tasks: set[asyncio.Task] = set()
         self._pending_cm_ask: dict[str, Any] | None = None
         # Set to an expiry timestamp the moment a CM utterance is claimed; while it
@@ -652,7 +652,7 @@ class EraLive(
                     )
                     return
 
-        # Hermes' offline front gate runs before model pins and the cloud-session
+        # The lane router's offline front gate runs before model pins and the cloud-session
         # check, so volume/files/windows and coding also work during reconnects.
         autopilot = getattr(self, "_try_autopilot_text", None)
         if autopilot is not None and autopilot(text):
@@ -786,10 +786,10 @@ class EraLive(
         # gate. A bare brand name like "Delta Cuisine" is a valid answer to an
         # outstanding CM ask, but the gate reads it as SHORT_UNCLEAR (<=2 words)
         # and bails at ASK_CLARIFICATION, so _consume_pending_cm_ask (downstream
-        # in _route_text_through_hermes) never ran. Check it first: on a match,
+        # in _route_text_through_lanes) never ran. Check it first: on a match,
         # re-dispatch the original order and skip the gate; on no match the ask
-        # is consumed (one-shot) and we fall through to normal safety + Hermes.
-        # See [[era-hermes-routing]].
+        # is consumed (one-shot) and we fall through to normal safety + the lane router.
+        # See [[era-lane-routing]].
         if self._pending_cm_ask:
             payload = self._consume_pending_cm_ask(text)
             if payload is not None:
@@ -805,7 +805,7 @@ class EraLive(
                 return
             # No match: the pending ask is now consumed (one-shot). Fall through
             # so this reply is treated as a fresh standalone input by the safety
-            # gate + Hermes below.
+            # gate + the lane router below.
 
         # Carries the two context flags the gate cannot derive on its own: an
         # action awaiting a yes/no, and a question of Era's still outstanding.
@@ -814,13 +814,13 @@ class EraLive(
 
         # ── Pasted-data clarification (bare path / link) ──────────────────
         # A bare file path or web link with no verb is DATA, not a command, and
-        # is never a CM/Hermes order — so short-circuit it here, before the gate,
+        # is never a CM/lane-router order — so short-circuit it here, before the gate,
         # and hand it to the live model wrapped in an "identify this and ask what
         # to do" instruction. Era then asks instead of silently ignoring it, and
         # voice + text stay complementary (the user answers by speaking or typing:
         # "open it", "save it"). Longer pasted blobs and short unclear snippets are
         # handled downstream so they can't steal a CM order that merely lacks a
-        # recognized verb (see _route_text_through_hermes + the ASK handler below).
+        # recognized verb (see _route_text_through_lanes + the ASK handler below).
         paste_kind = self.safety_gate.classify_typed_input(text, state_snapshot)
         if paste_kind in ("PATH", "URL"):
             self._note_user_utterance(text)
@@ -917,7 +917,7 @@ class EraLive(
         # silently opened — she needs to see it to ask what you want done
         # with it, and to be able to answer "did you get that path?" later.
 
-        submit_coroutine(self._route_text_through_hermes(text), self._loop)
+        submit_coroutine(self._route_text_through_lanes(text), self._loop)
 
     _UPLOAD_DIR = BASE_DIR / "runtime" / "uploads"
     _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB — generous for images/PDFs/docs
@@ -2729,18 +2729,18 @@ def main():
         except Exception as e:
             print(f"[SELF-HEAL] failed to start: {e}")
 
-        # Preload the local Hermes classifier (Ollama) in the background so the
+        # Preload the local the lane router classifier (Ollama) in the background so the
         # first typed CM request doesn't pay the model cold-load latency. No-op
         # if Ollama isn't the configured provider; never blocks startup.
-        def _warm_hermes():
+        def _warm_lanes():
             try:
-                import hermes_router
+                import lane_router
 
-                hermes_router.warm_up()
+                lane_router.warm_up()
             except Exception as e:
-                print(f"[HERMES] warm-up thread failed: {e}")
+                print(f"[LANE] warm-up thread failed: {e}")
 
-        threading.Thread(target=_warm_hermes, daemon=True, name="HermesWarmup").start()
+        threading.Thread(target=_warm_lanes, daemon=True, name="LaneWarmup").start()
 
         # Same idea for the local vision model: cold load is ~13.7s vs ~2.2s warm,
         # so preload it rather than making the first "look at my screen" pay for it.

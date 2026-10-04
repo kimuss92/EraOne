@@ -1,12 +1,12 @@
 """
-hermes_dispatch.py — put CM dispatch BEHIND the Hermes router.
+lane_dispatch.py — put CM dispatch BEHIND the the lane router router.
 
 This is the seam between Era's live flow and the heavy community-management lane.
 It is deliberately tiny and side-effect-light so main.py can adopt it from ONE
 place without the 144KB voice loop having to know how routing or dispatch work.
 
 FLOW
-      text ─► Hermes.route ─┬─ category "assistant" ─► return {handled: False}   (Era keeps going)
+      text ─► lane_router.route ─┬─ category "assistant" ─► return {handled: False}   (Era keeps going)
                            │
                            └─ category "cm" ────────► era_dispatch.run_task(...)
                                                        ├─ resolved brand    ─► run it
@@ -14,17 +14,17 @@ FLOW
                                                                                  (Era asks "which brand?")
 
 CONTRACT (what callers get back — always a dict, never raises)
-  handled      : bool   — True if Hermes claimed this for the CM lane. If False,
+  handled      : bool   — True if the lane router claimed this for the CM lane. If False,
                           the caller should process `text` through Era's normal flow.
   category     : str    — "cm" | "assistant"
-  decision     : dict   — the full Hermes RouteDecision (category/brand/confidence/…)
+  decision     : dict   — the full the lane router RouteDecision (category/brand/confidence/…)
   When handled is True, one of:
     need_brand : True    — CM work but the brand was ambiguous/missing; ask the user.
     ok         : bool     — dispatch ran; result/error carry the outcome.
     result / error / brand — as returned by era_dispatch.run_task.
 
 USAGE FROM ERA (main.py), single call site:
-    from hermes_dispatch import handle
+    from lane_dispatch import handle
     out = handle(user_text, task_type="weekly")
     if not out["handled"]:
         ...            # normal Era flow (device control, chat, media, memory)
@@ -45,7 +45,7 @@ from __future__ import annotations
 from typing import Any
 
 import era_dispatch as ed
-from hermes_router import RouteDecision, route
+from lane_router import RouteDecision, route
 
 
 def handle(
@@ -80,7 +80,7 @@ def handle(
         # Classified as CM but caller only wants the decision (e.g. to confirm first).
         return {**base, "ok": True, "dispatched": False, "brand": decision.brand}
 
-    # Prefer the brand Hermes already resolved; era_dispatch will re-resolve from
+    # Prefer the brand the lane router already resolved; era_dispatch will re-resolve from
     # the text if we pass None, and will return need_brand if it stays ambiguous.
     result = ed.run_task(
         decision.text,

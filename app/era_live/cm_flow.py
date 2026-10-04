@@ -1,6 +1,6 @@
 """Community-management flow mixin for EraLive (extracted from main.py).
 
-Pending brand-ask handling, Hermes hand-off, CM dispatch, feedback capture,
+Pending brand-ask handling, the lane router hand-off, CM dispatch, feedback capture,
 and CM report delivery. Operates on self.* state.
 """
 
@@ -114,22 +114,22 @@ class CMFlowMixin:
         timer, the next check after the window simply reads it as inactive."""
         return time.time() < self._cm_handoff_until
 
-    async def _route_text_through_hermes(self, text: str) -> None:
-        """Stage 3 wiring, typed text only: classify `text` with Hermes BEFORE
+    async def _route_text_through_lanes(self, text: str) -> None:
+        """Stage 3 wiring, typed text only: classify `text` with the lane router BEFORE
         Era's normal Gemini flow ever sees it, so CM work never reaches Gemini at
         all (no double-reply risk here — unlike voice, Era has the full text
-        before responding). Voice is untouched; see [[era-hermes-routing]] for why.
+        before responding). Voice is untouched; see [[era-lane-routing]] for why.
         """
         payload = self._consume_pending_cm_ask(text)
         if payload is None:
             hud.routing_started()
             _route_t0 = time.monotonic()
             try:
-                import hermes_dispatch
+                import lane_dispatch
 
-                decision = await asyncio.to_thread(hermes_dispatch.handle, text, dispatch=False)
+                decision = await asyncio.to_thread(lane_dispatch.handle, text, dispatch=False)
             except Exception as e:
-                print(f"[era] [HERMES] classify failed, falling through to normal flow: {e}")
+                print(f"[era] [LANE] classify failed, falling through to normal flow: {e}")
                 decision = {"handled": False}
             hud.routing_finished(
                 "community manager" if decision.get("handled") else "live model",
@@ -137,7 +137,7 @@ class CMFlowMixin:
             )
 
             if not decision.get("handled"):
-                # Hermes didn't claim it (not a CM order), so now it's safe to
+                # The lane router didn't claim it (not a CM order), so now it's safe to
                 # check whether it's a pasted blob with no command intent. If so,
                 # frame it as data and ask what to do, instead of forwarding raw
                 # text the model tends to ignore. A real command/question is sent
@@ -152,7 +152,7 @@ class CMFlowMixin:
                 kind = self.safety_gate.classify_typed_input(text, self._text_state_snapshot())
                 if kind == "TEXT_BLOB":
                     print(
-                        f"[PASTE] Hermes-unclaimed input classified as {kind}; asking user what to do."
+                        f"[PASTE] lane-unclaimed input classified as {kind}; asking user what to do."
                     )
                     await self.session.send_realtime_input(
                         text=_build_paste_clarify_instruction(kind, text)
@@ -316,7 +316,7 @@ class CMFlowMixin:
         See [[era-goaway-reconnect]].
 
         announce: speak the "Got it — running X for <brand>" pre-dispatch echo.
-        Left True for the text/Hermes path (nothing else acknowledges the order),
+        Left True for the text/lane-router path (nothing else acknowledges the order),
         but the community_manager tool sets it False — Gemini already voices its
         own acknowledgement from the tool result, so a second echo would double up.
         """
@@ -351,10 +351,10 @@ class CMFlowMixin:
                     brand_key=brand_key,
                 )
             else:
-                import hermes_dispatch
+                import lane_dispatch
 
                 result = await asyncio.to_thread(
-                    hermes_dispatch.handle,
+                    lane_dispatch.handle,
                     text,
                     task_type=task_type,
                     dispatch=True,
@@ -372,7 +372,7 @@ class CMFlowMixin:
             # Set the pending flag BEFORE speaking — this assignment is synchronous
             # and completes before speak() even schedules the send to Gemini, so
             # tool-suppression (_pending_cm_ask_active) is already armed by the time
-            # any Gemini tool call could arrive. See [[era-hermes-routing]].
+            # any Gemini tool call could arrive. See [[era-lane-routing]].
             self._pending_cm_ask = {
                 "text": text,
                 "task_type": task_type,

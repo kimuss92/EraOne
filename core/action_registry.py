@@ -341,6 +341,12 @@ def canonicalize_tool_call(tool: str, parameters: dict | None) -> tuple[str, dic
     if tool == "spotify_control":
         return tool, params
 
+    # ── Vault-bridge / crew guard: "read", "search", "create", "append", "replace",
+    # "ask", "list", "status" are all generic action words, several already bound
+    # elsewhere in the flat map. An explicit call to either tool is always theirs.
+    if tool in ("vault_bridge", "crew"):
+        return tool, params
+
     # ── Scheduled-task guard: "cancel", "list", "update", "run_now" are generic,
     # and game_updater already owns schedule/cancel_schedule. Same class of bug.
     if tool == "scheduled_task":

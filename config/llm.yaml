@@ -145,7 +145,7 @@ aliases:
   era.classify:
     provider: ollama
     model: qwen2.5-coder:7b
-    role: Free local classification. hermes_router already prefers this over
+    role: Free local classification. lane_router already prefers this over
       Gemini precisely so routing cannot burn metered quota — a 20/day free
       tier was silently exhausting and forcing the heuristic fallback on every
       utterance. Keep routing off metered models.
@@ -308,7 +308,7 @@ routing:
     long_context: era.reason
     creative_advanced: era.deep
     # Community management is not a model choice — it is a separate lane
-    # (hermes_router category "cm" -> era_dispatch). Named here only so nobody
+    # (lane_router category "cm" -> era_dispatch). Named here only so nobody
     # adds it as an alias and splits the CM pipeline in two.
     community_management: LANE:cm
 

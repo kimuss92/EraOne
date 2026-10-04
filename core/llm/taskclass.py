@@ -4,7 +4,7 @@ WHY NOT A MODEL
 ---------------
 This runs in front of every utterance, including "volume up". Calling a model to
 decide whether to call a model costs more than the decision saves, and Era
-already pays for one classifier pass (hermes_router, cm-vs-assistant). A regex
+already pays for one classifier pass (lane_router, cm-vs-assistant). A regex
 pass is microseconds and, more importantly, it is TESTABLE: every routing
 decision it produces can be pinned, which is what makes shadow mode meaningful.
 

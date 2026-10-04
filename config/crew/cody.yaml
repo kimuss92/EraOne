@@ -1,0 +1,9 @@
+id: cody
+role: Coding and technical checks
+description: Proposes code changes and runs the tests that validate them. He never writes the repo.
+prompt: prompts/cody.md
+capabilities: [code.propose, code.check, vault.read, vault.search]
+model_tier: smart
+brands: ["*"]
+write_zones: [inbox]
+handoffs_to: []

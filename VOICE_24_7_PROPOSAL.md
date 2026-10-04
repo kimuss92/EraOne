@@ -8,13 +8,13 @@ Provider documentation checked 2026-10-03.
 ## Recommendation
 
 Keep the microphone, speech recognition, interruption detection and speaker
-independent of Gemini. Use Hermes to handle exact local commands, then route
+independent of Gemini. Use the lane router to handle exact local commands, then route
 reasoning to a healthy streaming cloud provider or a warm local model. Keep one
 chosen TTS voice across all reasoning providers.
 
 | Profile | Recognition | Reasoning | Voice | Cost/continuity |
 | --- | --- | --- | --- | --- |
-| Free/offline | Local sherpa-onnx; suitable streaming recognizer where available, current Whisper as fallback | Small quantized model through Ollama plus no-LLM Hermes actions | One fixed local Piper voice for the chosen language | No API quota; electricity/hardware still cost money; weaker reasoning and less expressive voice |
+| Free/offline | Local sherpa-onnx; suitable streaming recognizer where available, current Whisper as fallback | Small quantized model through Ollama plus no-LLM lane-router actions | One fixed local Piper voice for the chosen language | No API quota; electricity/hardware still cost money; weaker reasoning and less expressive voice |
 | Premium practical | Local recognition | Streaming Gemini text or paid Groq, then local backup | Existing Fish Audio reference voice; local Piper when unavailable | Least integration work because Fish exists already; cloud failure changes timbre when Piper takes over |
 | Premium voice alternative | Local recognition or paid streaming STT | Streaming cloud providers, then local backup | ElevenLabs Flash v2.5, fixed voice_id; local fallback | New adapter needed; low synthesis latency; metered credits, internet and provider limits remain |
 | Strict same voice offline | Local recognition | Cloud/local reasoning can change independently | Always use the same local TTS model and voice | Best continuity of timbre during internet or provider failures |
@@ -58,7 +58,7 @@ this audit. The current local fallback should not be described as Gemini-fast.
 2. Use local wake-word/VAD and speaker verification. For lower latency, evaluate
    a streaming recognizer for the spoken language. Keep the existing Whisper path
    when accuracy/language coverage demands it.
-3. Hermes dispatches precise volume/window/file/HUD commands with no model.
+3. The lane router dispatches precise volume/window/file/HUD commands with no model.
    Coding remains a separate Claude staging job so it never blocks the audio loop.
 4. Conversation uses a bounded voice prompt and only relevant tools. Stream the
    first useful sentence to TTS; do not wait for the full response.

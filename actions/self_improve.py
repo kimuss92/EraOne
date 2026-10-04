@@ -87,7 +87,7 @@ SAFETY_CRITICAL = frozenset(
         "core/autopilot.py",
         "core/autopilot_coding.py",
         "app/era_live/autopilot.py",
-        "hermes_router.py",
+        "lane_router.py",
         "actions/claude_self_improve.py",
         "core/llm/adapters/claude_cli.py",
         "era_supervisor.py",

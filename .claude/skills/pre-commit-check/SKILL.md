@@ -36,7 +36,7 @@ continue to the next step.
 4. **Tests** — run the suites (fast, quiet):
    ```
    python -m pytest tools/ -q
-   python -m pytest test_hermes_router.py test_memory_guard.py test_pending_ask_suppression.py test_task_queue.py -q
+   python -m pytest test_lane_router.py test_memory_guard.py test_pending_ask_suppression.py test_task_queue.py -q
    ```
 
 ## Report

@@ -1,4 +1,4 @@
-"""Run Hermes' offline lanes before any Gemini request or local brain turn."""
+"""Run the lane router's offline lanes before any Gemini request or local brain turn."""
 
 from __future__ import annotations
 

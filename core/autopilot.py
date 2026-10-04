@@ -1,4 +1,4 @@
-"""Hermes' offline front gate: parse a command, select coding, or abstain.
+"""The lane router's offline front gate: parse a command, select coding, or abstain.
 
 Only complete allowlisted command grammars produce executable arguments.
 This module uses the standard library and never calls a model or a tool.

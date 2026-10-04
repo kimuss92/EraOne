@@ -174,7 +174,25 @@ def _next_session_number(text: str) -> int:
     return (max(found) + 1) if found else 1
 
 
-def append_session(
+def append_session(topic: str, **kwargs) -> Path | None:
+    """Add one session block to today's day log, under the shared vault write lock.
+
+    The read-modify-write in `_append_session` must not interleave with another
+    writer (live Era, the nightly maintenance, a crew bot): two interleaved
+    appends silently lose one session block. A held lock degrades to None, like
+    an unreachable vault. Never raises.
+    """
+    try:
+        from core import vault_bridge
+
+        with vault_bridge.vault_write_lock():
+            return _append_session(topic, **kwargs)
+    except OSError as exc:
+        log_event(daily_logger, "daily.lock_unavailable", "WARNING", error=str(exc))
+        return None
+
+
+def _append_session(
     topic: str,
     *,
     done: list[str] | None = None,

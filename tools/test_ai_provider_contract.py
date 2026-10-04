@@ -2,7 +2,7 @@
 
 WHY THESE EXIST
   Six modules import this file (design_studio, self_diagnosis, self_improve,
-  agent/{planner,executor,error_handler}) plus hermes_router, and none of them
+  agent/{planner,executor,error_handler}) plus lane_router, and none of them
   wrap it in a try/except. Its quirks are therefore load-bearing contract, not
   implementation detail:
 
@@ -83,7 +83,7 @@ def no_real_keys(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Model constants — imported by name elsewhere (self_diagnosis, self_improve,
-# hermes_router), so renaming or dropping one breaks those call sites.
+# lane_router), so renaming or dropping one breaks those call sites.
 # ---------------------------------------------------------------------------
 
 
@@ -262,7 +262,7 @@ def test_generate_json_returns_empty_dict_when_no_fallback_given(fake_client):
 
 
 def test_generate_json_never_raises(fake_client):
-    """hermes_router and design_studio call this with no try/except. If it can
+    """lane_router and design_studio call this with no try/except. If it can
     raise, an utterance takes Era's routing down."""
     for boom in (RuntimeError("x"), ValueError("y"), KeyError("z"), TimeoutError()):
         fake_client(raises=boom)

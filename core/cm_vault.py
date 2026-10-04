@@ -657,20 +657,27 @@ def append_run_log(
     )
 
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_text(
-                f"---\ntags: [area, {brand_key}, era-log]\n"
-                f"brand: {brand_key}\ncreated: {stamp[:10]}\n---\n\n"
-                f"# Era Run Log — {brand_key}\n\n"
-                "Written by Era automatically after every community-management run. "
-                "Safe to read, annotate and prune by hand — Era only ever appends "
-                f"under `{_LOG_HEADING}`.\n\n"
-                f"{_LOG_HEADING}\n",
-                encoding="utf-8",
-            )
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(entry)
+        # The shared vault write lock (core/vault_bridge, imported lazily because the
+        # bridge imports this module). A held lock is an OSError, handled below like
+        # any other failed write: the run log is best-effort, the job still succeeds.
+        from core import vault_bridge
+
+        with vault_bridge.vault_write_lock():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text(
+                    f"---\ntags: [area, {brand_key}, era-log]\n"
+                    f"brand: {brand_key}\ncreated: {stamp[:10]}\n---\n\n"
+                    f"# Era Run Log — {brand_key}\n\n"
+                    "Written by Era automatically after every community-management run. "
+                    "Safe to read, annotate and prune by hand — Era only ever appends "
+                    f"under `{_LOG_HEADING}`.\n\n"
+                    f"{_LOG_HEADING}\n",
+                    encoding="utf-8",
+                )
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(entry)
+            _rotate_run_log(path, brand_key)
     except OSError as exc:
         log_event(
             vault_logger,
@@ -681,8 +688,6 @@ def append_run_log(
             error=str(exc),
         )
         return None
-
-    _rotate_run_log(path, brand_key)
 
     log_event(
         vault_logger,

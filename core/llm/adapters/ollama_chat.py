@@ -47,7 +47,7 @@ from core.llm.types import (
 from core.text_ollama import SHARED_NUM_CTX
 
 DEFAULT_MODEL = "gemma4:e4b"  # config/llm.yaml era.local is authoritative
-# slim tools (~8.4k) + compact prompt + a short history. Shared with Hermes so
+# slim tools (~8.4k) + compact prompt + a short history. Shared with the lane router so
 # the resident model is never reloaded between the two (see text_ollama).
 DEFAULT_NUM_CTX = SHARED_NUM_CTX
 

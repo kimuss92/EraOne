@@ -60,8 +60,8 @@ per-app Spotify control landed today) but the core mission is unchanged.
  core/claude_bridge.py ──drives Claude Code CLI window via UIA──> reads
    transcripts back into Era (no official Claude Code API used)
 
- hermes_dispatch.py / hermes_router.py — exist, have dedicated tests, but era_dispatch.py
-   has zero references to "hermes" (grep-verified this session) — not shown wired into
+ lane_dispatch.py / lane_router.py — exist, have dedicated tests, but era_dispatch.py
+   has zero references to "lane_router" (grep-verified this session) — not shown wired into
    the diagram above because its integration point, if any, is unconfirmed.
 ```
 Corrected since last update: `ui.py` was previously flagged "likely stale" — verified
@@ -83,7 +83,7 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 | era_telegram.py | ~28K chars | Telegram long-polling bridge into text-intent path | working (needs `doctor` if webhook set — see broken) |
 | era_scheduler.py | ~8K chars | Thin wrapper around APScheduler; `reload()` wipes jobs | working, fragile (see broken) |
 | era_offers.py | small | CM/ads offer logic | untested this session |
-| hermes_dispatch.py / hermes_router.py | 4.2K / 16.2K chars | Secondary router (Hermes); NOT referenced by era_dispatch.py (0 grep hits, verified) | has dedicated tests (`test_hermes_router.py`, `test_hermes_wiring.py`) but wiring/entry point unconfirmed; last touched Jul 24 — looks parked |
+| lane_dispatch.py / lane_router.py | 4.2K / 16.2K chars | Secondary router (lane router, formerly Hermes); NOT referenced by era_dispatch.py (0 grep hits, verified) | has dedicated tests (`test_lane_router.py`, `test_lane_wiring.py`) but wiring/entry point unconfirmed; last touched Jul 24 — looks parked |
 | music_generate.py | — | Background-music generation for Reels | working per `cm-lane` skill |
 | media_control.py / media_host.py | — | Media/device control host process | untested this session |
 | ui.py | 21.6K chars | QWebEngineView wrapper hosting the React/Vite HUD (`ui/dist/`); WebSocket bridge to main.py; title-bridge exposes window controls | **live** — imported by main.py, verified this session |
@@ -169,17 +169,17 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 ## What is in progress
 - Wardrobe Reel generation (Delta Cuisine): master-anchored generation method (`wardrobe-reel-workflow` skill) replacing 6 independent prompt nodes; needs live validation against a real render run — done: the pipeline design; left: confirming it actually holds identity across shots in production
 - HUD modernization: Phase 1 (identity vs state color channels) done 2026-09-26 on `app/hud/*`; later phases not started; unclear if this modernization is meant to also cover, or eventually replace, `ui.py`'s HUD
-- Hermes router (`hermes_dispatch.py`/`hermes_router.py`) — has dedicated tests but zero references from `era_dispatch.py` (verified this session); last source change Jul 24 — looks stalled rather than actively worked, but not confirmed abandoned
+- Lane router (`lane_dispatch.py`/`lane_router.py`) — has dedicated tests but zero references from `era_dispatch.py` (verified this session); last source change Jul 24 — looks stalled rather than actively worked, but not confirmed abandoned
 
 ## What is next
-1. Determine whether `hermes_dispatch.py`/`hermes_router.py` are called from anywhere (a standalone entry point? a test-only harness?) given `era_dispatch.py` doesn't call them — then decide archive vs. finish-wiring
+1. Determine whether `lane_dispatch.py`/`lane_router.py` are called from anywhere (a standalone entry point? a test-only harness?) given `era_dispatch.py` doesn't call them — then decide archive vs. finish-wiring
 2. Clarify the `ui.py` vs. `app/hud/*` relationship: are these two independent UI surfaces serving different purposes (e.g. one is the always-on shell, one is a debug/ops panel), or is one meant to retire the other
 3. Move the 13 root-level `test_*.py` files into `/tests` (or confirm they're intentionally root-pinned) — low risk, but touches `conftest.py` fixture paths, so verify ERA_VAULT_DIR/ERA_LOCK_FILE isolation still holds after the move
 4. Optional optimization: if a `winrt`/`winsdk` CPython 3.14 wheel later ships (today: `winrt` has no distribution, `winsdk` is sdist-only, build-from-source, banned), the PowerShell GSMTC host in `actions/spotify_gsmtc_host.py` could be swapped for an in-process native path to shave the ~cold spawn — not blocking anything, track verbs already work via PowerShell
 
 ## Open questions for Lunar
 1. Should the 13 root-level `test_*.py` files be moved into `/tests` now, or is there a reason (CI, tooling path) they were left at root?
-2. Is `hermes_dispatch.py`/`hermes_router.py` a live secondary router with an entry point outside `era_dispatch.py`, or an abandoned experiment safe to archive?
+2. Is `lane_dispatch.py`/`lane_router.py` a live secondary router with an entry point outside `era_dispatch.py`, or an abandoned experiment safe to archive?
 3. `main.py` drives `ui.py` (QWebEngineView + React/Vite) as its UI, while `app/hud/*` is a separate aiohttp browser-rendered HUD that just got a modernization pass — are both meant to be live simultaneously, and if so what is each one for?
 
 ## Standing decisions
@@ -212,7 +212,7 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 - 2026-09-27 (later) — Spotify search fix round 2: the "+"-cosmetic fix (Ctrl+L + typewrite) regressed search — Windows foreground restrictions made keystrokes land in the wrong window, leaving stale results (voice "chill music" failed). Reverted search to reliable `spotify:search:` URI navigation (box shows "+", cosmetic) and instead fixed the real gap: `_best_search_match` now does &/punctuation normalization + partial word-overlap scoring + a top-of-screen fallback for vibe queries (so "chill music" plays the top result). Note `minimize spotify after use` is an active standing rule; UIA reads need the window restored (invoke handles this).
 - 2026-09-27 — Spotify seek + content-play: added relative `spotify_forward`/`spotify_rewind` on GSMTC (tokens seek_forward/seek_rewind to dodge the router's next/prev rewrite; live-verified ±1 ms). Fixed Liked Songs / New Releases / Made For You: replaced blind pixel-ratio clicks (broke on resize/layout change) with URI/shortcut navigation + UIA `invoke()` of the primary "Play <context>" button (`actions/spotify_ui.py`) — live-verified Liked Songs + New Releases both play. Chose UIA after verifying (as promised) that Spotify's a11y tree IS reachable once warmed (635 elements incl. "Play Liked Songs"); a naive single walk sees only ~4 chrome buttons, so the helper polls until the tree populates.
 - 2026-09-27 — Spotify lane hardening: cached the pycaw volume pointer (28–46 ms → ~0.04 ms warm), and shipped GSMTC track-data via a persistent PowerShell host (Step C). Chose C because Step A found no usable Python 3.14 wheel (`winrt`: no distribution; `winsdk`: sdist-only, build-from-source, banned) and Step B was impossible (repo has no comtypes-WinRT helper to clone; `comtypes` is pycaw-only). Live-verified: real track data, seek ±0 ms, no orphan powershell on exit.
-- 2026-09-27 — Refreshed handoff: verified `ui.py` is live (main.py:2463 imports `EraUI`, not dead code as previously flagged), confirmed `hermes_dispatch.py`/`hermes_router.py` have zero references from `era_dispatch.py` despite dedicated tests, added `actions/spotify_exact.py` (new today — exact per-app volume + WinRT track control) to the inventory, and carried forward the two Spotify-bridge standing decisions that were added to the file directly since the last update
+- 2026-09-27 — Refreshed handoff: verified `ui.py` is live (main.py:2463 imports `EraUI`, not dead code as previously flagged), confirmed `lane_dispatch.py`/`lane_router.py` have zero references from `era_dispatch.py` despite dedicated tests, added `actions/spotify_exact.py` (new today — exact per-app volume + WinRT track control) to the inventory, and carried forward the two Spotify-bridge standing decisions that were added to the file directly since the last update
 - 2026-09-27 — Created LUNAR_HANDOFF.md for the first time; populated from a live pass over the repo (file counts, requirements, integrations) plus verified existing project memory
 (older entries trimmed)
 

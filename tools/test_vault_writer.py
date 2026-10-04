@@ -73,7 +73,10 @@ def vault(tmp_path, monkeypatch):
 
 
 class TestTheInterviewCase:
-    def test_a_section_is_replaced_in_place(self, vault):
+    def test_overwriting_an_existing_section_is_refused_here_and_routed_to_the_gate(self, vault):
+        """vault_note is ungated, so it must not be a fast path around the staged replace
+        (found by the 2026-10-04 security review: it overwrote a section with no yes)."""
+        before = (vault / "VAULT-INDEX.md").read_text(encoding="utf-8")
         out = vault_note(
             {
                 "content": "I move fast. Conclusion first.",
@@ -81,13 +84,26 @@ class TestTheInterviewCase:
                 "section": "Profile",
             }
         )
-        body = (vault / "VAULT-INDEX.md").read_text(encoding="utf-8")
+        assert out.startswith("Could not overwrite") and "vault_bridge" in out
+        assert (vault / "VAULT-INDEX.md").read_text(encoding="utf-8") == before
 
-        assert "Updated" in out
-        assert "I move fast. Conclusion first." in body
-        assert "[FILL IN: ...]" not in body
-        # Everything else survives — a section replace is not a note rewrite.
-        assert "## Vault Structure" in body and "stuff" in body
+    def test_the_interview_answers_land_through_the_staged_replace(self, vault):
+        """The case this was built for still works — with the user's yes in the loop."""
+        from core import vault_bridge
+
+        pid, _, diff = vault_bridge.stage_replace(
+            vault_bridge.Caller(),
+            {
+                "title": "VAULT-INDEX",
+                "section": "Profile",
+                "content": "I move fast. Conclusion first.",
+            },
+        )
+        assert "+I move fast. Conclusion first." in diff
+        assert vault_bridge.run({"action": "replace", "_approved_plan": {"plan_id": pid}}).success
+        body = (vault / "VAULT-INDEX.md").read_text(encoding="utf-8")
+        assert "I move fast. Conclusion first." in body and "[FILL IN: ...]" not in body
+        assert "## Vault Structure" in body and "stuff" in body  # not a note rewrite
 
     def test_a_missing_section_appends_rather_than_writing_nothing(self, vault):
         vault_note({"content": "some answer", "title": "VAULT-INDEX", "section": "Nonexistent"})

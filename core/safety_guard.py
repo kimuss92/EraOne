@@ -233,6 +233,39 @@ def classify_action(
     path = params.get("path", "") or ""
     target = params.get("name", "") or path
 
+    # --- vault_bridge: decided BEFORE anything tool-agnostic below ---
+    # read/search/create/append are as safe as vault_note. `replace` overwrites existing
+    # content, so it is staged (the user is shown the diff) and needs their own yes.
+    # Every other action word is not on the surface at all — there is no delete, and no
+    # confirm/reject — so it is BLOCKED outright instead of being guessed at.
+    if tool == "crew":
+        # Explicit, not the unclassified-defaults-to-LOW fallthrough. A crew request cannot
+        # itself change anything that needs approval: a replace it proposes only ARMS the
+        # confirmation store, and the user's own yes (checked in the dispatcher) applies it.
+        return {
+            "risk_level": LOW,
+            "requires_confirmation": False,
+            "reason": "Crew request (replacements still need the user's own yes)",
+        }
+    if tool == "vault_bridge":
+        if action in ("read", "search", "create", "append"):
+            return {
+                "risk_level": LOW,
+                "requires_confirmation": False,
+                "reason": f"Vault note {action}",
+            }
+        if action == "replace":
+            return {
+                "risk_level": MEDIUM,
+                "requires_confirmation": True,
+                "reason": "Replaces existing note content in the vault",
+            }
+        return {
+            "risk_level": BLOCKED,
+            "requires_confirmation": False,
+            "reason": f"'{action}' is not a vault_bridge action (there is no delete)",
+        }
+
     # --- Machine power state: confirm, whatever tool asked for it ---
     # Checked FIRST and independently of `tool`, so a shutdown routed through
     # computer_control (or any future tool) can never fall through to the

@@ -1699,8 +1699,10 @@ TOOL_DECLARATIONS = [
             "stone families', that is vault_note, not save_memory. "
             "Default action='save'. Give `title` to pick the note (an existing note is "
             "APPENDED to, not replaced); give `brand` only when it belongs to one brand; "
-            "give `section` to update one '## heading' in place — that is how you fill in "
-            "the Profile section of VAULT-INDEX after interviewing the user. "
+            "give `section` to add a new '## heading' block. This tool NEVER overwrites an "
+            "existing section: to replace one (e.g. fill in the Profile section of "
+            "VAULT-INDEX after interviewing the user) use vault_bridge action=replace, which "
+            "shows the user the exact change and needs their yes. "
             "action='read' reads a note back."
         ),
         "parameters": {
@@ -1748,12 +1750,102 @@ TOOL_DECLARATIONS = [
                 "section": {
                     "type": "STRING",
                     "description": (
-                        "A '## heading' whose body should be REPLACED with content. "
-                        "Omit to append at the end of the note instead."
+                        "A NEW '## heading' to add with content. An existing section is "
+                        "refused here (use vault_bridge action=replace). Omit to append "
+                        "at the end of the note instead."
                     ),
                 },
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "vault_bridge",
+        "description": (
+            "Work with specific notes in Era's Obsidian vault. action='search' finds notes "
+            "by keywords in their title and body ('stone families' also finds 'family' notes; "
+            "it matches words, not meaning) and returns paths with "
+            "snippets; action='read' returns one note; action='create' makes a new note; "
+            "action='append' adds to an existing one; action='replace' PROPOSES replacing a "
+            "note's body or one '## section' — it never writes by itself: it comes back "
+            "ConfirmationRequired with the exact change, and you must ask the user out loud "
+            "and only continue (confirm_pending_confirmation) on their own yes. There is no "
+            "delete. For 'remember this' knowledge capture prefer vault_note; use "
+            "vault_bridge to FIND things or to edit a named note. A failed write is a "
+            "failure — never tell the user it was saved unless the result says so."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "enum": ["search", "read", "create", "append", "replace"],
+                    "description": "What to do. replace always needs the user's yes.",
+                },
+                "query": {"type": "STRING", "description": "search: words to look for."},
+                "path": {
+                    "type": "STRING",
+                    "description": "read/append/replace: the note's path inside the vault.",
+                },
+                "title": {
+                    "type": "STRING",
+                    "description": "read/append/replace: a note's title (loose match); "
+                    "create: the new note's title.",
+                },
+                "content": {
+                    "type": "STRING",
+                    "description": "create/append/replace: the text, in the user's own words.",
+                },
+                "brand": {
+                    "type": "STRING",
+                    "description": "'Delta Cuisine' or 'Ceram Quartz'. Omit for anything "
+                    "true of both brands.",
+                },
+                "note_type": {
+                    "type": "STRING",
+                    "enum": ["reference", "guide", "plan"],
+                    "description": "create only.",
+                },
+                "section": {
+                    "type": "STRING",
+                    "description": "replace only: the '## heading' whose body is replaced.",
+                },
+                "limit": {"type": "INTEGER", "description": "search: max results (default 5)."},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "crew",
+        "description": (
+            "Hand a request to Era's crew. Laura (chief of staff) coordinates by default and "
+            "routes to Drew (vault research), Maya (social drafts), Tom (creative direction), "
+            "Cody (code and tests) and Nabar (independent review, the skeptic). Use it when "
+            "the user names a crew member ('Drew, find what we decided about…', 'Laura, plan "
+            "this') or asks for research, a draft or a review that needs a specialist. "
+            "action='ask' with task=… (and bot=… to address one directly); action='list' "
+            "names the crew; action='status' says whether anything awaits approval. The crew "
+            "never deletes and never approves its own changes: anything that replaces note "
+            "content comes back ConfirmationRequired — ask the user and wait. Report what "
+            "came back faithfully, including any Nabar concern."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "enum": ["ask", "list", "status"],
+                    "description": "ask hands over a task; list names the crew; status checks.",
+                },
+                "task": {"type": "STRING", "description": "ask: what the crew should do."},
+                "bot": {
+                    "type": "STRING",
+                    "description": "ask: address one crew member by name (laura, drew, maya, "
+                    "tom, cody, nabar, or any added later; action='list' shows them). "
+                    "Default laura.",
+                },
+            },
+            "required": ["action"],
         },
     },
     {

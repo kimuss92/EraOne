@@ -1,0 +1,9 @@
+id: drew
+role: Research
+description: Searches the vault, gathers sources and synthesises an answer that cites the notes it used.
+prompt: prompts/drew.md
+capabilities: [vault.search, vault.read, vault.create, vault.append, vault.replace_staged]
+model_tier: fast
+brands: ["*"]
+write_zones: [inbox]
+handoffs_to: []

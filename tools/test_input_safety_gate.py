@@ -367,7 +367,7 @@ class TestTypedParity:
 
     def test_conversational_reply_is_never_classified_as_pasted_data(self, gate):
         # classify_typed_input runs a SECOND time downstream of the gate (in the
-        # Hermes route). Re-branding an accepted reply as data there is what put
+        # lane-router route). Re-branding an accepted reply as data there is what put
         # "Proceed" back into the "what shall I do with this?" wrapper.
         for reply in ("Proceed", "yes", "cancel"):
             assert gate.classify_typed_input(reply) == "COMMAND"

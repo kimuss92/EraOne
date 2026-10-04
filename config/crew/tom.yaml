@@ -1,0 +1,9 @@
+id: tom
+role: Creative direction
+description: Sets the voice, framing and narrative of a piece before it is written or made.
+prompt: prompts/tom.md
+capabilities: [vault.search, vault.read, vault.create]
+model_tier: smart
+brands: ["*"]
+write_zones: [inbox]
+handoffs_to: []

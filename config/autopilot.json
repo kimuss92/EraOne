@@ -1,4 +1,4 @@
 {
   "enabled": true,
-  "description": "Hermes offline rules run before model dispatch. ERA_AUTOPILOT=0 disables the new paths."
+  "description": "Lane-router offline rules run before model dispatch. ERA_AUTOPILOT=0 disables the new paths."
 }

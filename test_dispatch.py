@@ -1,7 +1,7 @@
 r"""
 test_dispatch.py — end-to-end wiring proof for era_dispatch.py.
 
-Bypasses Hermes/voice (not yet wired into main.py) and calls run_task() directly.
+Bypasses the lane router/voice (not yet wired into main.py) and calls run_task() directly.
 Proves, for ONE brand:
   1. resolve_brand() picks the right brand key from the spoken order.
   2. The run is pinned to that brand's OWN Claude account (CLAUDE_CONFIG_DIR)

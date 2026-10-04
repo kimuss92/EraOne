@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 
 # One context size for EVERY text call to Ollama. Ollama reloads a resident model
-# whenever a request asks for a different num_ctx, so Hermes (4k default) and the
+# whenever a request asks for a different num_ctx, so the lane router (4k default) and the
 # local fallback brain (12k, see core/llm/adapters/ollama_chat.py) alternating on
 # the same qwen model cost a ~10s reload each switch. Measured 2026-09-23.
 SHARED_NUM_CTX = 12288
@@ -35,7 +35,7 @@ def classify_json_with_ollama(
             "format": "json",  # Ollama constrains generation to valid JSON
             "stream": False,
             # Keep the model resident after use so only the FIRST call per idle window
-            # pays the cold-load cost — warm calls are ~1s. See hermes_router.warm_up().
+            # pays the cold-load cost — warm calls are ~1s. See lane_router.warm_up().
             "keep_alive": keep_alive,
             # temperature 0: deterministic classification.
             "options": {"temperature": 0, "num_ctx": SHARED_NUM_CTX},

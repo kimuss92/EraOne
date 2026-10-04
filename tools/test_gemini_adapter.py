@@ -11,7 +11,7 @@ that matter are:
     The adapter is the opposite: it RAISES a typed LlmError, because the
     gateway above it needs to know whether to retry, cool down, or route
     elsewhere. Both behaviours are correct for their own callers; conflating
-    them would either crash hermes_router or blind the router.
+    them would either crash lane_router or blind the router.
   * QUOTA IS DISTINGUISHED FROM RATE LIMIT — cooling down for an exhausted
     daily allowance and retrying a per-minute burst are different responses,
     and Era already has a growing-cooldown machine that depends on the

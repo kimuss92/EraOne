@@ -2843,6 +2843,41 @@ class ToolDispatchMixin:
 
             result = vault_note(args, player=self.ui)
 
+        elif tool_name == "vault_bridge":
+            # The safe door into the vault (core/vault_bridge): locked, atomic,
+            # read-back-verified writes; `replace` runs only a plan that was staged
+            # and approved by the USER through the confirmation store, and the
+            # preview builder + safety gate keep every other path out.
+            from core import vault_bridge
+
+            result = await loop.run_in_executor(None, lambda: vault_bridge.run(dict(args)))
+
+        elif tool_name == "crew":
+            # Laura and the specialists (crew/). One "working on it" if the call is
+            # still running after 2.5 s — per call, never per bot turn or handoff.
+            from crew.runtime import await_with_ack, run_tool
+
+            pending = loop.run_in_executor(None, lambda: run_tool(dict(args)))
+            if str(args.get("action") or "ask").lower() == "ask":
+                # _say_exactly: in gemini_audio mode speak() feeds the live session, which
+                # would otherwise improvise its own reaction instead of saying this.
+                result = await await_with_ack(
+                    pending, lambda: self.speak(_say_exactly("Working on it, sir."))
+                )
+            else:
+                result = await pending
+            # A replace a crew bot armed has not yet been put in front of the user over a
+            # channel the model cannot edit (the native path announces; this path armed
+            # the store itself). Do it here, so what is approved is what was read aloud.
+            if (
+                isinstance(result, ToolResult)
+                and result.error_type == "ConfirmationRequired"
+                and isinstance(result.data.get(PREVIEW_KEY), str)
+            ):
+                result.data[ANNOUNCED_KEY] = bool(
+                    self._announce_pending_plan(result.data[PREVIEW_KEY])
+                )
+
         elif tool_name == "record_feedback":
             from memory.feedback_memory import FeedbackEvent, append_feedback, extract_feedback
             from memory.memory_audit import audit_event as _audit_fb

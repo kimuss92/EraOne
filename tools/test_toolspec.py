@@ -72,7 +72,10 @@ from core.llm.toolspec import (
 # 52 -> 53 on 2026-09-29: `capability_check` added — answers "what can you do?"
 # from the live declarations instead of from the prompt (acceptance point 3).
 # 53 -> 56: visual_engine, autonomous_development and run_feature.
-EXPECTED_TOOL_COUNT = 56
+# 56 -> 58 on 2026-10-04: `vault_bridge` (locked, read-back-verified vault read/search/
+# create/append plus a user-approved `replace`; core/vault_bridge.py) and `crew` (Laura
+# and the specialists; crew/). Neither has a delete.
+EXPECTED_TOOL_COUNT = 58
 
 # Tools declaring at least one required parameter. Pinned for the same reason as
 # EXPECTED_TOOL_COUNT: it is the non-vacuity floor for test_required_sets_survive,
@@ -88,7 +91,9 @@ EXPECTED_TOOL_COUNT = 56
 # 33 -> 34 on 2026-09-17: `scheduled_task` requires `action`.
 # 36 -> 37 on 2026-09-19: `claude_bridge` requires `action`.
 # Three new tools each require a command/action/feature_id.
-EXPECTED_TOOLS_WITH_REQUIRED = 40
+# 40 -> 42 on 2026-10-04: `vault_bridge` and `crew` each require `action`, so a bare
+# call can never be read as a write or as a task for the crew.
+EXPECTED_TOOLS_WITH_REQUIRED = 42
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "tool_declarations_anthropic.json"
 

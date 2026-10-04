@@ -35,7 +35,7 @@ _PENDING_ASK_ALLOWED_TOOLS = {"enter_standby"}
 _AWAITING_REPLY_WINDOW_S = 180
 
 # ── CM hand-off suppression window ─────────────────────────────
-# When Hermes claims an utterance for the community-management lane, the headless
+# When the lane router claims an utterance for the community-management lane, the headless
 # era_dispatch job OWNS it end-to-end (find approved assets, stage the reel to a
 # temp public URL via Composio, post, mark .posted). But the same utterance also
 # reaches the live Gemini voice model acoustically (open mic), and Gemini — which

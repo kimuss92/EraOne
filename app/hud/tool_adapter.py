@@ -38,6 +38,8 @@ _TOOLS: dict[str, tuple[str, str, str]] = {
     "forget_memory": ("memory", "MEMORY", "Removing a memory"),
     "record_feedback": ("memory", "LEARNING", "Recording feedback"),
     "vault_note": ("files", "VAULT", "Writing to the vault"),
+    "vault_bridge": ("files", "VAULT", "Working with vault notes"),
+    "crew": ("agent", "CREW", "Asking the crew"),
     "file_controller": ("files", "FILES", "Working with files"),
     "file_processor": ("files", "FILES", "Processing a file"),
     "code_helper": ("files", "CODE", "Working on code"),

@@ -1,4 +1,4 @@
-# Era One Autopilot: Hermes / Hermos decision architecture
+# Era One Autopilot: Lane router / offline-first decision architecture
 
 This update implements an offline routing gate in `core/autopilot.py` and an
 executor in `app/era_live/autopilot.py`. It preserves the stability repairs from
@@ -43,10 +43,10 @@ execution still requires a complete grammar and validated parameters.
 ```mermaid
 flowchart TD
     Input["Typed input or verified local transcript"] --> Priority["Abort, preferences, context ownership"]
-    Priority --> Hermes["Hermes offline classifier"]
-    Hermes --> Local["Exact local command"]
-    Hermes --> Code["Era coding specialist"]
-    Hermes --> Main["Gemini / configured outage brain"]
+    Priority --> Lane["Lane router (offline classifier)"]
+    Lane --> Local["Exact local command"]
+    Lane --> Code["Era coding specialist"]
+    Lane --> Main["Gemini / configured outage brain"]
     Local --> Gate["Input and existing action safety gates"]
     Code --> Mode["Specific file or broad investigation"]
     Mode --> Gate
@@ -57,7 +57,7 @@ flowchart TD
 
 1. Abort/reboot, voice/model preferences, and contextual resume keep precedence.
    Standby and active approval/brand questions retain ownership of their input.
-2. Hermes checks complete command grammars, then repository coding intent, then
+2. The lane router checks complete command grammars, then repository coding intent, then
    abstains to the main lane. These decisions do not make network requests.
 3. The typed gate runs before pinned model dispatch and the cloud-session check.
    A disconnected Gemini session therefore does not disable local commands or
@@ -163,11 +163,11 @@ current Windows terminal with `$env:ERA_AUTOPILOT = "0"`.
 | `ERA_AUTOPILOT_CODING_MAX_PER_DAY` | 10, bounded 1–100 | Per-process coding request cap |
 | `ERA_AUTOPILOT_CODING_MODEL` | registry `era.deep` | Investigation model override |
 | `CLAUDE_CONFIG_DIR` | existing registry profile | Explicit profile for investigation |
-| `HERMES_PROVIDER_ORDER` | `rules` | Existing CM classifier; models remain explicit opt-ins |
+| `ERA_LANE_PROVIDER_ORDER` | `rules` | Existing CM classifier; models remain explicit opt-ins |
 
 The CM extension still uses the existing brand-isolated dispatcher. Default
 CM classification is now deterministic. Brandless clear production orders
-retain the “which brand?” flow. Setting `HERMES_PROVIDER_ORDER=ollama,gemini`
+retain the “which brand?” flow. Setting `ERA_LANE_PROVIDER_ORDER=ollama,gemini`
 explicitly restores model-assisted CM classification; its local timeout is
 bounded to 1–10 seconds, default 2. These optional CM providers are not needed
 for the new local/coding front gate.

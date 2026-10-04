@@ -7,7 +7,7 @@ Pure; re-imported by main.py.
 import re
 
 # ── CM task-type inference: planning vs publishing ─────────────
-# Hermes only classifies "cm" vs "assistant" — it carries NO plan-vs-publish signal.
+# The lane router only classifies "cm" vs "assistant" — it carries NO plan-vs-publish signal.
 # The live typed path used to hardcode task_type="weekly", so a typed "publish the
 # approved reel" dispatched as a weekly PLAN (wrong brief) AND missed the publish
 # Composio allowlist in era_dispatch (post silently denied headless). This maps a

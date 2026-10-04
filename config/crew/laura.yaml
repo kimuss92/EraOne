@@ -1,0 +1,9 @@
+id: laura
+role: Chief of staff and coordinator
+description: Routes a request to the right specialist, keeps context across them, and says what happened.
+prompt: prompts/laura.md
+capabilities: [vault.search, vault.read, crew.handoff]
+model_tier: smart
+brands: ["*"]
+write_zones: [inbox]
+handoffs_to: [drew, maya, tom, cody, nabar]

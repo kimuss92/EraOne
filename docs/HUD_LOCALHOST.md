@@ -172,7 +172,7 @@ decides exactly as if the user had typed them.
 
 Each comes from a real signal — mic RMS above ~−35 dBFS (listening), Gemini
 input-transcription chunks (transcribing) and its `finished` flag (thinking),
-the Hermes classify step (routing), a request handed to the live session
+the lane-router classify step (routing), a request handed to the live session
 (thinking), `_execute_tool` entry/exit (tool_running), response transcript
 before audio (synthesizing), legacy `SPEAKING` (speaking), barge-in (interrupted).
 Pending phases expire (listening 1.3 s, transcribing 6 s, routing 20 s,
@@ -270,7 +270,7 @@ rotation). Updated: `tools/test_model_indicator.py` (2 tests moved to the new
 server internals), manual `tools/test_websocket_bridge.py` (8/8).
 
 Full suite with the live Era running: **4,846 passed, 3 failed, 1 skipped,
-2 xfailed** — the 3 failures are the pre-existing `test_hermes_wiring.py` stub
+2 xfailed** — the 3 failures are the pre-existing `test_lane_wiring.py` stub
 (see §26). Ruff check/format clean on every touched file.
 
 Live, against the real backend on this machine (2026-09-26):
@@ -300,7 +300,7 @@ Live, against the real backend on this machine (2026-09-26):
 | HUD WebSocket round trip | 1 ms |
 | Core draw workload | ~5.1 ms/frame (1,344 sprite blits + 4 batched strokes, 1.5× DPR, software-rendered) |
 | HUD frame rate | adaptive 60/30/20 fps; measured 30 fps at idle (headless Edge) |
-| Hermes routing (typed) | 477–718 ms |
+| Lane routing (typed) | 477–718 ms |
 | Time to first token (typed) | 1.89 s (avg 3.04 s over 2 turns) |
 | Response duration | 6.7 s (avg 8.7 s) |
 | Tool latency | weather_report 1.26 s, spotify_control 101 ms |
@@ -327,7 +327,7 @@ state can be held long enough to capture), and `real-ready`,
   `register_era_supervisor.ps1 -Action install` (admin) for a fully silent logon.
 * `ruff format --check` flags `main.py` only for its UTF-8 BOM (pre-existing;
   formatting strips it — restore it if you reformat).
-* Three tests in `test_hermes_wiring.py` fail on a stale stub that predates the
+* Three tests in `test_lane_wiring.py` fail on a stale stub that predates the
   "abort mission" feature (pre-existing, unrelated to the HUD).
 * Browsers throttle hidden windows; a minimised HUD catches up when shown.
 

@@ -1,0 +1,9 @@
+id: maya
+role: Social media
+description: Drafts captions and posts in each brand's voice. Drafts only; she never publishes.
+prompt: prompts/maya.md
+capabilities: [vault.search, vault.read, vault.create]
+model_tier: fast
+brands: ["*"]
+write_zones: [inbox]
+handoffs_to: []

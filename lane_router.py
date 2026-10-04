@@ -1,9 +1,9 @@
-"""Hermes community-management extension behind the offline Autopilot gate.
+"""Lane router: community-management extension behind the offline Autopilot gate.
 
 The three-lane command/coding/conversation classifier lives in core.autopilot.
 This compatibility router keeps the existing cm/assistant dispatch contract.
 Default classification uses deterministic rules, with no Ollama or Gemini call.
-Model-assisted CM classification remains an explicit HERMES_PROVIDER_ORDER
+Model-assisted CM classification remains an explicit ERA_LANE_PROVIDER_ORDER
 opt-in. Brand-specific dispatch and missing-brand questions retain their gates.
 See AUTOPILOT_ARCHITECTURE.md for the complete execution and voice boundaries.
 """
@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-# Reuse the brand registry + resolver that era_dispatch already trusts, so Hermes
+# Reuse the brand registry + resolver that era_dispatch already trusts, so the lane router
 # and the dispatcher never disagree about what counts as a brand.
 import era_dispatch as ed
 
@@ -22,24 +22,24 @@ import era_dispatch as ed
 from core.ai_provider import DEFAULT_FAST_MODEL, generate_json
 
 # Routing defaults to offline rules. Model-assisted CM classification is an
-# explicit opt-in through HERMES_PROVIDER_ORDER (e.g. "ollama,gemini").
+# explicit opt-in through ERA_LANE_PROVIDER_ORDER (e.g. "ollama,gemini").
 _DEFAULT_PROVIDER_ORDER = "rules"
 _DEFAULT_LOCAL_MODEL = "qwen2.5-coder:7b"
 
 
 def _provider_order() -> list[str]:
-    raw = os.environ.get("HERMES_PROVIDER_ORDER", _DEFAULT_PROVIDER_ORDER)
+    raw = os.environ.get("ERA_LANE_PROVIDER_ORDER", _DEFAULT_PROVIDER_ORDER)
     return [p.strip().lower() for p in raw.split(",") if p.strip()]
 
 
 def _resolve_local_model() -> str:
-    return os.environ.get("HERMES_LOCAL_MODEL", _DEFAULT_LOCAL_MODEL)
+    return os.environ.get("ERA_LANE_LOCAL_MODEL", _DEFAULT_LOCAL_MODEL)
 
 
 def _resolve_local_timeout() -> int:
     """Bound opt-in classifier latency; default is two seconds."""
     try:
-        return max(1, min(10, int(os.environ.get("HERMES_LOCAL_TIMEOUT_S", "2"))))
+        return max(1, min(10, int(os.environ.get("ERA_LANE_LOCAL_TIMEOUT_S", "2"))))
     except (ValueError, TypeError):
         return 2
 
@@ -99,7 +99,7 @@ _CM_KEYWORDS = (
 )
 
 _SYSTEM_INSTRUCTION = (
-    "You are Hermes, the top-level request router for a personal AI assistant "
+    "You are the lane router, the top-level request router for a personal AI assistant "
     "named Era. Your ONLY job is to classify one user utterance into exactly one "
     "top-level category. You never answer the request or take any action.\n\n"
     "Categories:\n"
@@ -271,7 +271,7 @@ def _classify_local(prompt: str, text: str, known: list[str]) -> RouteDecision |
             timeout_s=_resolve_local_timeout(),
         )
     except Exception as e:
-        print(f"[HERMES] local (ollama) classify unavailable, trying next provider: {e}")
+        print(f"[LANE] local (ollama) classify unavailable, trying next provider: {e}")
         return None
     decision = _coerce(raw, text, known)
     if decision is not None:
@@ -342,7 +342,7 @@ def _log(decision: RouteDecision) -> RouteDecision:
     landing as 'assistant' via source=fallback, the model path is unreachable —
     not a prompt problem."""
     print(
-        f"[HERMES] route: category={decision.category} brand={decision.brand} "
+        f"[LANE] route: category={decision.category} brand={decision.brand} "
         f"source={decision.source} confidence={decision.confidence:.2f} "
         f"text={decision.text[:60]!r}"
     )
@@ -361,9 +361,9 @@ def warm_up() -> None:
     try:
         _, known = _brand_catalog()
         d = _classify_local(_build_prompt("warm up", known), "warm up", known)
-        print(f"[HERMES] warm-up complete (local model ready: {d is not None})")
+        print(f"[LANE] warm-up complete (local model ready: {d is not None})")
     except Exception as e:
-        print(f"[HERMES] warm-up skipped: {e}")
+        print(f"[LANE] warm-up skipped: {e}")
 
 
 if __name__ == "__main__":

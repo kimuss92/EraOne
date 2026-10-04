@@ -18,7 +18,7 @@ reconnect_acknowledgment_text policy (test_reconnect_acknowledgment.py):
        c. otherwise, the generic last-utterance policy
 
 `era_dispatch` is faked in sys.modules before `main` is imported, same
-isolation style as test_hermes_wiring.py — current_job() is looked up lazily
+isolation style as test_lane_wiring.py — current_job() is looked up lazily
 inside the method under test, so faking it works regardless of import order.
 
 Run:  pytest test_cm_reconnect_continuity.py -v

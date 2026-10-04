@@ -309,12 +309,18 @@ def sync(*, apply: bool = False, promote: bool = True) -> SyncReport:
     """
     report = SyncReport(applied=apply)
     try:
+        from core import vault_bridge
+
         report.findings = audit()
-        report.actions = apply_fixes(report.findings, dry_run=not apply)
+        # Each MUTATING phase takes the shared vault write lock on its own; the audits
+        # stay outside it, so a long read never makes a voice-driven write wait.
+        with vault_bridge.vault_write_lock():
+            report.actions = apply_fixes(report.findings, dry_run=not apply)
 
         if promote:
             for brand_key in _brand_registry():
-                path = promote_lessons(brand_key)
+                with vault_bridge.vault_write_lock():
+                    path = promote_lessons(brand_key)
                 if path:
                     report.promoted.append(str(path.relative_to(cm_vault.VAULT_DIR)))
 
@@ -323,7 +329,8 @@ def sync(*, apply: bool = False, promote: bool = True) -> SyncReport:
         if apply and report.actions:
             report.findings = audit()
 
-        _write_health_note(report)
+        with vault_bridge.vault_write_lock():
+            _write_health_note(report)
     except Exception as exc:  # noqa: BLE001 — see docstring
         log_event(maint_logger, "vault.maint.sync_failed", "ERROR", error=str(exc))
         report.findings.append(Finding("error", "sync_failed", str(exc)))
