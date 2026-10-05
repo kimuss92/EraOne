@@ -133,6 +133,11 @@ class InProcessTransport(Transport):
             bots=n,
         )
 
+    def warm(self) -> bool:
+        """Optional startup priming. The in-process path has nothing to wake, so this is a
+        no-op; a remote transport (Hermes) overrides it to pre-wake its gateway."""
+        return True
+
     def dispatch(self, bot_id: str, turn: Turn) -> ToolResult:
         spec = self._bots.get(str(bot_id).lower())
         if spec is None:
@@ -374,6 +379,21 @@ def get_transport() -> Transport:
             _skipped[:] = report.skipped
             _transport = t
         return _transport
+
+
+def warm_transport() -> bool:
+    """Pre-wake the configured transport so the first crew turn isn't cold.
+
+    For the Hermes transport this wakes the gateway and caches its toolset/alias check,
+    so the user's first request after login skips the cold-start wait (the in-process
+    path is a no-op). Best-effort and silent — meant for a startup daemon thread; it
+    never raises and never blocks the caller's own error handling.
+    """
+    try:
+        return get_transport().warm()
+    except Exception as exc:  # noqa: BLE001 — a warm-up must never affect startup
+        log_event(runtime_logger, "crew.warm.failed", "WARNING", error=repr(exc))
+        return False
 
 
 def reset_transport(

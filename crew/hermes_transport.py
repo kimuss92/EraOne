@@ -238,6 +238,44 @@ class HermesAgentTransport(InProcessTransport):
             return HealthStatus(False, self.name, "no bots registered", 0)
         return HealthStatus(True, self.name, f"{n} bots registered; era_one has no tools", n)
 
+    def warm(self, attempts: int = 6, pause_s: float = 1.5) -> bool:
+        """Pre-wake the gateway so the first crew turn after login isn't cold.
+
+        Two things make the first turn slow after login: the clean-toolsets gate (cached
+        here for RECHECK_S, so the first real dispatch skips the probe) and the provider
+        route, which the gateway initialises lazily on the first completion. So once the
+        gate passes (tools verified OFF), this sends ONE tiny completion (`max_tokens=1`)
+        to prime that route — a few tokens, once per login, the cost of a snappy first turn.
+        It retries the gate with a short pause because the service may still be binding 8642
+        in the first seconds after login. Never raises (a warm-up must not affect startup);
+        returns True once the gateway has verified clean.
+        """
+        key: str | None = None
+        for i in range(max(1, attempts)):
+            try:
+                key = self._gateway_check()
+                break
+            except _Refused:
+                key = None  # not reachable / still cold — wait and retry
+            except Exception:  # noqa: BLE001 — a warm-up must never surface
+                key = None
+            if i + 1 < attempts:
+                time.sleep(pause_s)
+        if key is None:
+            return False
+        try:  # prime the provider route; best-effort — the gate is already cached
+            payload = {"messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+            self._http(
+                "POST",
+                f"{self._base}/v1/chat/completions",
+                self._headers(key),
+                json.dumps(payload).encode("utf-8"),
+                CHAT_TIMEOUT_S,
+            )
+        except Exception:  # noqa: BLE001 — priming is best-effort, never fatal
+            pass
+        return True
+
     # ── the model call: text in, text out ───────────────────────────────────
     def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
         tier, _ = crew_router.choose_tier(spec, turn, system, user)

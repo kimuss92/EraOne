@@ -2810,6 +2810,26 @@ def main():
 
         threading.Thread(target=_warm_vision, daemon=True, name="VisionWarmup").start()
 
+        # Same idea for the crew's Hermes gateway: the first crew turn after login pays a
+        # cold-start wake-up (~15s in testing) while the gateway service and its provider
+        # route finish starting; every turn after is sub-second. Pre-wake it so the user's
+        # first request is warm. Only when the Hermes transport is enabled; the warm-up
+        # spends a few tokens (one max_tokens=1 priming call) once per login, not per turn.
+        # Never blocks startup.
+        def _warm_crew():
+            try:
+                import os
+
+                if os.environ.get("ERA_CREW_TRANSPORT", "").strip().lower() != "hermes_agent":
+                    return
+                from crew.runtime import warm_transport
+
+                print(f"[CREW] Hermes gateway warm-up complete (ready: {warm_transport()})")
+            except Exception as e:
+                print(f"[CREW] warm-up skipped: {e}")
+
+        threading.Thread(target=_warm_crew, daemon=True, name="CrewWarmup").start()
+
         # RAM watchdog: samples memory every 5 minutes and fires PC Boost above
         # 70%, unattended. Started here rather than inside the engine so a
         # crash-rebuild of EraLive doesn't spawn a second polling thread.

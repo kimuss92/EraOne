@@ -493,3 +493,42 @@ def test_hermes_is_selected_only_by_an_explicit_opt_in(monkeypatch):
         assert runtime.get_transport().name == "hermes_agent"
     finally:
         runtime.reset_transport(None)
+
+
+# ── warm-up (cold-start priming) ──────────────────────────────────────────────
+def test_warm_caches_the_gate_and_primes_the_provider(keyfile):
+    import time as _t
+
+    t, http = make(keyfile)
+    assert t.warm(attempts=1) is True
+    paths = http.paths()
+    assert any(p.endswith("/v1/toolsets") for p in paths)  # gate ran
+    assert any(p.endswith("/v1/chat/completions") for p in paths)  # provider primed
+    assert t._toolsets_ok_until > _t.monotonic()  # cached: the first real turn won't re-probe
+    post = next(c for c in http.calls if c[0] == "POST")
+    body = json.loads(post[3])
+    assert (
+        body["max_tokens"] == 1 and body["messages"][0]["content"] == "ping"
+    )  # tiny, no real text
+
+
+def test_warm_returns_false_and_never_primes_when_the_gateway_is_unreachable(keyfile):
+    t, http = make(keyfile)
+    http.raise_on_toolsets = OSError("gateway still binding 8642")
+    assert t.warm(attempts=1) is False
+    assert not any(
+        p.endswith("/v1/chat/completions") for p in http.paths()
+    )  # closed gate = no call
+
+
+def test_warm_refuses_to_prime_when_a_tool_is_enabled(keyfile):
+    t, http = make(keyfile)
+    http.toolsets = (200, toolsets(file=True))
+    assert t.warm(attempts=1) is False
+    assert not any(p.endswith("/v1/chat/completions") for p in http.paths())
+
+
+def test_warm_never_raises_when_provider_priming_fails(keyfile):
+    t, http = make(keyfile)
+    http.chats = [RuntimeError("provider cold")]
+    assert t.warm(attempts=1) is True  # gate cached; a failed prime is best-effort, not fatal
