@@ -15,11 +15,19 @@ This module must not import lane_router / lane_dispatch (see crew/transport.py).
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
+
+from core.utils import CONFIG_PATH
 
 
 @dataclass(frozen=True)
@@ -119,6 +127,158 @@ class ClaudeCliExecutor:
         return _reply_from(response)
 
 
+DEFAULT_NOUS_BASE = "https://inference-api.nousresearch.com/v1"
+# The free model the user's own Hermes profile already names for Nous. UNVERIFIED against a live
+# call until tools/probe_nous.py has run; override with routing.nous.model / routing.nous.models.
+DEFAULT_NOUS_MODEL = "poolside/laguna-xs-2.1:free"
+NOUS_KEY_ENTRY = "nous_api_key"
+_NOUS_HOST = "nousresearch.com"
+
+# http(method, url, headers, body_or_None, timeout) -> (status, parsed_json_or_None, lower-cased headers)
+HttpFn = Callable[[str, str, dict, "bytes | None", float], "tuple[int, Any, dict]"]
+
+
+class RateLimited(RuntimeError):
+    """A provider said slow down. `retry_after_s` is how long; the router honours it."""
+
+    def __init__(self, message: str, retry_after_s: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after_s = float(retry_after_s or 0.0)
+
+
+def _https_json(method: str, url: str, headers: dict, body: bytes | None, timeout: float):
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - https, nous host only
+            status, raw, hdrs = resp.status, resp.read(), dict(resp.headers)
+    except urllib.error.HTTPError as exc:
+        status, raw, hdrs = exc.code, exc.read(), dict(exc.headers or {})
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        parsed = None
+    return status, parsed, {str(k).lower(): str(v) for k, v in hdrs.items()}
+
+
+def read_nous_key(config_path: Path | None = None) -> str:
+    """The Nous key from config/api_keys.json, read NOW (never cached). "" when absent."""
+    try:
+        data = json.loads(Path(config_path or CONFIG_PATH).read_text(encoding="utf-8-sig"))
+        value = data.get(NOUS_KEY_ENTRY) if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        value = None
+    key = value.strip() if isinstance(value, str) else ""
+    return "" if not key or key.lower() == "placeholder" else key
+
+
+def _check_nous_base(base_url: str) -> str:
+    parts = urlsplit(base_url)
+    host = parts.hostname or ""
+    if parts.scheme != "https" or not (host == _NOUS_HOST or host.endswith("." + _NOUS_HOST)):
+        # So a mis-edit of the config can never send the key anywhere but Nous, in the clear.
+        raise ValueError(f"the Nous base URL must be https on {_NOUS_HOST}, got {base_url!r}")
+    return base_url.rstrip("/")
+
+
+def _rate_limit_headers(headers: dict) -> dict:
+    return {k: v for k, v in headers.items() if k.startswith("x-ratelimit") or k == "retry-after"}
+
+
+def _retry_after(headers: dict) -> float:
+    try:
+        return max(0.0, float(headers.get("retry-after", "") or 0))
+    except ValueError:
+        return 0.0
+
+
+class NousExecutor:
+    """Nous Portal's OpenAI-compatible inference API: text in, text out, no tools.
+
+    The key is `nous_api_key` in config/api_keys.json, read at call time, sent only as a Bearer
+    header to an https *.nousresearch.com URL, and never logged or put in an error. A 429 raises
+    `RateLimited` with the Retry-After the router then honours; the rate-limit headers of the
+    last answer are kept in `last_rate_limit` so what Nous actually allows can be OBSERVED.
+    """
+
+    name = "nous"
+
+    def __init__(
+        self,
+        base_url: str = DEFAULT_NOUS_BASE,
+        model: str = DEFAULT_NOUS_MODEL,
+        models: dict[str, str] | None = None,
+        *,
+        config_path: Path | None = None,
+        http: HttpFn | None = None,
+    ) -> None:
+        self._base = _check_nous_base(base_url)
+        self._model = str(model or DEFAULT_NOUS_MODEL)
+        self._models = {str(k): str(v) for k, v in (models or {}).items() if v}
+        self._config_path = config_path
+        self._injected = http is not None
+        self._http: HttpFn = http or _https_json
+        self.last_rate_limit: dict = {}
+
+    @classmethod
+    def from_config(cls, routing: dict | None, **kw: Any) -> NousExecutor:
+        block = dict((routing or {}).get("nous") or {})
+        return cls(
+            base_url=str(block.get("base_url") or DEFAULT_NOUS_BASE),
+            model=str(block.get("model") or DEFAULT_NOUS_MODEL),
+            models=block.get("models") if isinstance(block.get("models"), dict) else None,
+            **kw,
+        )
+
+    def available(self) -> tuple[bool, str]:
+        if not self._injected and _under_pytest():
+            return False, "not under pytest"
+        if not read_nous_key(self._config_path):
+            return False, f"no {NOUS_KEY_ENTRY} in config/api_keys.json"
+        return True, ""
+
+    def alias_for(self, tier: str) -> str:
+        return self._models.get(tier) or self._model
+
+    def call(self, system: str, user: str, tier: str, timeout_s: float) -> ProviderReply:
+        key = read_nous_key(self._config_path)
+        if not key:
+            raise RuntimeError(f"no {NOUS_KEY_ENTRY} in config/api_keys.json")
+        model = self.alias_for(tier)
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+        }
+        status, body, headers = self._http(
+            "POST",
+            f"{self._base}/chat/completions",
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json.dumps(payload).encode("utf-8"),
+            timeout_s,
+        )
+        self.last_rate_limit = _rate_limit_headers(headers)
+        if status == 429:
+            raise RateLimited("Nous rate limit (HTTP 429)", _retry_after(headers))
+        if status in (401, 403):
+            raise RuntimeError(f"Nous rejected the key (HTTP {status})")
+        if status != 200 or not isinstance(body, dict):
+            raise RuntimeError(f"Nous answered HTTP {status}")
+        try:
+            text = str(body["choices"][0]["message"]["content"] or "")
+        except (KeyError, IndexError, TypeError):
+            text = ""
+        usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+        return ProviderReply(
+            text=text,
+            tokens_in=int(usage.get("prompt_tokens") or 0),
+            tokens_out=int(usage.get("completion_tokens") or 0),
+            model=str(body.get("model") or model),
+        )
+
+
 class UnconfiguredExecutor:
     """A provider named in `routing.tiers` that Era has no adapter or credentials for yet."""
 
@@ -135,12 +295,14 @@ class UnconfiguredExecutor:
         raise RuntimeError(self._why)
 
 
-def default_executors() -> dict[str, Executor]:
+def default_executors(routing: dict | None = None) -> dict[str, Executor]:
+    try:
+        nous: Executor = NousExecutor.from_config(routing)
+    except ValueError as exc:  # a bad routing.nous.base_url must disable Nous, not Era
+        nous = UnconfiguredExecutor("nous", str(exc))
     return {
         "ollama": OllamaExecutor(),
         "claude_cli": ClaudeCliExecutor(),
-        "nous": UnconfiguredExecutor(
-            "nous", "no Nous adapter yet (reconnaissance first, then the Hermes transport)"
-        ),
+        "nous": nous,
         "openai": UnconfiguredExecutor("openai", "no OpenAI adapter or key is configured"),
     }

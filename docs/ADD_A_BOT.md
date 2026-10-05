@@ -14,6 +14,8 @@ description: One line, shown by `crew list`.
 prompt: prompts/ines.md        # relative to config/crew/; may not leave it
 capabilities: [vault.search, vault.read]
 model_tier: fast               # fast | smart                      (default fast)
+tier_preference: standard      # optional, SOFT: trivial|standard|critical. Only for a turn whose own
+                               # shape says nothing; the TASK picks the model tier (crew/router.py)
 brands: ["*"]                  # "*" or brand keys, e.g. [delta_cuisine]   (default all)
 write_zones: [inbox]           # inbox | brand | global | other    (default inbox only)
 handoffs_to: []                # bot ids this bot may hand a task to

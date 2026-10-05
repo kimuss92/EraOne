@@ -5,18 +5,33 @@ give a TIER, the tier names an ordered list of providers in config/llm.yaml `rou
 and the first provider that is available AND under its daily budget answers. Replaces the
 old linear fallback chain.
 
-THE FIVE AXES (each one is its own pure function so it can be tested alone)
-  needs_tool_calling   the bot is granted capabilities, so it must emit tool-call JSON
-  context_length_tier  "long" at >= LONG_CONTEXT_CHARS of prompt. This is a LENGTH test (8k
-                       tokens ~ 32k characters), not token counting.
-  output_verified      something mechanical checks the answer (tests run, JSON parsed)
-  hop_count            "multi" for a bot that hands work on, or a turn that IS a handoff
-  cost_of_error        "high" for a bot that can write the vault or propose code
+THE TIER BELONGS TO THE TASK, NOT THE BOT
+  Drew searching the vault is `standard`; Drew saving a note is `critical`. Maya drafting prose
+  is `standard`; Maya producing a validated JSON artifact for a scheduled post is `critical` for
+  THAT turn only. Cody reasoning is `standard`; Cody producing code that must compile is
+  `critical`. A bot's yaml may carry a `tier_preference`, but only as a SOFT default for a turn
+  whose own shape says nothing; it is never a hard tier.
 
-AXES -> TIER (tier_for)
+THE FIVE AXES OF A TASK SHAPE (each is its own pure function so it can be tested alone)
+  needs_tool_calling   the bot must emit tool-call JSON (default: it was granted capabilities)
+  context_length_tier  "long" at >= LONG_CONTEXT_CHARS of prompt. A LENGTH test (8k tokens ~ 32k
+                       characters), not token counting.
+  output_verified      the turn must produce output that is mechanically VALIDATED: JSON that
+                       parses against a schema, code that compiles, arithmetic. A weak model
+                       fails that, so it raises the tier.
+  hop_count            "multi" for a turn that IS a handoff
+  cost_of_error        "high" when the task is to WRITE something (save, create, append,
+                       replace, schedule, publish, send...) AND the bot can write at all
+
+  Where a shape comes from, per axis: `context["task_shape"]` (set by whoever hands the task
+  over: Laura's crew.handoff `shape`, a scheduler) wins; otherwise it is derived from the TASK
+  TEXT only. Observations (vault text, tool output) are untrusted data and never steer the
+  tier. No LLM call, no tokenizer.
+
+SHAPE -> TIER (tier_for)
   offline    the network is down: only `routing.tiers.offline` is considered
-  critical   high cost of error and nothing verifies the answer
-  standard   tool calling, long context, several hops, or a verified high-cost turn
+  critical   validated output required, or high cost of error
+  standard   tool calling, long context, or several hops
   trivial    everything else
 
 NO SILENT CROSS-TIER ROUTING
@@ -43,6 +58,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -79,20 +95,59 @@ _CROSS_TIER = {
     "critical": ("standard",),
     "offline": (),
 }
-_EFFECTFUL = frozenset({"vault.create", "vault.append", "vault.replace_staged", "code.propose"})
+_EFFECTFUL = frozenset({"vault.create", "vault.append", "vault.replace_staged"})
 _VERIFIERS = frozenset({"code.check"})
 # The budget table uses the product's name for this provider.
 _BUDGET_KEY = {"nous": "nous_portal"}
 
 
-# ── the five axes ───────────────────────────────────────────────────────────
+# ── the five axes: a task shape ─────────────────────────────────────────────
 @dataclass(frozen=True)
 class Axes:
     needs_tool_calling: bool
     context_length_tier: str  # "short" | "long"
-    output_verified: bool
+    output_verified: bool  # the turn must produce mechanically VALIDATED output
     hop_count: str  # "single" | "multi"
     cost_of_error: str  # "low" | "high"
+
+
+TaskShape = Axes
+
+_SHAPE_VALUES = {
+    "needs_tool_calling": (bool,),
+    "output_verified": (bool,),
+    "context_length_tier": ("short", "long"),
+    "hop_count": ("single", "multi"),
+    "cost_of_error": ("low", "high"),
+}
+# Whole words in the TASK text. Deliberately short: a false hit only costs a stronger model,
+# and a bot that cannot write can never be made "high cost" by its text (see axis_cost_of_error).
+_EFFECT_WORDS = re.compile(
+    r"\b(save|write|create|append|replace|update|rename|schedule|publish|post|send|commit)\b",
+    re.IGNORECASE,
+)
+_VERIFY_WORDS = re.compile(
+    r"\b(json|schema|compile[sd]?|compiling|validated?|unit tests?|tests? (?:must )?pass(?:es)?"
+    r"|type-?check(?:s|ed)?|lint(?:ed)?)\b",
+    re.IGNORECASE,
+)
+
+
+def coerce_shape(raw: Any) -> dict:
+    """The valid part of a caller-supplied shape: known keys, right-typed values, nothing else."""
+    out: dict = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, allowed in _SHAPE_VALUES.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        if allowed == (bool,):
+            if isinstance(value, bool):
+                out[key] = value
+        elif isinstance(value, str) and value.lower() in allowed:
+            out[key] = value.lower()
+    return out
 
 
 def axis_needs_tool_calling(spec: Any) -> bool:
@@ -103,46 +158,75 @@ def axis_context_length_tier(*texts: str) -> str:
     return "long" if sum(len(t or "") for t in texts) >= LONG_CONTEXT_CHARS else "short"
 
 
-def axis_output_verified(spec: Any, turn: Any) -> bool:
+def axis_output_verified(turn: Any) -> bool:
+    """Validated output is required: the caller says so, or the TASK asks for JSON, a schema,
+    code that compiles, passing tests."""
     ctx = turn.context or {}
-    return (
-        bool(ctx.get("output_verified"))
-        or bool(ctx.get("review"))  # a Nabar review is parsed against a schema
-        or any(c in _VERIFIERS for c in spec.capabilities)
+    return bool(ctx.get("output_verified")) or bool(_VERIFY_WORDS.search(turn.task or ""))
+
+
+def axis_hop_count(turn: Any) -> str:
+    return "multi" if turn.depth > 0 else "single"
+
+
+def axis_cost_of_error(spec: Any, turn: Any) -> str:
+    """High only when the task is to WRITE something and this bot is able to. A read-only bot
+    cannot do harm by writing, whatever its task text says."""
+    can_write = any(c in _EFFECTFUL for c in spec.capabilities)
+    return "high" if can_write and _EFFECT_WORDS.search(turn.task or "") else "low"
+
+
+def _shape(spec: Any, turn: Any, system: str, user: str) -> tuple[Axes, bool]:
+    """(shape, signalled). `signalled`: the turn said something about its own shape (an explicit
+    task_shape, a write/validate request in the task, a long prompt, a handoff)."""
+    explicit = coerce_shape((turn.context or {}).get("task_shape"))
+    derived = Axes(
+        needs_tool_calling=axis_needs_tool_calling(spec),
+        context_length_tier=axis_context_length_tier(system, user),
+        output_verified=axis_output_verified(turn),
+        hop_count=axis_hop_count(turn),
+        cost_of_error=axis_cost_of_error(spec, turn),
     )
-
-
-def axis_hop_count(spec: Any, turn: Any) -> str:
-    return "multi" if turn.depth > 0 or "crew.handoff" in spec.capabilities else "single"
-
-
-def axis_cost_of_error(spec: Any) -> str:
-    return "high" if any(c in _EFFECTFUL for c in spec.capabilities) else "low"
+    shape = Axes(**{**derived.__dict__, **explicit})
+    signalled = bool(
+        explicit
+        or shape.output_verified
+        or shape.cost_of_error == "high"
+        or shape.context_length_tier == "long"
+        or shape.hop_count == "multi"
+    )
+    return shape, signalled
 
 
 def classify(spec: Any, turn: Any, system: str = "", user: str = "") -> Axes:
-    return Axes(
-        needs_tool_calling=axis_needs_tool_calling(spec),
-        context_length_tier=axis_context_length_tier(system, user),
-        output_verified=axis_output_verified(spec, turn),
-        hop_count=axis_hop_count(spec, turn),
-        cost_of_error=axis_cost_of_error(spec),
-    )
+    return _shape(spec, turn, system, user)[0]
 
 
-def tier_for(axes: Axes, *, online: bool = True) -> str:
+def tier_for(shape: Axes, *, online: bool = True) -> str:
     if not online:
         return "offline"
-    if axes.cost_of_error == "high" and not axes.output_verified:
+    if shape.output_verified or shape.cost_of_error == "high":
         return "critical"
     if (
-        axes.needs_tool_calling
-        or axes.context_length_tier == "long"
-        or axes.hop_count == "multi"
-        or axes.cost_of_error == "high"
+        shape.needs_tool_calling
+        or shape.context_length_tier == "long"
+        or shape.hop_count == "multi"
     ):
         return "standard"
     return "trivial"
+
+
+def choose_tier(
+    spec: Any, turn: Any, system: str = "", user: str = "", *, online: bool = True
+) -> tuple[str, Axes]:
+    """The tier for THIS turn, and the shape it came from. The bot's `tier_preference` is a soft
+    default: it applies only when the turn said nothing about its own shape, and never offline."""
+    shape, signalled = _shape(spec, turn, system, user)
+    tier = tier_for(shape, online=online)
+    preference = str(getattr(spec, "tier_preference", "") or "")
+    if online and preference in TIERS and preference != "offline" and not signalled:
+        tier = preference
+    return tier, shape
 
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -272,7 +356,8 @@ class Router:
     def note_failure(self, provider: str, exc: BaseException) -> None:
         """Skip a provider that just failed; a "no network" failure latches the offline tier."""
         with self._lock:
-            self._cooldown[provider] = self._clock() + COOLDOWN_S
+            wait = max(COOLDOWN_S, min(float(getattr(exc, "retry_after_s", 0) or 0), 3600.0))
+            self._cooldown[provider] = self._clock() + wait
             try:
                 from core.llm.quota_failover import is_offline_error
 
@@ -347,8 +432,7 @@ class RoutedLLM:
         {"__bad_output__": text} when one answered with no JSON object."""
         from crew.nabar import parse_json_object
 
-        axes = classify(spec, turn, system, user)
-        origin = tier_for(axes, online=self.router.online())
+        origin, _shape_used = choose_tier(spec, turn, system, user, online=self.router.online())
         allow = (turn.context or {}).get("allow_cross_tier") is True
         reasons: list[str] = []
         crossed_to: set[str] = set()
@@ -394,12 +478,13 @@ def build_default() -> RoutedLLM | None:
     try:
         from core.llm.router import routing_policy
 
-        policy = Policy.from_mapping(routing_policy())
+        routing = routing_policy()
+        policy = Policy.from_mapping(routing)
     except Exception:  # noqa: BLE001 — an unreadable registry keeps the old model path
         return None
     if policy is None:
         return None
     return RoutedLLM(
-        Router(policy, Budget(policy.budget), default_executors()),
+        Router(policy, Budget(policy.budget), default_executors(routing)),
         CrewCaches.from_config(policy.cache),
     )

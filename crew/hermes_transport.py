@@ -209,7 +209,7 @@ class HermesAgentTransport(InProcessTransport):
 
     # ── the model call: text in, text out ───────────────────────────────────
     def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
-        tier = crew_router.tier_for(crew_router.classify(spec, turn, system, user))
+        tier, _ = crew_router.choose_tier(spec, turn, system, user)
         try:
             key = read_key(self._config_path)  # again, at call time: a turn has many calls
             status, body = self._http(

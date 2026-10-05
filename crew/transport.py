@@ -78,6 +78,9 @@ class BotSpec:
     brands: tuple[str, ...] = ("*",)  # "*" = every brand
     write_zones: tuple[str, ...] = ("inbox",)
     handoffs_to: tuple[str, ...] = ()
+    # A SOFT default for turns that carry no signal about their own shape (never a hard
+    # tier: the shape of the TASK decides — see crew/router.choose_tier). "" = none.
+    tier_preference: str = ""
 
 
 @dataclass(frozen=True)

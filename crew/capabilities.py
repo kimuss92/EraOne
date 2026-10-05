@@ -229,8 +229,15 @@ def _code_check(ctx, args):
 
 
 # ── coordination ────────────────────────────────────────────────────────────
-@capability("crew.handoff", "Hand a sub-task to another bot you are allowed to use.", "to, task")
+@capability(
+    "crew.handoff",
+    "Hand a sub-task to another bot you are allowed to use. Optional `shape` says what the "
+    "task needs (picks the model tier): needs_tool_calling, output_verified (JSON/code that "
+    "must validate), cost_of_error low|high, context_length_tier short|long.",
+    "to, task, shape?",
+)
 def _handoff(ctx, args):
+    from crew.router import coerce_shape
     from crew.transport import fail
 
     target = str(args.get("to") or "").strip().lower()
@@ -241,11 +248,17 @@ def _handoff(ctx, args):
         return fail("HandoffDepthExceeded", f"Handoffs are limited to {MAX_HANDOFF_DEPTH} deep.")
     if not task or ctx.dispatch is None:
         return fail("BotError", "A handoff needs a task and a live transport.")
+    # A task shape belongs to ONE task: the child never inherits its parent's, and only the
+    # valid part of what this handoff names is passed on (unknown keys and values are dropped).
+    child_context = {k: v for k, v in ctx.turn.context.items() if k != "task_shape"}
+    shape = coerce_shape(args.get("shape"))
+    if shape:
+        child_context["task_shape"] = shape
     return ctx.dispatch(
         target,
         Turn(
             task=task,
-            context=ctx.turn.context,
+            context=child_context,
             depth=ctx.turn.depth + 1,
             origin=ctx.spec.id,
             deadline=ctx.turn.deadline,  # the same wall-clock budget, not a fresh one

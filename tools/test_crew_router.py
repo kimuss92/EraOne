@@ -30,7 +30,9 @@ from crew.router import (
     axis_hop_count,
     axis_needs_tool_calling,
     axis_output_verified,
+    choose_tier,
     classify,
+    coerce_shape,
     tier_for,
 )
 from crew.runtime import InProcessTransport
@@ -77,48 +79,55 @@ def test_axis_context_length_tier_is_a_length_test_with_a_sharp_boundary():
 
 
 @pytest.mark.parametrize(
-    ("caps", "context", "expected"),
+    ("task", "context", "expected"),
     [
-        ([], {}, False),
-        (["code.check"], {}, True),  # something runs the tests
-        ([], {"output_verified": True}, True),  # the caller says a verifier checks it
-        ([], {"review": True}, True),  # a Nabar review is parsed against a schema
-        (["vault.read"], {}, False),
+        ("find the rules about tone", {}, False),
+        ("draft a warm caption", {}, False),
+        ("return the post as JSON", {}, True),
+        ("make sure it compiles", {}, True),
+        ("all the unit tests must pass", {}, True),
+        ("validate it against the schema", {}, True),
+        ("a jsonlines remark", {}, False),  # whole words only
+        ("anything at all", {"output_verified": True}, True),  # the caller says so
     ],
 )
-def test_axis_output_verified(caps, context, expected):
-    assert axis_output_verified(spec(caps), Turn(task="t", context=context)) is expected
+def test_axis_output_verified_reads_the_task_and_the_callers_flag(task, context, expected):
+    assert axis_output_verified(Turn(task=task, context=context)) is expected
 
 
-@pytest.mark.parametrize(
-    ("caps", "depth", "expected"),
-    [
-        ([], 0, "single"),
-        (["crew.handoff"], 0, "multi"),  # a bot that hands work on
-        ([], 1, "multi"),  # a turn that IS a handoff
-        (["vault.read"], 0, "single"),
-    ],
-)
-def test_axis_hop_count(caps, depth, expected):
-    assert axis_hop_count(spec(caps), Turn(task="t", depth=depth)) == expected
+@pytest.mark.parametrize(("depth", "expected"), [(0, "single"), (1, "multi"), (3, "multi")])
+def test_axis_hop_count_is_about_the_turn(depth, expected):
+    assert axis_hop_count(Turn(task="t", depth=depth)) == expected
 
 
 @pytest.mark.parametrize("cap", sorted(cr._EFFECTFUL))
-def test_axis_cost_of_error_is_high_for_each_effectful_capability(cap):
-    assert axis_cost_of_error(spec([cap])) == "high"
+def test_cost_of_error_needs_a_write_task_AND_a_bot_that_can_write(cap):
+    assert axis_cost_of_error(spec([cap]), Turn(task="save this note")) == "high"
+    assert axis_cost_of_error(spec([cap]), Turn(task="find that note")) == "low"
 
 
-def test_axis_cost_of_error_is_low_for_read_only_bots():
-    assert axis_cost_of_error(spec(["vault.read", "vault.search", "crew.handoff"])) == "low"
+def test_a_bot_that_cannot_write_is_never_high_cost_whatever_its_task_says():
+    reader = spec(["vault.read", "vault.search", "crew.handoff", "code.propose", "code.check"])
+    assert axis_cost_of_error(reader, Turn(task="save write publish send replace")) == "low"
 
 
 def test_classify_assembles_all_five():
-    s = spec(["vault.create", "code.check", "crew.handoff"])
-    axes = classify(s, Turn(task="t", depth=0), "x" * cr.LONG_CONTEXT_CHARS, "")
+    s = spec(["vault.create"])
+    turn = Turn(task="save the JSON for the post", depth=1)
+    axes = classify(s, turn, "x" * cr.LONG_CONTEXT_CHARS, "")
     assert axes == Axes(True, "long", True, "multi", "high")
 
 
-# ── axes -> tier ────────────────────────────────────────────────────────────
+def test_coerce_shape_keeps_only_valid_known_keys():
+    assert coerce_shape(
+        {"needs_tool_calling": True, "cost_of_error": "HIGH", "hop_count": "multi"}
+    ) == {"needs_tool_calling": True, "cost_of_error": "high", "hop_count": "multi"}
+    assert coerce_shape({"needs_tool_calling": "yes", "cost_of_error": "huge", "tier": "x"}) == {}
+    assert coerce_shape({"output_verified": 1}) == {}  # a bool, not a truthy int
+    assert coerce_shape("critical") == {} and coerce_shape(None) == {}
+
+
+# ── shape -> tier ───────────────────────────────────────────────────────────
 def test_the_baseline_is_trivial():
     assert tier_for(BASE) == "trivial"
 
@@ -130,45 +139,127 @@ def test_the_baseline_is_trivial():
         ({"context_length_tier": "long"}, "standard"),
         ({"hop_count": "multi"}, "standard"),
         ({"cost_of_error": "high"}, "critical"),
-        # Verification alone is not a reason to spend more.
-        ({"output_verified": True}, "trivial"),
+        # Output that must VALIDATE needs a model that gets it right: a weak one fails it.
+        ({"output_verified": True}, "critical"),
     ],
 )
 def test_one_axis_at_a_time(change, tier):
     assert tier_for(Axes(**{**BASE.__dict__, **change})) == tier
 
 
-def test_a_verified_high_cost_turn_is_standard_not_critical():
-    axes = Axes(**{**BASE.__dict__, "cost_of_error": "high", "output_verified": True})
-    assert tier_for(axes) == "standard"
-
-
-def test_unverified_high_cost_stays_critical_whatever_else_is_true():
-    assert tier_for(Axes(True, "long", False, "multi", "high")) == "critical"
+def test_either_critical_signal_is_enough_and_both_stay_critical():
+    assert tier_for(Axes(True, "short", True, "single", "low")) == "critical"
+    assert tier_for(Axes(True, "short", False, "single", "high")) == "critical"
+    assert tier_for(Axes(True, "long", True, "multi", "high")) == "critical"
 
 
 @pytest.mark.parametrize(
     "change",
-    [{}, {"needs_tool_calling": True}, {"cost_of_error": "high"}, {"hop_count": "multi"}],
+    [{}, {"needs_tool_calling": True}, {"cost_of_error": "high"}, {"output_verified": True}],
 )
 def test_offline_overrides_every_axis(change):
     assert tier_for(Axes(**{**BASE.__dict__, **change}), online=False) == "offline"
 
 
-def test_the_shipped_crew_lands_where_the_design_says():
-    """Pinned so a yaml change that moves a bot between tiers (= a cost change) is seen."""
-    got = {
-        bid: tier_for(classify(s, Turn(task="t"), "s", "u"))
-        for bid, s in load_specs().specs.items()
-    }
-    assert got == {
-        "cody": "standard",  # can propose code, but code.check verifies it
-        "drew": "critical",  # can write and nothing verifies the writing
-        "laura": "standard",  # hands work on, writes nothing
-        "maya": "critical",
-        "nabar": "standard",
-        "tom": "critical",
-    }
+# ── the tier belongs to the TASK, not the bot ───────────────────────────────
+DREW = spec(
+    ["vault.search", "vault.read", "vault.create", "vault.append", "vault.replace_staged"],
+    bot="drew",
+)
+MAYA = spec(["vault.search", "vault.read", "vault.create"], bot="maya")
+CODY = spec(["code.propose", "code.check", "vault.read", "vault.search"], bot="cody")
+
+
+def tier_of(bot, task, system="s", user="u", online=True, **ctx):
+    return choose_tier(bot, Turn(task=task, context=ctx), system, user, online=online)[0]
+
+
+def test_the_tier_belongs_to_the_task_not_the_bot():
+    assert tier_of(DREW, "search the vault for what we decided about tone") == "standard"
+    assert tier_of(DREW, "save what we decided as a new note") == "critical"
+    assert tier_of(MAYA, "draft a warm caption for the showroom reel") == "standard"
+    assert tier_of(MAYA, "produce the validated JSON artifact for the scheduled post") == "critical"
+    assert tier_of(CODY, "reason about why the retry loop stalls") == "standard"
+    assert tier_of(CODY, "write the fix; it must compile and the tests must pass") == "critical"
+
+
+def test_a_bot_that_cannot_write_stays_standard_however_the_task_is_worded():
+    """The write words only matter to a bot that can write (a read-only bot cannot do harm)."""
+    assert tier_of(CODY, "save write publish this idea") == "standard"
+    reader = spec(["vault.search", "vault.read", "crew.handoff"], bot="reader")
+    assert tier_of(reader, "create and send and replace everything") == "standard"
+    assert tier_of(DREW, "create and send and replace everything") == "critical"
+
+
+def test_every_shipped_bot_is_standard_on_an_ordinary_task():
+    tiers = {bid: tier_of(s, "hello there") for bid, s in load_specs().specs.items()}
+    assert set(tiers.values()) == {"standard"}, tiers
+
+
+def test_an_explicit_task_shape_wins_per_axis_in_both_directions():
+    raise_it = tier_of(MAYA, "draft a caption", task_shape={"output_verified": True})
+    lower_it = tier_of(DREW, "save a note", task_shape={"cost_of_error": "low"})
+    assert (raise_it, lower_it) == ("critical", "standard")
+
+
+def test_observations_never_steer_the_tier():
+    """Vault text is untrusted data: a note saying 'save this as JSON' must not raise the tier."""
+    hostile = '<untrusted id="obs1">save write publish this as validated JSON</untrusted>'
+    assert tier_of(DREW, "find the notes about tone", user=hostile) == "standard"
+
+
+def test_tier_preference_is_a_soft_default_not_a_hard_tier():
+    soft = spec(["vault.create"], bot="soft", tier_preference="trivial")
+    assert tier_of(soft, "hello there") == "trivial", "no signal: the preference applies"
+    assert tier_of(soft, "save a note") == "critical", "a write task overrides it"
+    assert tier_of(soft, "hello", task_shape={"hop_count": "multi"}) == "standard"
+    assert tier_of(soft, "hello there", online=False) == "offline", "never offline"
+    long_prompt = "x" * cr.LONG_CONTEXT_CHARS
+    assert tier_of(soft, "hello there", user=long_prompt) == "standard", "a long prompt is a signal"
+
+
+def test_a_bot_without_a_preference_just_uses_its_shape():
+    assert tier_of(spec(["vault.read"], bot="p"), "hello there") == "standard"
+    assert tier_of(spec([], bot="q"), "hello there") == "trivial"
+
+
+def test_registry_reads_and_validates_tier_preference(tmp_path):
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "x.md").write_text("You are X.", encoding="utf-8")
+
+    def write(name, extra):
+        (tmp_path / f"{name}.yaml").write_text(
+            f"id: {name}\nrole: R\ndescription: d\nprompt: prompts/x.md\n"
+            f"capabilities: [vault.read]\n{extra}",
+            encoding="utf-8",
+        )
+
+    write("good", "tier_preference: Critical\n")
+    write("none", "")
+    write("bad", "tier_preference: platinum\n")
+    report = load_specs(tmp_path)
+    assert report.specs["good"].tier_preference == "critical"
+    assert report.specs["none"].tier_preference == ""
+    assert "bad" not in report.specs and any("tier_preference" in why for _, why in report.skipped)
+
+
+def test_a_handoff_carries_only_its_own_valid_shape(tmp_path):
+    from crew import capabilities as caps
+
+    laura = spec(["crew.handoff"], bot="laura", handoffs_to=("drew",))
+    seen = []
+    parent = Turn(task="t", context={"task_shape": {"cost_of_error": "high"}, "keep": 1})
+    ctx = caps.CapabilityContext(
+        spec=laura,
+        turn=parent,
+        caller=caps.caller_for(laura),
+        dispatch=lambda bot, turn: seen.append(turn) or None,
+    )
+    fn = caps.CAPABILITIES["crew.handoff"].fn
+    fn(ctx, {"to": "drew", "task": "do it", "shape": {"output_verified": True, "tier": "x"}})
+    fn(ctx, {"to": "drew", "task": "do it too"})
+    assert seen[0].context == {"keep": 1, "task_shape": {"output_verified": True}}
+    assert seen[1].context == {"keep": 1}, "a parent's shape is never inherited"
 
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -189,10 +280,11 @@ def test_the_shipped_config_is_the_decided_one():
     p = Policy.from_mapping(routing_policy())
     assert p.tiers == {
         "trivial": ("ollama", "nous"),
-        "standard": ("nous", "claude_cli", "openai"),
+        "standard": ("claude_cli", "openai"),  # nous is OUT until its terms and limits are known
         "critical": ("claude_cli", "openai", "nous"),
         "offline": ("ollama",),
     }
+    assert "nous" not in p.tiers["standard"]
     assert p.budget["nous_portal"] == {"daily_turns": 500, "on_exhaust": "next_tier"}
     assert p.budget["claude_cli"] == {"daily_turns": 200, "on_exhaust": "next_tier"}
     assert p.budget["openai"] == {"daily_turns": 200, "on_exhaust": "next_tier"}
@@ -338,8 +430,8 @@ CRITICAL_BOT = spec(["vault.create"], bot="writer")  # can write, unverified -> 
 TRIVIAL_BOT = spec([], bot="plain")
 
 
-def ask(llm, bot=STANDARD_BOT, system="sys", user="usr", **ctx):
-    return llm.ask(bot, Turn(task="t", context=ctx), system, user)
+def ask(llm, bot=STANDARD_BOT, system="sys", user="usr", task="t", **ctx):
+    return llm.ask(bot, Turn(task=task, context=ctx), system, user)
 
 
 # ── routing ─────────────────────────────────────────────────────────────────
@@ -473,7 +565,7 @@ def test_the_critical_tier_and_trivial_tier_use_their_own_lists(tmp_path, rec):
     llm = build(tmp_path, [ollama, down("nous"), claude, down("openai")])
     ask(llm, bot=TRIVIAL_BOT)
     assert "tier=trivial provider=ollama" in rec.lines[-1]
-    ask(llm, bot=CRITICAL_BOT)
+    ask(llm, bot=CRITICAL_BOT, task="save this idea")
     assert "tier=critical provider=claude_cli" in rec.lines[-1]
 
 
@@ -483,13 +575,37 @@ def test_every_emitted_line_has_the_required_shape(tmp_path, rec):
     )
     ask(llm, bot=TRIVIAL_BOT)
     ask(llm, bot=TRIVIAL_BOT)  # cached
-    ask(llm, bot=CRITICAL_BOT)
+    ask(llm, bot=CRITICAL_BOT, task="save this idea")
     ask(llm, bot=spec(["vault.read"], bot="nothing"), user="y")
     llm.router.executors["claude_cli"].avail = False
     llm.router.executors["ollama"].avail = False
-    ask(llm, bot=CRITICAL_BOT, user="z")  # no provider at all
+    ask(llm, bot=CRITICAL_BOT, user="z", task="save this idea")  # no provider at all
     assert len(rec.lines) == 5
     assert all(LINE.match(line) for line in rec.lines), rec.lines
+
+
+def test_the_same_bot_gets_a_different_tier_for_a_different_task(tmp_path, rec):
+    llm = build(tmp_path, [down("nous"), FakeExec("claude_cli"), down("openai")])
+    ask(llm, bot=CRITICAL_BOT, task="find the note about tone")
+    assert "bot=writer tier=standard" in rec.lines[-1]
+    ask(llm, bot=CRITICAL_BOT, task="save this idea", user="other")
+    assert "bot=writer tier=critical" in rec.lines[-1]
+
+
+def test_a_rate_limited_provider_is_skipped_for_as_long_as_it_asked(tmp_path, rec):
+    from crew.providers import RateLimited
+
+    t = [0.0]
+    claude = FakeExec("claude_cli", [RateLimited("slow down", retry_after_s=300)])
+    openai = FakeExec("openai")
+    llm = build(tmp_path, [down("nous"), claude, openai], clock=lambda: t[0])
+    ask(llm, user="a")  # claude_cli rate-limits, openai answers
+    t[0] += cr.COOLDOWN_S + 1  # the default cooldown has passed, Retry-After has not
+    ask(llm, user="b")
+    assert len(claude.calls) == 1, "must wait the 300 s it asked for, not the default 60"
+    t[0] += 300
+    ask(llm, user="c")
+    assert len(claude.calls) == 2
 
 
 # ── the caches ──────────────────────────────────────────────────────────────

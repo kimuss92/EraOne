@@ -174,7 +174,9 @@ class ResponseCache:
     def key(spec: Any, turn: Any) -> str:
         # The bot's own definition is part of the key, so editing its yaml, prompt or
         # brand scope can never be answered from what the old definition produced.
-        fingerprint = sha(spec.brands, spec.capabilities, spec.write_zones, spec.prompt)[:12]
+        fingerprint = sha(
+            spec.brands, spec.capabilities, spec.write_zones, spec.prompt, spec.tier_preference
+        )[:12]
         return f"{spec.id}_{sha(turn.task)[:16]}_{sha(turn.context)[:16]}_{fingerprint}"
 
     def _path(self, key: str) -> Path:

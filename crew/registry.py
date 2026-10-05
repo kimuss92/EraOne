@@ -19,6 +19,9 @@ yaml schema (all keys required except the last four):
     brands: ["*"]                  # "*" or brand keys     (default all)
     write_zones: [inbox]           # inbox|brand|global|other  (default inbox only)
     handoffs_to: []                # bot ids this bot may hand a task to
+    tier_preference: standard      # optional SOFT default: trivial|standard|critical. Used
+                                   # only for a turn whose own shape says nothing; the TASK
+                                   # decides the tier (crew/router.py), never the bot.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ DEFAULT_DIR = Path(__file__).resolve().parent.parent / "config" / "crew"
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 _BRAND_RE = re.compile(r"^(\*|[a-z][a-z0-9_]{1,40})$")
 _TIERS = ("fast", "smart")
+_ROUTE_TIERS = ("trivial", "standard", "critical")
 _ZONES = frozenset({"inbox", "brand", "global", "other"})
 _MAX_PROMPT_CHARS = 20_000
 
@@ -107,6 +111,9 @@ def _build(path: Path, directory: Path, known_capabilities: frozenset[str]) -> B
     handoffs = _str_list(data.get("handoffs_to"), "handoffs_to")
     if not all(_ID_RE.match(h) for h in handoffs):
         raise ValueError("handoffs_to must be bot ids")
+    preference = str(data.get("tier_preference") or "").strip().lower()
+    if preference and preference not in _ROUTE_TIERS:
+        raise ValueError(f"tier_preference must be one of {_ROUTE_TIERS} (or absent)")
 
     return BotSpec(
         id=bot_id,
@@ -118,6 +125,7 @@ def _build(path: Path, directory: Path, known_capabilities: frozenset[str]) -> B
         brands=brands,
         write_zones=zones,
         handoffs_to=handoffs,
+        tier_preference=preference,
     )
 
 

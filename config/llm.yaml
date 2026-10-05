@@ -532,13 +532,15 @@ routing:
   #     tier only when the TASK sets allow_cross_tier, and every crossing is logged.
   #   * `on_exhaust: next_tier` = skip that provider, try the next one in the SAME tier.
   #   * A provider with no budget row is unusable (fail closed).
-  #   * `nous` is budgeted as `nous_portal`. nous and openai have no adapter in Era yet, so
-  #     they are skipped (with the reason) until one exists.
+  #   * `nous` is budgeted as `nous_portal`. Its adapter exists (crew/providers.NousExecutor,
+  #     key = `nous_api_key` in config/api_keys.json, block `nous:` below) but it is OUT of
+  #     `standard` on purpose until its terms are read and `python tools/probe_nous.py` has
+  #     measured its real limits. openai has no adapter yet and is skipped with the reason.
   #   * Mixture of Agents is OFF, permanently: a fallback chain only.
   # Every crew turn logs: [crew] bot= tier= provider= tokens_in= tokens_out= cached=
   tiers:
     trivial: [ollama, nous]
-    standard: [nous, claude_cli, openai]
+    standard: [claude_cli, openai]
     critical: [claude_cli, openai, nous]
     offline: [ollama]
   budget:
@@ -547,6 +549,12 @@ routing:
     openai: { daily_turns: 200, on_exhaust: next_tier }
     # keep_alive is informational here: Era's ollama adapter already sends "30m" per request.
     ollama: { always_available: true, keep_alive: "30m" }
+  # Nous Portal (OpenAI-compatible). The base URL must be https on nousresearch.com (the key
+  # is only ever sent there). `model` is UNVERIFIED until tools/probe_nous.py has run; `models`
+  # may override it per tier, e.g. { critical: some/other-slug }.
+  nous:
+    base_url: https://inference-api.nousresearch.com/v1
+    model: poolside/laguna-xs-2.1:free
   cache:
     tool_ttl_s: 60 # vault.read, dropped by any verified vault write
     response_ttl_s: 600 # persisted to memory/crew_cache/; only answers that DID nothing
