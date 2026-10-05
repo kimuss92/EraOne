@@ -8,8 +8,10 @@ venv/
 .env
 .env.*
 
-# Secrets / local config
-config/api_keys.json
+# Secrets / local config. `api_keys*` (not just the one name) so a copy such as
+# api_keys.json.bak or api_keys.json~ can never be committed; the example stays tracked.
+config/api_keys*
+!config/api_keys.example.json
 config/media_host.json
 # Gmail OAuth client identity. The refresh token itself is never written here —
 # it lives under ~/.eraone/gmail/ — but the client file still identifies the app.

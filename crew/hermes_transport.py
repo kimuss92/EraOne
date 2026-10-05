@@ -26,6 +26,14 @@ cannot reach. That is only true while the profile exposes NO tools, so:
   LOOPBACK ONLY          a base URL that is not 127.0.0.1 / localhost / ::1 is refused at
                          construction, so a mis-edit can never ship the key anywhere else.
 
+  THE QUALITY HINT       Era classifies the task (crew/router.py) into trivial / standard /
+                         critical and asks for `model: era-<tier>`: Hermes resolves that through
+                         its own `model_routes` and its own fallback chain, so the provider
+                         decision is Hermes's. The hint is sent ONLY when the gateway's
+                         `GET /v1/models` lists that alias; an unlisted name would reach the
+                         provider as a raw model slug and fail, so no alias means no `model`
+                         field and Hermes uses its default.
+
 Implements crew/transport.py's existing interface and no new call shape. Not the default:
 crew/runtime.get_transport selects it only when ERA_CREW_TRANSPORT=hermes_agent.
 
@@ -99,6 +107,14 @@ def _check_loopback(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+def _why(body: Any) -> str:
+    """Hermes's own reason for a failed call ("not logged into Nous Portal", ...), already
+    redacted by Hermes; empty when the body has none."""
+    err = body.get("error") if isinstance(body, dict) else None
+    message = err.get("message") if isinstance(err, dict) else err
+    return f": {str(message)[:160]}" if isinstance(message, str) and message.strip() else ""
+
+
 class _Refused(Exception):
     """Carries (error_type, detail) out of a check."""
 
@@ -128,6 +144,7 @@ class HermesAgentTransport(InProcessTransport):
         self._clock = clock
         self._recheck_s = float(recheck_s)
         self._toolsets_ok_until = 0.0
+        self._tier_aliases: frozenset[str] = frozenset()  # the era-<tier> routes Hermes lists
 
     @staticmethod
     def _never(system: str, user: str, tier: str) -> dict:  # pragma: no cover - replaced by _ask
@@ -174,8 +191,22 @@ class HermesAgentTransport(InProcessTransport):
                 + "). With tools on, Hermes could reach the vault, files or a shell around "
                 "Era's gates. Disable them in the profile's config.",
             )
+        self._tier_aliases = self._read_tier_aliases(key)
         self._toolsets_ok_until = self._clock() + self._recheck_s
         return key
+
+    def _read_tier_aliases(self, key: str) -> frozenset[str]:
+        """The `era-<tier>` aliases the gateway lists. Any failure means none: no hint is sent."""
+        try:
+            status, body = self._http(
+                "GET", f"{self._base}/v1/models", self._headers(key), None, PROBE_TIMEOUT_S
+            )
+        except Exception:  # noqa: BLE001 - the hint is optional, the turn must not depend on it
+            return frozenset()
+        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("data"), list):
+            return frozenset()
+        listed = {str(m.get("id")) for m in body["data"] if isinstance(m, dict)}
+        return frozenset(a for a in (f"era-{t}" for t in crew_router.TIERS) if a in listed)
 
     # ── contract: dispatch / health (register + capabilities are inherited) ──
     def dispatch(self, bot_id: str, turn: Turn) -> ToolResult:
@@ -210,21 +241,22 @@ class HermesAgentTransport(InProcessTransport):
     # ── the model call: text in, text out ───────────────────────────────────
     def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
         tier, _ = crew_router.choose_tier(spec, turn, system, user)
+        payload: dict = {
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+        }
+        if f"era-{tier}" in self._tier_aliases:  # the hint: Hermes picks the provider behind it
+            payload["model"] = f"era-{tier}"
         try:
             key = read_key(self._config_path)  # again, at call time: a turn has many calls
             status, body = self._http(
                 "POST",
                 f"{self._base}/v1/chat/completions",
                 self._headers(key),
-                json.dumps(
-                    {
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                        "stream": False,
-                    }
-                ).encode("utf-8"),
+                json.dumps(payload).encode("utf-8"),
                 CHAT_TIMEOUT_S,
             )
         except HermesKeyMissing as exc:
@@ -237,7 +269,7 @@ class HermesAgentTransport(InProcessTransport):
         if status != 200 or not isinstance(body, dict):
             self._toolsets_ok_until = 0.0
             crew_router.log_turn(spec.id, tier, "hermes", 0, 0, False)
-            return {"__unavailable__": f"Hermes answered HTTP {status}"}
+            return {"__unavailable__": f"Hermes answered HTTP {status}{_why(body)}"}
         try:
             text = str(body["choices"][0]["message"]["content"] or "")
         except (KeyError, IndexError, TypeError):

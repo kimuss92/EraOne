@@ -106,25 +106,12 @@ def _render(result: ToolResult) -> str:
 class InProcessTransport(Transport):
     name = "in_process"
 
-    def __init__(
-        self,
-        llm: LLM | None = None,
-        *,
-        routed: crew_router.RoutedLLM | None = None,
-        caches: CrewCaches | None = None,
-    ):
-        # An injected `llm` always wins and keeps the exact old behaviour, caches and
-        # all: tests and any other transport depend on that. Otherwise the model path is
-        # the tiered router from config/llm.yaml `routing.tiers`; with none configured
-        # the old Gemini path (default_llm) is kept.
+    def __init__(self, llm: LLM | None = None, *, caches: CrewCaches | None = None):
+        # The crew has no provider chain of its own. Without an injected `llm` the model is
+        # Era's existing text path (default_llm: Gemini, with the quota failover already
+        # installed); the Hermes transport injects its own call. Caches are opt-in.
         self._llm: LLM = llm or default_llm
-        if llm is not None:
-            self._routed = None
-        else:
-            self._routed = routed if routed is not None else crew_router.build_default()
-        self._caches: CrewCaches | None = (
-            caches if caches is not None else (self._routed.caches if self._routed else None)
-        )
+        self._caches: CrewCaches | None = caches
         self._bots: dict[str, BotSpec] = {}
         self._lock = threading.Lock()
 
@@ -173,12 +160,11 @@ class InProcessTransport(Transport):
     # ── the model call ──────────────────────────────────────────────────────
     def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
         """One model call. EVERY path emits the required `[crew] ...` line."""
-        if self._routed is not None:
-            return self._routed.ask(spec, turn, system, user)
+        tier, _ = crew_router.choose_tier(spec, turn, system, user)
         reply = self._llm(system, user, spec.model_tier)
         crew_router.log_turn(
             spec.id,
-            spec.model_tier,
+            tier,
             "gemini" if self._llm is default_llm else "injected",
             crew_router.estimate_tokens(system + user),
             crew_router.estimate_tokens(json.dumps(reply, default=str)) if reply else 0,
@@ -199,7 +185,7 @@ class InProcessTransport(Transport):
             reply = self._ask(spec, turn, _system(spec, self._bots), _user(turn, observations))
             if not isinstance(reply, dict) or not reply:
                 return fail("LLMUnavailable", f"{spec.id} could not reach a model.")
-            if "__unavailable__" in reply:  # the router found no provider that may answer
+            if "__unavailable__" in reply:  # the transport found no model that may answer
                 return fail("LLMUnavailable", f"{spec.id}: {reply['__unavailable__']}")
             if "final" in reply:
                 final = reply["final"]
@@ -356,6 +342,17 @@ _skipped: list[tuple[str, str]] = []
 _specs: dict[str, BotSpec] = {}  # what `list` shows; read from config, never from a transport
 
 
+def _default_caches() -> CrewCaches:
+    """The caches for the production in-process path, from config/llm.yaml `routing.cache`."""
+    try:
+        from core.llm.router import routing_policy
+
+        cfg = (routing_policy() or {}).get("cache")
+    except Exception:  # noqa: BLE001 — an unreadable registry means the built-in defaults
+        cfg = None
+    return CrewCaches.from_config(cfg)
+
+
 def get_transport() -> Transport:
     global _transport
     with _transport_lock:
@@ -368,7 +365,7 @@ def get_transport() -> Transport:
 
                 t = HermesAgentTransport()
             else:
-                t = InProcessTransport()
+                t = InProcessTransport(caches=_default_caches())
             report = load_specs()
             for bot_id, spec in report.specs.items():
                 t.register(bot_id, spec)

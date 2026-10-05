@@ -56,11 +56,17 @@ def chat(content, prompt=11, completion=7):
     }
 
 
+def aliases(*names):
+    """What `GET /v1/models` returns: the gateway's own name plus the profile's routes."""
+    return 200, {"object": "list", "data": [{"id": n} for n in ("hermes-agent", *names)]}
+
+
 class FakeHttp:
     def __init__(self):
         self.calls: list[tuple[str, str, dict, bytes | None]] = []
         self.toolsets = (200, toolsets())
         self.health = (200, {"status": "ok"})
+        self.models = aliases()  # GET /v1/models: the routes this profile defines
         self.chats: list = []  # (status, body) or an Exception, in order
         self.raise_on_toolsets: Exception | None = None
 
@@ -73,6 +79,8 @@ class FakeHttp:
             if self.raise_on_toolsets:
                 raise self.raise_on_toolsets
             return self.toolsets
+        if path.endswith("/v1/models"):
+            return self.models
         if path.endswith("/v1/chat/completions"):
             item = self.chats.pop(0) if self.chats else (200, chat(json.dumps({"final": "ok"})))
             if isinstance(item, Exception):
@@ -216,7 +224,7 @@ def test_it_asks_hermes_for_the_toolsets_before_the_first_turn(keyfile):
     t, http = make(keyfile)
     assert t.dispatch("tester", Turn(task="t")).success
     assert http.paths()[0] == "/p/era_one/v1/toolsets"
-    assert http.paths()[1] == "/p/era_one/v1/chat/completions"
+    assert http.paths()[-1] == "/p/era_one/v1/chat/completions"
 
 
 @pytest.mark.parametrize("name", ["terminal", "file", "skills", "vision", "web"])
@@ -291,6 +299,64 @@ def test_the_request_is_text_in_with_no_tools_and_no_session(keyfile):
     assert "what are the rules" in sent["messages"][1]["content"]
     assert set(sent) == {"messages", "stream"}, "no tools, no model, no session fields"
     assert "X-Hermes-Session-Id" not in headers and "X-Hermes-Session-Key" not in headers
+
+
+# ── the quality hint ────────────────────────────────────────────────────────
+def chat_bodies(http):
+    return [json.loads(c[3]) for c in http.calls if c[1].endswith("/chat/completions")]
+
+
+def test_the_hint_is_sent_when_hermes_lists_that_route(keyfile):
+    http = FakeHttp()
+    http.models = aliases("era-standard", "era-critical")
+    t, _ = make(keyfile, http)
+    t.dispatch("tester", Turn(task="what are the rules"))  # a tool-calling bot: standard
+    assert chat_bodies(http)[0]["model"] == "era-standard"
+
+
+def test_no_listed_route_means_no_model_field_so_hermes_uses_its_default(keyfile):
+    t, http = make(keyfile)  # the profile defines no era-* routes
+    t.dispatch("tester", Turn(task="what are the rules"))
+    assert "model" not in chat_bodies(http)[0]
+
+
+def test_an_unlisted_hint_is_never_sent_as_a_raw_model_slug(keyfile):
+    """An unknown `model` would reach the provider as a model id and fail."""
+    http = FakeHttp()
+    http.models = aliases("era-trivial")  # no era-standard
+    t, _ = make(keyfile, http)
+    t.dispatch("tester", Turn(task="what are the rules"))
+    assert "model" not in chat_bodies(http)[0]
+
+
+def test_the_hint_follows_the_task_not_the_bot(keyfile):
+    http = FakeHttp()
+    http.models = aliases("era-trivial", "era-standard", "era-critical")
+    t, _ = make(keyfile, http)
+    t.register(
+        "writer",
+        BotSpec(id="writer", role="W", description="d", prompt="p", capabilities=("vault.create",)),
+    )
+    t.dispatch("writer", Turn(task="hello there"))
+    t.dispatch("writer", Turn(task="save this as a new note"))
+    assert [b["model"] for b in chat_bodies(http)] == ["era-standard", "era-critical"]
+
+
+def test_a_models_listing_failure_never_stops_the_turn(keyfile):
+    http = FakeHttp()
+    http.models = (500, None)
+    t, _ = make(keyfile, http)
+    assert t.dispatch("tester", Turn(task="t")).success
+    assert "model" not in chat_bodies(http)[0]
+
+
+def test_hermes_own_reason_reaches_the_failure_detail(keyfile):
+    http = FakeHttp()
+    http.chats = [(500, {"error": {"message": "Hermes is not logged into Nous Portal."}})]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "LLMUnavailable"
+    assert "HTTP 500" in out.data["detail"] and "not logged into Nous Portal" in out.data["detail"]
 
 
 def test_a_turn_runs_and_logs_the_required_line_with_hermes_usage(keyfile, rec):

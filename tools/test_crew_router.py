@@ -1,14 +1,13 @@
-"""The crew router: five axes -> tier, tiers -> providers, budgets, caches, the required line.
+"""The crew classifier: five axes -> a quality hint, and the Era-side caches.
 
-Only the MODEL providers are faked (FakeExec). The classifier, the budget, the router, the
-caches, the turn loop and the vault bridge are the production code.
-
-Each axis is tested ALONE (flip one input from the all-minimal baseline), as asked.
+Era no longer routes to providers (Hermes does), so there is nothing here about budgets or
+provider chains. What is pinned: each axis alone, shape -> hint, "the tier belongs to the task,
+not the bot", the soft `tier_preference`, the required log line, and the two caches. Only the
+MODEL is faked (ScriptedLLM); the classifier, caches, turn loop and vault bridge are production.
 """
 
 from __future__ import annotations
 
-import json
 import re
 
 import pytest
@@ -16,15 +15,10 @@ import pytest
 from core import cm_vault, vault_bridge
 from core.pending_confirmation import get_shared_store
 from crew import router as cr
-from crew.cache import CrewCaches, ProviderRequestCache, ResponseCache, ToolResultCache
+from crew.cache import CrewCaches, ResponseCache, ToolResultCache
 from crew.registry import load_specs
 from crew.router import (
     Axes,
-    Budget,
-    Policy,
-    ProviderReply,
-    RoutedLLM,
-    Router,
     axis_context_length_tier,
     axis_cost_of_error,
     axis_hop_count,
@@ -153,14 +147,6 @@ def test_either_critical_signal_is_enough_and_both_stay_critical():
     assert tier_for(Axes(True, "long", True, "multi", "high")) == "critical"
 
 
-@pytest.mark.parametrize(
-    "change",
-    [{}, {"needs_tool_calling": True}, {"cost_of_error": "high"}, {"output_verified": True}],
-)
-def test_offline_overrides_every_axis(change):
-    assert tier_for(Axes(**{**BASE.__dict__, **change}), online=False) == "offline"
-
-
 # ── the tier belongs to the TASK, not the bot ───────────────────────────────
 DREW = spec(
     ["vault.search", "vault.read", "vault.create", "vault.append", "vault.replace_staged"],
@@ -170,8 +156,8 @@ MAYA = spec(["vault.search", "vault.read", "vault.create"], bot="maya")
 CODY = spec(["code.propose", "code.check", "vault.read", "vault.search"], bot="cody")
 
 
-def tier_of(bot, task, system="s", user="u", online=True, **ctx):
-    return choose_tier(bot, Turn(task=task, context=ctx), system, user, online=online)[0]
+def tier_of(bot, task, system="s", user="u", **ctx):
+    return choose_tier(bot, Turn(task=task, context=ctx), system, user)[0]
 
 
 def test_the_tier_belongs_to_the_task_not_the_bot():
@@ -213,7 +199,6 @@ def test_tier_preference_is_a_soft_default_not_a_hard_tier():
     assert tier_of(soft, "hello there") == "trivial", "no signal: the preference applies"
     assert tier_of(soft, "save a note") == "critical", "a write task overrides it"
     assert tier_of(soft, "hello", task_shape={"hop_count": "multi"}) == "standard"
-    assert tier_of(soft, "hello there", online=False) == "offline", "never offline"
     long_prompt = "x" * cr.LONG_CONTEXT_CHARS
     assert tier_of(soft, "hello there", user=long_prompt) == "standard", "a long prompt is a signal"
 
@@ -262,33 +247,31 @@ def test_a_handoff_carries_only_its_own_valid_shape(tmp_path):
     assert seen[1].context == {"keep": 1}, "a parent's shape is never inherited"
 
 
-# ── config ──────────────────────────────────────────────────────────────────
-def test_no_tiers_means_no_policy():
-    assert Policy.from_mapping({}) is None
-    assert Policy.from_mapping({"tiers": {}}) is None
-    assert Policy.from_mapping(None) is None
-
-
-def test_unknown_tier_names_are_dropped():
-    p = Policy.from_mapping({"tiers": {"standard": ["ollama"], "bogus": ["x"]}})
-    assert list(p.tiers) == ["standard"]
-
-
-def test_the_shipped_config_is_the_decided_one():
+# ── config: no provider chain on Era's side ─────────────────────────────────
+def test_the_shipped_config_holds_no_provider_chain():
     from core.llm.router import routing_policy
 
-    p = Policy.from_mapping(routing_policy())
-    assert p.tiers == {
-        "trivial": ("ollama", "nous"),
-        "standard": ("claude_cli", "openai"),  # nous is OUT until its terms and limits are known
-        "critical": ("claude_cli", "openai", "nous"),
-        "offline": ("ollama",),
-    }
-    assert "nous" not in p.tiers["standard"]
-    assert p.budget["nous_portal"] == {"daily_turns": 500, "on_exhaust": "next_tier"}
-    assert p.budget["claude_cli"] == {"daily_turns": 200, "on_exhaust": "next_tier"}
-    assert p.budget["openai"] == {"daily_turns": 200, "on_exhaust": "next_tier"}
-    assert p.budget["ollama"] == {"always_available": True, "keep_alive": "30m"}
+    routing = routing_policy()
+    for gone in ("tiers", "budget", "nous"):
+        assert gone not in routing, f"routing.{gone}: Hermes owns providers, fallback and limits"
+    assert routing["cache"] == {"tool_ttl_s": 60, "response_ttl_s": 600}
+
+
+def test_era_holds_no_provider_adapter_and_no_provider_key_for_the_crew():
+    from pathlib import Path
+
+    crew = Path(__file__).resolve().parent.parent / "crew"
+    assert not (crew / "providers.py").exists()
+    source = "".join(p.read_text("utf-8") for p in crew.glob("*.py"))
+    for needle in (
+        "nous_api_key",
+        "NousExecutor",
+        "OllamaExecutor",
+        "ClaudeCliExecutor",
+        "llm_spend",
+        "allow_cross_tier",
+    ):
+        assert needle not in source, needle
 
 
 def test_the_supervisor_launches_era_with_a_warm_ollama_default():
@@ -303,83 +286,7 @@ def test_the_supervisor_launches_era_with_a_warm_ollama_default():
     # being BEFORE `**os.environ` is what lets a value the user already set win
 
 
-def test_real_executors_refuse_to_run_under_pytest():
-    assert cr.OllamaExecutor().available()[0] is False
-    assert cr.ClaudeCliExecutor().available()[0] is False
-
-
-# ── the budget ──────────────────────────────────────────────────────────────
-ROWS = {
-    "claude_cli": {"daily_turns": 2, "on_exhaust": "next_tier"},
-    "nous_portal": {"daily_turns": 1},
-    "ollama": {"always_available": True},
-    "norow_cap": {},
-}
-
-
-def test_the_budget_caps_a_provider_and_ollama_never_runs_out(tmp_path):
-    b = Budget(ROWS, tmp_path / "b.json")
-    assert b.allowed("claude_cli") == (True, "")
-    b.take("claude_cli")
-    b.take("claude_cli")
-    ok, why = b.allowed("claude_cli")
-    assert not ok and "2/2" in why
-    for _ in range(1000):
-        b.take("ollama")
-    assert b.allowed("ollama") == (True, "")
-
-
-def test_nous_is_budgeted_as_nous_portal(tmp_path):
-    b = Budget(ROWS, tmp_path / "b.json")
-    b.take("nous")
-    assert b.used("nous") == 1 and not b.allowed("nous")[0]
-
-
-def test_a_provider_with_no_budget_row_fails_closed(tmp_path):
-    b = Budget(ROWS, tmp_path / "b.json")
-    ok, why = b.allowed("openai")
-    assert not ok and "no budget" in why
-    ok, why = b.allowed("norow_cap")
-    assert not ok
-
-
-def test_the_count_survives_a_restart_but_not_a_new_day(tmp_path):
-    day = ["2026-10-04"]
-    b = Budget(ROWS, tmp_path / "b.json", today=lambda: day[0])
-    b.take("claude_cli")
-    assert Budget(ROWS, tmp_path / "b.json", today=lambda: day[0]).used("claude_cli") == 1
-    day[0] = "2026-10-05"
-    assert b.used("claude_cli") == 0
-    assert Budget(ROWS, tmp_path / "b.json", today=lambda: day[0]).used("claude_cli") == 0
-
-
-def test_a_corrupt_budget_file_starts_the_day_at_zero(tmp_path):
-    p = tmp_path / "b.json"
-    p.write_text("{not json", encoding="utf-8")
-    assert Budget(ROWS, p).used("claude_cli") == 0
-
-
-# ── fakes for the router ────────────────────────────────────────────────────
-class FakeExec:
-    def __init__(self, name, replies=None, avail=True, why="down"):
-        self.name, self.avail, self._why = name, avail, why
-        self.replies = list(replies or [])
-        self.calls: list[tuple[str, str]] = []
-
-    def available(self):
-        return (True, "") if self.avail else (False, self._why)
-
-    def alias_for(self, tier):
-        return f"{self.name}.{tier}"
-
-    def call(self, system, user, tier, timeout_s):
-        self.calls.append((tier, user))
-        item = self.replies.pop(0) if self.replies else json.dumps({"final": "ok"})
-        if isinstance(item, Exception):
-            raise item
-        return ProviderReply(item, 11, 7, "m")
-
-
+# ── the required line ───────────────────────────────────────────────────────
 class Rec:
     def __init__(self):
         self.lines: list[str] = []
@@ -397,215 +304,16 @@ def rec(monkeypatch):
     return r
 
 
-TIERS = {
-    "trivial": ("ollama", "nous"),
-    "standard": ("nous", "claude_cli", "openai"),
-    "critical": ("claude_cli", "openai", "nous"),
-    "offline": ("ollama",),
-}
-
-
-ROOMY = {
-    "claude_cli": {"daily_turns": 100},
-    "nous_portal": {"daily_turns": 100},
-    "openai": {"daily_turns": 100},
-    "ollama": {"always_available": True},
-}
-
-
-def build(tmp_path, execs, rows=None, tiers=None, clock=None):
-    rows = rows or ROOMY
-    policy = Policy(tiers or TIERS, rows, {})
-    kw = {"clock": clock} if clock else {}
-    router = Router(policy, Budget(rows, tmp_path / "b.json"), {e.name: e for e in execs}, **kw)
-    return RoutedLLM(router, CrewCaches.from_config({"response_dir": str(tmp_path / "rc")}))
-
-
-def down(name, why="down"):
-    return FakeExec(name, avail=False, why=why)
-
-
 STANDARD_BOT = spec(["vault.read"])  # tool calling -> standard
-CRITICAL_BOT = spec(["vault.create"], bot="writer")  # can write, unverified -> critical
-TRIVIAL_BOT = spec([], bot="plain")
+CRITICAL_BOT = spec(["vault.create"], bot="writer")  # can write -> critical on a write task
 
 
-def ask(llm, bot=STANDARD_BOT, system="sys", user="usr", task="t", **ctx):
-    return llm.ask(bot, Turn(task=task, context=ctx), system, user)
-
-
-# ── routing ─────────────────────────────────────────────────────────────────
-def test_the_first_usable_provider_in_the_tier_answers_and_the_line_is_exact(tmp_path, rec):
-    nous = down("nous", "no adapter")
-    claude = FakeExec("claude_cli", [json.dumps({"final": "hi"})])
-    llm = build(tmp_path, [nous, claude, down("openai")])
-    assert ask(llm) == {"final": "hi"}
-    assert claude.calls and not nous.calls
-    assert rec.lines == [
-        "[crew] bot=tester tier=standard provider=claude_cli tokens_in=11 tokens_out=7 cached=false"
-    ]
-    assert all(LINE.match(line) for line in rec.lines)
-
-
-def test_an_identical_request_is_served_from_the_provider_cache_for_free(tmp_path, rec):
-    claude = FakeExec("claude_cli")
-    llm = build(tmp_path, [down("nous"), claude])
-    ask(llm)
-    used = llm.router.budget.used("claude_cli")
-    assert ask(llm) == {"final": "ok"}
-    assert len(claude.calls) == 1, "the second identical request must not reach the provider"
-    assert llm.router.budget.used("claude_cli") == used, "a cache hit costs no budget"
-    assert rec.lines[-1].endswith("cached=true") and LINE.match(rec.lines[-1])
-
-
-def test_a_different_request_is_not_served_from_the_cache(tmp_path, rec):
-    claude = FakeExec("claude_cli")
-    llm = build(tmp_path, [down("nous"), claude])
-    ask(llm, user="one")
-    ask(llm, user="two")
-    ask(llm, system="other", user="one")
-    assert len(claude.calls) == 3
-
-
-def test_a_spent_provider_is_skipped_for_the_next_in_the_SAME_tier(tmp_path, rec):
-    rows = {**ROOMY, "claude_cli": {"daily_turns": 1}, "openai": {"daily_turns": 5}}
-    claude, openai = FakeExec("claude_cli"), FakeExec("openai")
-    llm = build(tmp_path, [down("nous"), claude, openai], rows=rows)
-    ask(llm, user="a")
-    ask(llm, user="b")  # claude_cli is spent after one turn
-    assert len(claude.calls) == 1 and len(openai.calls) == 1
-    assert "provider=openai" in rec.lines[-1]
-
-
-def test_an_exhausted_tier_fails_and_never_crosses_without_the_flag(tmp_path, rec):
-    ollama = FakeExec("ollama")
-    llm = build(
-        tmp_path,
-        [down("nous", "no adapter"), down("claude_cli"), down("openai"), ollama],
+def test_log_turn_emits_the_exact_required_line(rec):
+    line = cr.log_turn("drew", "standard", "hermes", 12, 5, False)
+    assert line == (
+        "[crew] bot=drew tier=standard provider=hermes tokens_in=12 tokens_out=5 cached=false"
     )
-    out = ask(llm)
-    assert "__unavailable__" in out and "no adapter" in out["__unavailable__"]
-    assert not ollama.calls, "silent cross-tier routing is a bug"
-    assert rec.lines == [
-        "[crew] bot=tester tier=standard provider=none tokens_in=0 tokens_out=0 cached=false"
-    ]
-    assert not any("cross_tier" in line for line in rec.lines)
-
-
-def test_the_task_flag_allows_a_logged_crossing(tmp_path, rec):
-    ollama = FakeExec("ollama", [json.dumps({"final": "local"})])
-    llm = build(tmp_path, [down("nous"), down("claude_cli"), down("openai"), ollama])
-    # standard -> critical (all down) -> trivial (ollama answers)
-    out = ask(llm, allow_cross_tier=True)
-    assert out == {"final": "local"}
-    crossings = [line for line in rec.lines if "cross_tier" in line]
-    assert len(crossings) == 2 and "from=standard to=critical" in crossings[0]
-    assert "to=trivial" in crossings[1]
-    assert LINE.match(rec.lines[-1]) and "tier=trivial provider=ollama" in rec.lines[-1]
-
-
-@pytest.mark.parametrize("flag", [False, "yes", 1, None])
-def test_only_a_literal_true_flag_allows_crossing(tmp_path, rec, flag):
-    ollama = FakeExec("ollama")
-    llm = build(tmp_path, [down("nous"), down("claude_cli"), down("openai"), ollama])
-    assert "__unavailable__" in ask(llm, allow_cross_tier=flag)
-    assert not ollama.calls
-
-
-def test_a_provider_that_raises_is_skipped_and_cooled_down(tmp_path, rec):
-    t = [0.0]
-    claude = FakeExec("claude_cli", [RuntimeError("boom"), json.dumps({"final": "later"})])
-    openai = FakeExec("openai")
-    llm = build(
-        tmp_path,
-        [down("nous"), claude, openai],
-        clock=lambda: t[0],
-        rows={**ROOMY, "openai": {"daily_turns": 9}},
-    )
-    assert ask(llm, user="a") == {"final": "ok"}  # openai answered after claude_cli failed
-    assert len(claude.calls) == 1
-    ask(llm, user="b")  # still cooling down: claude_cli is not retried
-    assert len(claude.calls) == 1
-    t[0] += cr.COOLDOWN_S + 1
-    assert ask(llm, user="c") == {"final": "later"}  # back in rotation
-    assert len(claude.calls) == 2
-
-
-def test_a_no_network_failure_latches_the_offline_tier(tmp_path, rec):
-    t = [0.0]
-    claude = FakeExec("claude_cli", [ConnectionError("getaddrinfo failed")])
-    ollama = FakeExec("ollama", [json.dumps({"final": "offline answer"})])
-    llm = build(
-        tmp_path,
-        [down("nous"), claude, down("openai"), ollama],
-        clock=lambda: t[0],
-    )
-    assert "__unavailable__" in ask(llm, user="a")  # the failure itself does not cross tiers
-    assert not llm.router.online()
-    assert ask(llm, user="b") == {"final": "offline answer"}
-    assert "tier=offline provider=ollama" in rec.lines[-1]
-    t[0] += cr.OFFLINE_LATCH_S + 1
-    assert llm.router.online()
-
-
-def test_offline_never_crosses_into_the_online_tiers(tmp_path, rec):
-    llm = build(tmp_path, [down("ollama", "not running"), FakeExec("claude_cli")])
-    llm.router._offline_until = 1e12
-    out = ask(llm, allow_cross_tier=True)
-    assert "__unavailable__" in out and "ollama" in out["__unavailable__"]
-
-
-def test_text_with_no_json_is_reported_not_trusted(tmp_path, rec):
-    llm = build(tmp_path, [down("nous"), FakeExec("claude_cli", ["sure thing, I did it"])])
-    assert ask(llm) == {"__bad_output__": "sure thing, I did it"}
-
-
-def test_the_critical_tier_and_trivial_tier_use_their_own_lists(tmp_path, rec):
-    ollama, claude = FakeExec("ollama"), FakeExec("claude_cli")
-    llm = build(tmp_path, [ollama, down("nous"), claude, down("openai")])
-    ask(llm, bot=TRIVIAL_BOT)
-    assert "tier=trivial provider=ollama" in rec.lines[-1]
-    ask(llm, bot=CRITICAL_BOT, task="save this idea")
-    assert "tier=critical provider=claude_cli" in rec.lines[-1]
-
-
-def test_every_emitted_line_has_the_required_shape(tmp_path, rec):
-    llm = build(
-        tmp_path, [FakeExec("ollama"), down("nous"), FakeExec("claude_cli"), down("openai")]
-    )
-    ask(llm, bot=TRIVIAL_BOT)
-    ask(llm, bot=TRIVIAL_BOT)  # cached
-    ask(llm, bot=CRITICAL_BOT, task="save this idea")
-    ask(llm, bot=spec(["vault.read"], bot="nothing"), user="y")
-    llm.router.executors["claude_cli"].avail = False
-    llm.router.executors["ollama"].avail = False
-    ask(llm, bot=CRITICAL_BOT, user="z", task="save this idea")  # no provider at all
-    assert len(rec.lines) == 5
-    assert all(LINE.match(line) for line in rec.lines), rec.lines
-
-
-def test_the_same_bot_gets_a_different_tier_for_a_different_task(tmp_path, rec):
-    llm = build(tmp_path, [down("nous"), FakeExec("claude_cli"), down("openai")])
-    ask(llm, bot=CRITICAL_BOT, task="find the note about tone")
-    assert "bot=writer tier=standard" in rec.lines[-1]
-    ask(llm, bot=CRITICAL_BOT, task="save this idea", user="other")
-    assert "bot=writer tier=critical" in rec.lines[-1]
-
-
-def test_a_rate_limited_provider_is_skipped_for_as_long_as_it_asked(tmp_path, rec):
-    from crew.providers import RateLimited
-
-    t = [0.0]
-    claude = FakeExec("claude_cli", [RateLimited("slow down", retry_after_s=300)])
-    openai = FakeExec("openai")
-    llm = build(tmp_path, [down("nous"), claude, openai], clock=lambda: t[0])
-    ask(llm, user="a")  # claude_cli rate-limits, openai answers
-    t[0] += cr.COOLDOWN_S + 1  # the default cooldown has passed, Retry-After has not
-    ask(llm, user="b")
-    assert len(claude.calls) == 1, "must wait the 300 s it asked for, not the default 60"
-    t[0] += 300
-    ask(llm, user="c")
-    assert len(claude.calls) == 2
+    assert rec.lines == [line] and LINE.match(line)
 
 
 # ── the caches ──────────────────────────────────────────────────────────────
@@ -617,22 +325,15 @@ class Clock:
         return self.t
 
 
-def test_the_provider_cache_ttl_is_configurable_and_zero_disables_it():
-    c = Clock()
-    cache = ProviderRequestCache(5.0, clock=c)
-    cache.put("k", "v")
-    assert cache.get("k") == "v"
-    c.t += 6
-    assert cache.get("k") is None
-    off = ProviderRequestCache(0.0, clock=c)
-    off.put("k", "v")
-    assert off.get("k") is None
-
-
 def test_caches_can_be_switched_off_by_config(tmp_path):
     caches = CrewCaches.from_config({"enabled": False, "response_dir": str(tmp_path)})
-    caches.provider.put("k", "v")
-    assert caches.provider.get("k") is None
+    from core.tool_result import ToolResult
+
+    s, turn = spec(["vault.read"]), Turn(task="t")
+    caches.tool.put("k", ToolResult.ok(message="m"))
+    caches.response.put(s, turn, ToolResult.ok(message="a", data={"capabilities_used": []}))
+    assert caches.tool.get("k") is None and caches.response.get(s, turn) is None
+    assert not list(tmp_path.glob("*.json"))
 
 
 def test_the_tool_cache_key_includes_the_brand_scope():
@@ -730,7 +431,7 @@ def test_a_vault_write_drops_cached_answers_and_reads(tmp_path, monkeypatch):
     assert tools.get("k") is None, "a read from before the write must not be served"
 
 
-# ── the transport, wired to the router and the caches ───────────────────────
+# ── the transport, wired to the classifier and the caches ───────────────────
 @pytest.fixture
 def vault(tmp_path, monkeypatch):
     root = tmp_path / "era_brain"
@@ -750,66 +451,61 @@ def vault(tmp_path, monkeypatch):
     get_shared_store().clear()
 
 
-def transport(tmp_path, execs, bot):
-    llm = build(tmp_path, execs)
-    t = InProcessTransport(routed=llm)
+def transport(tmp_path, llm, bot):
+    caches = CrewCaches.from_config({"response_dir": str(tmp_path / "rc")})
+    t = InProcessTransport(llm, caches=caches)
     t.register(bot.id, bot)
     return t
 
 
-def reply(obj):
-    return json.dumps(obj)
-
-
 def test_a_turn_through_the_transport_logs_one_line_per_model_call(tmp_path, vault, rec):
-    claude = FakeExec(
-        "claude_cli",
-        [reply(call("vault.read", title="Rules")), reply(final("Never mix stone families."))],
+    llm = ScriptedLLM(
+        {"tester": [call("vault.read", title="Rules"), final("Never mix stone families.")]}
     )
-    t = transport(tmp_path, [down("nous"), claude], STANDARD_BOT)
-    out = t.dispatch("tester", Turn(task="what are the rules"))
+    out = transport(tmp_path, llm, STANDARD_BOT).dispatch("tester", Turn(task="what are the rules"))
     assert out.success and "stone" in out.message
     assert len(rec.lines) == 2 and all(LINE.match(line) for line in rec.lines), rec.lines
-    assert all("bot=tester tier=standard provider=claude_cli" in line for line in rec.lines)
+    assert all("bot=tester tier=standard provider=injected" in line for line in rec.lines)
 
 
-def test_no_provider_is_a_typed_llm_unavailable_with_the_reasons(tmp_path, vault, rec):
-    t = transport(
-        tmp_path,
-        [down("nous", "no Nous adapter yet"), down("claude_cli"), down("openai")],
-        STANDARD_BOT,
-    )
-    out = t.dispatch("tester", Turn(task="t"))
+def test_the_hint_in_the_line_follows_the_task_not_the_bot(tmp_path, vault, rec):
+    llm = ScriptedLLM({"writer": [final("a"), final("b")]})
+    t = transport(tmp_path, llm, CRITICAL_BOT)
+    t.dispatch("writer", Turn(task="hello there"))
+    t.dispatch("writer", Turn(task="save an idea as a new note"))
+    assert "tier=standard" in rec.lines[0] and "tier=critical" in rec.lines[1], rec.lines
+
+
+def test_no_model_is_a_typed_llm_unavailable_with_the_reason(tmp_path, vault, rec):
+    def down(system, user, tier):
+        return {"__unavailable__": "Hermes answered HTTP 502"}
+
+    out = transport(tmp_path, down, STANDARD_BOT).dispatch("tester", Turn(task="t"))
     assert_crew_failure_shape(out)
-    assert out.error_type == "LLMUnavailable" and "no Nous adapter yet" in out.data["detail"]
+    assert out.error_type == "LLMUnavailable" and "HTTP 502" in out.data["detail"]
 
 
-def test_an_injected_llm_keeps_the_old_behaviour_and_still_logs_the_line(tmp_path, vault, rec):
+def test_an_injected_llm_without_caches_asks_again_every_time(tmp_path, vault, rec):
     llm = ScriptedLLM({"tester": [final("done")]})
     t = InProcessTransport(llm)
     t.register("tester", STANDARD_BOT)
     assert t.dispatch("tester", Turn(task="t")).success
     assert len(rec.lines) == 1 and LINE.match(rec.lines[0]) and "provider=injected" in rec.lines[0]
-    # The script is now empty. A cache would answer the same request again; the old
-    # behaviour asks the model again, and the model has nothing left to say.
+    # The script is now empty. A cache would answer the same request again; with none, the
+    # model is asked again, and the model has nothing left to say.
     again = t.dispatch("tester", Turn(task="t"))
     assert again.error_type == "LLMUnavailable"
 
 
 def test_a_pure_read_answer_is_replayed_until_the_vault_changes(tmp_path, vault, rec):
-    claude = FakeExec(
-        "claude_cli",
-        [
-            reply(call("vault.read", title="Rules")),
-            reply(final("Never mix.")),
-            reply(final("fresh")),
-        ],
+    llm = ScriptedLLM(
+        {"tester": [call("vault.read", title="Rules"), final("Never mix."), final("fresh")]}
     )
-    t = transport(tmp_path, [down("nous"), claude], STANDARD_BOT)
+    t = transport(tmp_path, llm, STANDARD_BOT)
     first = t.dispatch("tester", Turn(task="rules?"))
-    n = len(claude.calls)
+    n = len(llm.calls)
     second = t.dispatch("tester", Turn(task="rules?"))
-    assert second.message == first.message and len(claude.calls) == n, "served from cache"
+    assert second.message == first.message and len(llm.calls) == n, "served from cache"
     assert second.data.get("response_cache") is True
     assert rec.lines[-1] == (
         "[crew] bot=tester tier=cache provider=response_cache tokens_in=0 tokens_out=0 cached=true"
@@ -821,28 +517,25 @@ def test_a_pure_read_answer_is_replayed_until_the_vault_changes(tmp_path, vault,
     assert not third.data.get("response_cache"), (
         "an answer from before the write must not be replayed"
     )
-    assert len(claude.calls) > n, "the changed note makes a different prompt, so the model is asked"
+    assert len(llm.calls) > n, "the vault changed, so the model is asked again"
     assert third.success and third.message == "fresh"
 
 
 def test_an_unrelated_vault_write_still_drops_the_response_cache(tmp_path, vault, rec):
-    """Coarse on purpose: ANY verified write drops cached answers. The provider cache
-    (keyed on the full prompt, observations included) is what spares the model call."""
-    claude = FakeExec("claude_cli", [reply(final("one")), reply(final("two"))])
-    t = transport(tmp_path, [down("nous"), claude], STANDARD_BOT)
+    """Coarse on purpose: ANY verified write drops cached answers."""
+    llm = ScriptedLLM({"tester": [final("one"), final("two")]})
+    t = transport(tmp_path, llm, STANDARD_BOT)
     t.dispatch("tester", Turn(task="hello"))
     vault_bridge.write_verified(vault / "00 - Inbox" / "x.md", "# x\n")
     again = t.dispatch("tester", Turn(task="hello"))
-    assert not again.data.get("response_cache")
+    assert not again.data.get("response_cache") and again.message == "two"
     assert not any("provider=response_cache" in line for line in rec.lines)
 
 
 def test_an_answer_that_wrote_something_is_never_replayed(tmp_path, vault, rec):
-    claude = FakeExec(
-        "claude_cli",
-        [reply(call("vault.create", title="Idea one", content="a thought")), reply(final("saved"))],
-    )
-    t = transport(tmp_path, [claude, down("nous"), down("openai")], CRITICAL_BOT)
+    write = call("vault.create", title="Idea one", content="a thought")
+    llm = ScriptedLLM({"writer": [write, final("saved"), write, final("saved")]})
+    t = transport(tmp_path, llm, CRITICAL_BOT)
     a = t.dispatch("writer", Turn(task="save an idea"))
     b = t.dispatch("writer", Turn(task="save an idea"))
     assert a.success and "vault.create" in a.data["capabilities_used"]
@@ -865,15 +558,16 @@ def test_vault_read_is_cached_inside_the_transport_for_the_same_scope(tmp_path, 
         real.name, real.description, real.args, counting
     )
     try:
-        claude = FakeExec(
-            "claude_cli",
-            [
-                reply(call("vault.read", title="Rules")),
-                reply(call("vault.read", title="Rules")),
-                reply(final("done")),
-            ],
+        llm = ScriptedLLM(
+            {
+                "tester": [
+                    call("vault.read", title="Rules"),
+                    call("vault.read", title="Rules"),
+                    final("done"),
+                ]
+            }
         )
-        t = transport(tmp_path, [down("nous"), claude], STANDARD_BOT)
+        t = transport(tmp_path, llm, STANDARD_BOT)
         assert t.dispatch("tester", Turn(task="read it twice")).success
     finally:
         caps.CAPABILITIES["vault.read"] = real

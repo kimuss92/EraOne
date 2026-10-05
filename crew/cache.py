@@ -1,4 +1,4 @@
-"""crew/cache.py — the three caches of the crew routing layer.
+"""crew/cache.py — the two Era-side caches of a crew turn.
 
   1. TOOL RESULT      `vault.read` results, 60 s. In memory. Dropped the moment any verified
                       vault write happens (core.vault_bridge.write_generation), so a write —
@@ -10,11 +10,10 @@
                       proposed code, or was reviewed is never replayed (replaying "I created the
                       note" without creating it would be a lie). Bounded by a TTL and by the
                       vault write generation within one process.
-  3. PROVIDER REQUEST hash of the full request -> reply, in memory, TTL configurable. A hit costs
-                      no budget and is logged `cached=true`.
 
-All three degrade: a corrupt cache file or a failed write is a miss, never an error for the
-turn. Nothing here decides routing; crew/router.py does.
+Both degrade: a corrupt cache file or a failed write is a miss, never an error for the turn.
+There is no provider-request cache: Era no longer talks to a provider, and Hermes caches the
+prompt prefix itself.
 """
 
 from __future__ import annotations
@@ -36,7 +35,6 @@ from core.utils import BASE_DIR
 
 TOOL_TTL_S = 60.0
 DEFAULT_RESPONSE_TTL_S = 600.0
-DEFAULT_PROVIDER_TTL_S = 120.0
 _MAX_RESPONSE_FILES = 200
 _PURE_READ = frozenset({"vault.read", "vault.search"})
 BOOT_ID = secrets.token_hex(4)  # generation counters only compare within one process
@@ -120,26 +118,6 @@ class ToolResultCache:
         # Only a success is worth replaying; a failure may be transient (a held lock).
         if result.success:
             self._cache.put(key, result, _vault_generation())
-
-    def clear(self) -> None:
-        self._cache.clear()
-
-
-class ProviderRequestCache:
-    """Layer 3: full request -> reply. In memory; TTL from `routing.cache.provider_ttl_s`."""
-
-    def __init__(self, ttl_s: float = DEFAULT_PROVIDER_TTL_S, clock=time.monotonic):
-        self._cache = TTLCache(ttl_s, clock=clock)
-
-    @staticmethod
-    def key(provider: str, alias: str, system: str, user: str) -> str:
-        return sha(provider, alias, system, user)
-
-    def get(self, key: str):
-        return self._cache.get(key)
-
-    def put(self, key: str, reply) -> None:
-        self._cache.put(key, reply)
 
     def clear(self) -> None:
         self._cache.clear()
@@ -240,29 +218,26 @@ class ResponseCache:
 
 
 class CrewCaches:
-    """The three layers, built from `routing.cache` (every key optional)."""
+    """The two layers, built from `routing.cache` (every key optional)."""
 
     def __init__(
         self,
         tool: ToolResultCache | None = None,
         response: ResponseCache | None = None,
-        provider: ProviderRequestCache | None = None,
     ) -> None:
         self.tool = tool or ToolResultCache()
         self.response = response or ResponseCache()
-        self.provider = provider or ProviderRequestCache()
 
     @classmethod
     def from_config(cls, cfg: dict | None) -> CrewCaches:
         cfg = dict(cfg or {})
         if cfg.get("enabled") is False:
             # Zero TTLs: every get misses and every put is dropped.
-            return cls(ToolResultCache(0.0), ResponseCache(ttl_s=0.0), ProviderRequestCache(0.0))
+            return cls(ToolResultCache(0.0), ResponseCache(ttl_s=0.0))
         return cls(
             ToolResultCache(float(cfg.get("tool_ttl_s", TOOL_TTL_S))),
             ResponseCache(
                 Path(cfg["response_dir"]) if cfg.get("response_dir") else None,
                 float(cfg.get("response_ttl_s", DEFAULT_RESPONSE_TTL_S)),
             ),
-            ProviderRequestCache(float(cfg.get("provider_ttl_s", DEFAULT_PROVIDER_TTL_S))),
         )
