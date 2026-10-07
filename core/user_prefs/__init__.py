@@ -54,11 +54,6 @@ _DEFAULT: dict[str, Any] = {
     # confirmation (safety_guard.classify_action). Default False: file creation
     # keeps its MEDIUM confirmation gate until the user explicitly waives it.
     "file_creation_confirmation_waived": False,
-    # When True, a claude_bridge ask/reply that the user has ALREADY authorized
-    # by naming Claude in their own words skips the extra MEDIUM confirmation and
-    # is sent directly. Default False. This never waives the user-words gate —
-    # that injection boundary is always enforced (see claude_send_waiver.py).
-    "claude_send_confirmation_waived": False,
     # category -> {"active": bool, "changed_at": iso}. Per-category HIGH-risk
     # confirmation waivers (risk_waiver.WAIVABLE) — never one global switch.
     "risk_confirmation_waived": {},
@@ -102,8 +97,6 @@ def _load_unlocked() -> dict[str, Any]:
                 merged["auto_memory"] = True
             if not isinstance(merged.get("file_creation_confirmation_waived"), bool):
                 merged["file_creation_confirmation_waived"] = False
-            if not isinstance(merged.get("claude_send_confirmation_waived"), bool):
-                merged["claude_send_confirmation_waived"] = False
             if not isinstance(merged.get("risk_confirmation_waived"), dict):
                 merged["risk_confirmation_waived"] = {}
             if not isinstance(merged.get("voice_lock_enabled"), bool):
@@ -140,10 +133,6 @@ from core.user_prefs.behavior_rules import (  # noqa: E402
     add_behavior_rule,
     get_behavior_rules,
     remove_behavior_rule,
-)
-from core.user_prefs.claude_send_waiver import (  # noqa: E402
-    is_claude_send_confirmation_waived,
-    set_claude_send_confirmation_waiver,
 )
 from core.user_prefs.close_waiver import (  # noqa: E402
     is_close_confirmation_waived,
@@ -189,8 +178,6 @@ __all__ = [
     "list_close_waivers",
     "set_file_creation_confirmation_waiver",
     "is_file_creation_confirmation_waived",
-    "set_claude_send_confirmation_waiver",
-    "is_claude_send_confirmation_waived",
     "set_post_action_minimize",
     "is_post_action_minimize",
     "list_post_action_minimize",

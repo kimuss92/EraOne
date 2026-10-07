@@ -1,0 +1,168 @@
+........................................................................ [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+........................................................................ [ 40%]
+........................................................................ [ 50%]
+........................................................................ [ 60%]
+........................................................................ [ 70%]
+........................................................................ [ 80%]
+........................................................................ [ 90%]
+........F.............................F..F..F.........................   [100%]
+=================================== FAILURES ===================================
+___________ TestVisionSilentMode.test_candidates_fallback_extraction ___________
+
+self = <test_vision_silent.TestVisionSilentMode testMethod=test_candidates_fallback_extraction>
+
+    def test_candidates_fallback_extraction(self):
+        from actions.screen_processor import analyze_image_once
+    
+        mock_response = MagicMock()
+        type(mock_response).text = PropertyMock(side_effect=ValueError("no text"))
+        part = MagicMock()
+        part.text = "Extracted from parts"
+        candidate_content = MagicMock()
+        candidate_content.parts = [part]
+        candidate = MagicMock()
+        candidate.content = candidate_content
+        mock_response.candidates = [candidate]
+    
+        with patch("actions.screen_processor.get_vision_client") as mock_get_client:
+            mock_client_instance = MagicMock()
+            mock_get_client.return_value = mock_client_instance
+            mock_client_instance.models.generate_content.return_value = mock_response
+    
+            result = analyze_image_once(b"fake-image", "image/png", "What do you see?")
+    
+>           self.assertEqual(result, "Extracted from parts")
+E           AssertionError: 'I could not analyze the screen quickly enough.' != 'Extracted from parts'
+E           - I could not analyze the screen quickly enough.
+E           + Extracted from parts
+
+tools/test_vision_silent.py:379: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[Vision] ollama unavailable - skipping
+[Vision] gemini unavailable - skipping
+[Vision] openai unavailable - skipping
+________ TestVisionClientReuse.test_get_vision_client_returns_singleton ________
+
+self = <test_vision_silent.TestVisionClientReuse testMethod=test_get_vision_client_returns_singleton>
+
+    def test_get_vision_client_returns_singleton(self):
+        import actions.screen_processor as sp_module
+    
+        with patch("actions.screen_processor.genai.Client") as mock_client:
+            mock_instance = MagicMock()
+            mock_client.return_value = mock_instance
+    
+>           client1 = sp_module.get_vision_client()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tools/test_vision_silent.py:417: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+actions/screen_processor.py:250: in get_vision_client
+    _VISION_CLIENT = genai.Client(api_key=get_vision_api_key())
+                                          ^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def get_vision_api_key() -> str:
+        """Resolve vision-specific Gemini key with fallback chain.
+    
+        Resolution order:
+        1. gemini_vision_api_key / GEMINI_VISION_API_KEY (config)
+        2. GEMINI_VISION_API_KEY (environment variable)
+        3. gemini_api_key / GEMINI_API_KEY (config — main key)
+        4. GEMINI_API_KEY (environment variable)
+        """
+        cfg = load_config()
+        for config_key in ("gemini_vision_api_key", "GEMINI_VISION_API_KEY"):
+            val = cfg.get(config_key, "")
+            if val:
+                return val
+        env_val = os.environ.get("GEMINI_VISION_API_KEY", "")
+        if env_val:
+            return env_val
+        for config_key in ("gemini_api_key", "GEMINI_API_KEY"):
+            val = cfg.get(config_key, "")
+            if val:
+                return val
+        env_val = os.environ.get("GEMINI_API_KEY", "")
+        if env_val:
+            return env_val
+>       raise RuntimeError(
+            "No Gemini API key found for vision "
+            "(checked gemini_vision_api_key, GEMINI_VISION_API_KEY, "
+            "gemini_api_key, GEMINI_API_KEY)"
+        )
+E       RuntimeError: No Gemini API key found for vision (checked gemini_vision_api_key, GEMINI_VISION_API_KEY, gemini_api_key, GEMINI_API_KEY)
+
+core/utils.py:175: RuntimeError
+________________ TestVisionCache.test_cache_key_includes_angle _________________
+
+self = <test_vision_silent.TestVisionCache testMethod=test_cache_key_includes_angle>
+
+    def test_cache_key_includes_angle(self):
+        import actions.screen_processor as sp_module
+    
+        sp_module._CACHE.clear()
+    
+        with patch("actions.screen_processor._capture_screen") as mock_cap:
+            mock_cap.return_value = (b"image-data", "image/png", 1000, 800)
+    
+            with patch("actions.screen_processor.analyze_image_once") as mock_analyze:
+                mock_analyze.return_value = "Screen result."
+    
+                result1 = sp_module.screen_process(
+                    {"text": "What is on screen?", "angle": "screen"}
+                )
+                result2 = sp_module.screen_process(
+                    {"text": "What is on screen?", "angle": "camera"}
+                )
+    
+                self.assertEqual(result1, "Screen result.")
+>               self.assertEqual(result2, "Screen result.")
+E               AssertionError: 'I could not analyze the screen.' != 'Screen result.'
+E               - I could not analyze the screen.
+E               + Screen result.
+
+tools/test_vision_silent.py:493: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[Vision] ▶ angle='screen'  question='What is on screen?'
+[Vision] 🖥️  Screen: 1,000 bytes (opt: 800)
+[Vision] api=0.0ms total=0.1ms
+[Vision] ▶ angle='camera'  question='What is on screen?'
+[Vision] ❌ Capture error: OpenCV (cv2) is not installed. Run: pip install opencv-python
+__________ TestVisionResponseTruncation.test_long_response_truncated ___________
+
+self = <test_vision_silent.TestVisionResponseTruncation testMethod=test_long_response_truncated>
+
+    def test_long_response_truncated(self):
+        import actions.screen_processor as sp_module
+        from actions.screen_processor import analyze_image_once
+    
+        long_text = "A" * 1000
+    
+        mock_response = MagicMock()
+        type(mock_response).text = PropertyMock(return_value=long_text)
+    
+        with patch.object(sp_module, "_MAX_RESPONSE_CHARS", 800):
+            with patch("actions.screen_processor.get_vision_client") as mock_get_client:
+                mock_client_instance = MagicMock()
+                mock_get_client.return_value = mock_client_instance
+                mock_client_instance.models.generate_content.return_value = mock_response
+    
+                result = analyze_image_once(b"fake", "image/png", "Question?")
+    
+>               self.assertEqual(len(result), 800)
+E               AssertionError: 46 != 800
+
+tools/test_vision_silent.py:525: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[Vision] ollama unavailable - skipping
+[Vision] gemini unavailable - skipping
+[Vision] openai unavailable - skipping
+=========================== short test summary info ============================
+FAILED tools/test_vision_silent.py::TestVisionSilentMode::test_candidates_fallback_extraction
+FAILED tools/test_vision_silent.py::TestVisionClientReuse::test_get_vision_client_returns_singleton
+FAILED tools/test_vision_silent.py::TestVisionCache::test_cache_key_includes_angle
+FAILED tools/test_vision_silent.py::TestVisionResponseTruncation::test_long_response_truncated
+4 failed, 714 passed in 10.73s

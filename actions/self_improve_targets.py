@@ -133,3 +133,9 @@ def find_target_files(text: str, limit: int = 8) -> list[tuple[int, str]]:
             ranked.append((score, f.relative_to(REPO_ROOT).as_posix()))
     ranked.sort(key=lambda x: (-x[0], x[1]))
     return ranked[:limit]
+
+
+def description_tokens(text: str) -> set[str]:
+    """Shared, dependency-free vocabulary for source discovery."""
+    tokens = {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
+    return tokens | {t.rstrip("s") for t in tokens if len(t) > 3}

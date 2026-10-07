@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def _progress(value: int, phase: str) -> None:
+    target = ROOT / "runtime/development_progress.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"progress": value, "phase": phase}), encoding="utf-8")
+    os.replace(temporary, target)
+
+
 def verify(candidate: dict) -> dict:
     from actions import self_improve as si
     from actions.self_diagnosis import run_self_diagnosis
@@ -28,6 +36,7 @@ def verify(candidate: dict) -> dict:
     ]
     si._find_test_files = lambda target: []
     si._MAX_MODEL_REPAIRS = 0
+    _progress(25, "Applying staged source")
     for rel, content in files.items():
         target = ROOT / rel
         if target.suffix == ".py":
@@ -55,6 +64,7 @@ def verify(candidate: dict) -> dict:
 
     refresh_manifest([])
     result = {"syntax": True, "passed": False, "frontend": False}
+    _progress(35, "Checking syntax and lint")
     python_files = [rel for rel in files if rel.endswith(".py")]
     if python_files:
         subprocess.run(
@@ -90,8 +100,10 @@ def verify(candidate: dict) -> dict:
         "tools/test_task_scheduler_authority.py",
         "tools/test_visual_engine.py",
         "tools/test_development.py",
+        "tools/test_autonomy_recovery.py",
     ]
     test_paths = list(dict.fromkeys(candidate["tests"] + baseline))
+    _progress(45, "Running candidate and fixed regression tests")
     tests = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", *test_paths, "--timeout=40"],
         cwd=ROOT,
@@ -102,6 +114,7 @@ def verify(candidate: dict) -> dict:
     print(tests.stdout, tests.stderr)
     result["tests"] = tests.returncode == 0
     result["test_summary"] = (tests.stdout + tests.stderr)[-5000:]
+    _progress(70, "Checking feature and frontend wiring")
     if any(rel.startswith("ui_src/") for rel in files):
         npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
         if npm is None:
@@ -118,6 +131,7 @@ def verify(candidate: dict) -> dict:
             if process.returncode:
                 raise ValueError("Frontend install/typecheck/build failed")
         result["frontend"] = True
+    _progress(90, "Validating feature contract")
     from core import feature_engine
 
     feature_engine.install(
@@ -126,6 +140,7 @@ def verify(candidate: dict) -> dict:
     result["feature_contract"] = True
     # Diagnostics are real and reported separately: a copied workspace has no
     # user credentials/devices, so Doctor may report configuration limitations.
+    _progress(95, "Running self diagnosis")
     result["diagnosis"] = run_self_diagnosis({"deep": False})
     result["passed"] = bool(result["syntax"] and result["lint"] and result["tests"])
     return result

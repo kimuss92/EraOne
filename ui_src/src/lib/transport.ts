@@ -11,6 +11,7 @@ import type {
   ToolRun,
 } from './types';
 import { cue } from './sounds';
+import { STATE_HUE } from './format';
 import { noticeFromEvent, resolve } from './notifications';
 
 // ── Where the backend is, and how to prove we may talk to it ────────────
@@ -210,16 +211,21 @@ function mapCatalog(rows: unknown): ModelChoice[] {
 function applySnapshot(d: Record<string, any>): void {
   lastStateSeq = 0;
   setState({
-    agent: { state: d.state as AgentState, label: String(d.label || ''), seq: 0 },
-    connection: d.connection,
+    agent: { state: (typeof d.state === "string" && d.state in STATE_HUE ? d.state : "idle") as AgentState, label: String(d.label || ''), seq: 0 },
+    connection: d.connection && typeof d.connection === "object" ? d.connection : { kind: "unknown", label: "Unknown", status: "" },
     standby: Boolean(d.standby),
     micActive: Boolean(d.micActive),
     voiceActive: Boolean(d.voiceActive),
-    transcript: d.transcript,
-    tools: (d.tools as ToolRun[]) || [],
-    cards: (d.cards as ContextCard[]) || [],
-    sources: (d.sources as Source[]) || [],
-    conversation: (d.conversation as ConversationEntry[]) || [],
+    transcript: {
+      user: typeof d.transcript?.user === 'string' ? d.transcript.user : '',
+      response: typeof d.transcript?.response === 'string' ? d.transcript.response : '',
+      userFinal: Boolean(d.transcript?.userFinal), responding: Boolean(d.transcript?.responding),
+      userAt: Number(d.transcript?.userAt) || undefined, respAt: Number(d.transcript?.respAt) || undefined,
+    },
+    tools: Array.isArray(d.tools) ? d.tools.filter((t: any) => t && typeof t.id === "string" && typeof t.activity === "string" && typeof t.status === "string") : [],
+    cards: Array.isArray(d.cards) ? d.cards.filter((c: any) => c && typeof c.id === "string" && typeof c.title === "string" && typeof c.subtitle === "string") : [],
+    sources: Array.isArray(d.sources) ? d.sources.filter((s: any) => s && typeof s.id === "string" && typeof s.title === "string") : [],
+    conversation: Array.isArray(d.conversation) ? d.conversation.filter((c: any) => c && typeof c.id === "string" && typeof c.text === "string") : [],
     latency: d.latency || null,
     memory: d.memory || getState().memory,
     backendStartedAt: Number(d.startedAt) || null,

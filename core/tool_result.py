@@ -9,6 +9,15 @@ VERIFIED = "VERIFIED"
 FAILED = "FAILED"
 SKIPPED = "SKIPPED"
 
+# Error types that mean "a gate or confirmation held the call", i.e. the safety
+# layer working as designed — NOT a real fault. self_diagnosis and
+# tool_dispatch._log_caught_exception both read this to avoid counting a held
+# gate as a defect. (Relocated here 2026-10-06 from the removed
+# core/claude_error_router.py so it outlives that module.)
+BENIGN_ERROR_TYPES = frozenset(
+    {"BlockedAction", "ConfirmationFailed", "ConfirmationRequired", "UserCancelled"}
+)
+
 # Phrases that indicate failure (substring match — multi-word)
 _FAILURE_PHRASES = (
     "could not",

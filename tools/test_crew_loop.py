@@ -191,6 +191,39 @@ class TestTurnLoop:
         assert_crew_failure_shape(res)
         assert res.error_type == "StepLimit"
 
+    def test_an_identical_repeated_read_runs_once_and_is_flagged_redundant(self, vault):
+        # Drew searches, then re-issues the exact same search, then finishes.
+        t, llm = crew(
+            {
+                "drew": [
+                    call("vault.search", query="cadence"),
+                    call("vault.search", query="cadence"),
+                    final("done"),
+                ]
+            }
+        )
+        res = ask(t, "drew")
+        assert res.success and res.data["steps"] == 3
+        # The repeat was answered from what it already had, not executed again.
+        assert res.data["capabilities_used"] == ["vault.search"]
+        # ...and the model was told so, so it can finish instead of looping.
+        assert "REDUNDANT" in llm.calls[2][1]
+
+    def test_the_same_read_with_different_args_is_not_deduped(self, vault):
+        t, llm = crew(
+            {
+                "drew": [
+                    call("vault.search", query="cadence"),
+                    call("vault.search", query="budget"),
+                    final("done"),
+                ]
+            }
+        )
+        res = ask(t, "drew")
+        assert res.success
+        assert res.data["capabilities_used"] == ["vault.search", "vault.search"]
+        assert "REDUNDANT" not in llm.calls[2][1]
+
     def test_model_unavailable_is_a_shaped_failure(self, vault):
         t, _ = crew({})
         res = ask(t, "drew")

@@ -64,6 +64,12 @@ KEY_ENTRY = "hermes_era_one_api_key"
 RECHECK_S = 300.0
 CHAT_TIMEOUT_S = 90.0
 PROBE_TIMEOUT_S = 5.0
+# A single transient probe failure — the gateway still binding 8642 right after
+# login, a provider cold start, a GC pause — must not refuse a whole crew turn.
+# Retry the probe a few times before failing closed; only transport-level errors
+# are retried (an HTTP 200/401/404 answer still decides, so fail-closed stands).
+PROBE_RETRIES = 3
+PROBE_RETRY_PAUSE_S = 0.6
 _LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # http(method, url, headers, body_or_None, timeout) -> (status, parsed_json_or_None)
@@ -154,6 +160,27 @@ class HermesAgentTransport(InProcessTransport):
     def _headers(self, key: str) -> dict:
         return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
+    def _probe_get(self, url: str, key: str) -> tuple[int, Any]:
+        """GET a probe endpoint, absorbing a TRANSIENT transport failure.
+
+        A single timeout or dropped connection — the gateway still binding 8642
+        right after login, a provider cold start, a GC pause — must not refuse a
+        whole crew turn. Only transport-level exceptions are retried; any HTTP
+        answer (200/401/404) returns at once, so the fail-closed checks on the
+        status and body still decide whether the turn may run. Raises the last
+        exception only when EVERY attempt failed to reach the gateway.
+        """
+        last: Exception | None = None
+        for i in range(max(1, PROBE_RETRIES)):
+            try:
+                return self._http("GET", url, self._headers(key), None, PROBE_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - transient; retried below
+                last = exc
+                if i + 1 < PROBE_RETRIES:
+                    time.sleep(PROBE_RETRY_PAUSE_S)
+        assert last is not None
+        raise last
+
     def _gateway_check(self) -> str:
         """Key present, gateway reachable, NOTHING enabled. Returns the key; raises _Refused."""
         try:
@@ -163,9 +190,7 @@ class HermesAgentTransport(InProcessTransport):
         if self._clock() < self._toolsets_ok_until:
             return key
         try:
-            status, body = self._http(
-                "GET", f"{self._base}/v1/toolsets", self._headers(key), None, PROBE_TIMEOUT_S
-            )
+            status, body = self._probe_get(f"{self._base}/v1/toolsets", key)
         except Exception as exc:  # noqa: BLE001 - unreachable gateway, timeout, refused
             raise _Refused(
                 "TransportDown", f"the Hermes gateway is unreachable ({type(exc).__name__})"

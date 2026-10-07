@@ -26,7 +26,7 @@ def inspire(query="open source python desktop AI assistant agent features 2026",
     for attempt in range(retries):
         try:
             r = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=f"Find similar open-source AI desktop agent projects on GitHub. "
                 f"List 3-5 notable repositories and 2-3 features they have "
                 f"that EraOne (a Python desktop AI with voice/media/browser control) could adopt. "

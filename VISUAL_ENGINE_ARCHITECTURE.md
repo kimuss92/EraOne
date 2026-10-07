@@ -1,3 +1,5 @@
+Current HUD layout: the empty Live Workspace toolbar is removed. Development is a header button immediately left of the clock; its controls are in a dedicated drawer. Development progress is shown in left Live Activity. See AUTONOMY_HUD_RELEASE.md for discovery, bounded repair, and memory changes.
+
 # Live HUD and autonomous development
 
 This update retains the prior stability and Autopilot repairs. It implements a

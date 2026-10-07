@@ -123,7 +123,7 @@ def _parse_date(raw: str) -> str:
     try:
         # migrated: using _GeminiModel / google-genai
 
-        model = _GeminiModel("gemini-2.5-flash-lite")
+        model = _GeminiModel("gemini-3.1-flash-lite")
         response = model.generate_content(
             f"Today is {today.strftime('%Y-%m-%d')}. "
             f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
@@ -214,7 +214,7 @@ def _parse_flights_with_gemini(
     # migrated: using _GeminiModel / google-genai
 
     model = _GeminiModel(
-        model_name="gemini-2.5-flash",
+        model_name="gemini-3.8-flash",
         system_instruction=(
             "You are a flight data extraction expert. "
             "Extract flight information from raw webpage text. "

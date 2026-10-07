@@ -164,7 +164,7 @@ def create_plan(goal: str, context: str = "") -> dict:
     try:
         plan = generate_json(
             user_input,
-            model="gemini-2.5-flash-lite",
+            model="gemini-3.1-flash-lite",
             system_instruction=PLANNER_PROMPT,
             fallback={},
         )
@@ -229,7 +229,7 @@ Create a REVISED plan for the remaining work only. Do not repeat completed steps
     try:
         plan = generate_json(
             prompt,
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             system_instruction=PLANNER_PROMPT,
             fallback={},
         )

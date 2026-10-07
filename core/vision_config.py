@@ -34,7 +34,7 @@ def resolve_vision_model() -> str:
         val = cfg.get(key, "")
         if val:
             return val
-    return os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+    return os.environ.get("GEMINI_VISION_MODEL", "gemini-3.8-flash")
 
 
 def resolve_ollama_model() -> str:

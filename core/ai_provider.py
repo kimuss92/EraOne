@@ -10,6 +10,7 @@ Requires:
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import time
@@ -29,8 +30,8 @@ try:
 except Exception as _e:  # noqa: BLE001
     print(f"[ai_provider] quota failover not installed: {type(_e).__name__}: {_e}")
 
-DEFAULT_FAST_MODEL = "gemini-2.5-flash-lite"
-DEFAULT_SMART_MODEL = "gemini-2.5-flash"
+DEFAULT_FAST_MODEL = os.getenv("ERA_GEMINI_FAST_MODEL", "gemini-3.1-flash-lite")
+DEFAULT_SMART_MODEL = os.getenv("ERA_GEMINI_SMART_MODEL", "gemini-3.8-flash")
 
 # One client per API key for the whole process. Building a genai.Client sets up
 # a fresh HTTP connection pool — doing that on every generate call added latency

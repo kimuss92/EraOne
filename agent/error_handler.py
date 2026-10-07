@@ -86,7 +86,7 @@ Attempt number: {attempt}"""
     try:
         result = generate_json(
             prompt,
-            model="gemini-2.5-flash-lite",
+            model="gemini-3.1-flash-lite",
             system_instruction=ERROR_ANALYST_PROMPT,
             fallback={},
         )
@@ -141,7 +141,7 @@ Return ONLY the Python code, no explanation."""
 
     try:
         code = generate_text(
-            prompt, model="gemini-2.5-flash"
+            prompt, model="gemini-3.8-flash"
         )  # 2.0-flash was retired (404).strip()
         code = re.sub(r"```(?:python)?", "", code).strip().rstrip("`").strip()
 

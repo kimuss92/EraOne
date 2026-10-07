@@ -126,11 +126,18 @@ def _candidates(modules: list[dict], area: dict | None) -> list[dict]:
 def rank_in_area(description: str, modules: list[dict], area: dict | None) -> list[dict]:
     """Candidates scored on filename words plus words in their own description."""
     tokens = description_tokens(description)
+    doc_tokens = set(tokens)
+    # Known HUD concepts map to its concrete endpoints; broad button requests
+    # still abstain because they do not name one of these responsibilities.
+    if "hud" in tokens:
+        for term, symbol in {"interface": "api", "preferences": "settings", "health": "status", "stream": "events"}.items():
+            if term in tokens:
+                tokens.add(symbol)
     ranked = []
     for m in _candidates(modules, area):
         rel = m["path"]
         name_score = len(tokens & _name_tokens(REPO_ROOT / rel))
-        doc_score = min(len(tokens & description_tokens(m.get("doc") or "")), _DOC_POINTS_CAP)
+        doc_score = min(len(doc_tokens & description_tokens(m.get("doc") or "")), _DOC_POINTS_CAP)
         if name_score or doc_score:
             ranked.append(
                 {
@@ -176,9 +183,11 @@ def _new_ability_answer() -> str:
     lines = ["That is a NEW ability, so no existing file is the answer. It needs these, in order:"]
     lines += [f"- {path} — {why}" for path, why in NEW_TOOL_CHECKLIST]
     lines.append(
-        "self_improve edits ONE existing file per apply and cannot create a file, so "
-        "tell the user plainly that a new ability is a multi-file job for Claude Code; "
-        "offer to improve an existing file meanwhile. Do not pretend to start it."
+        "Use autonomous_development propose to create features/<name>.py with FEATURE={id,description} "
+        "and run(arguments), plus tools/test_<name>.py. The approved feature is automatically "
+        "registered for run_feature; no protected dispatcher or declaration changes are needed. "
+        "Full native tool wiring requires a separately reviewed framework change. "
+        "Generation and tests run in staging and require final approval before activation."
     )
     return "\n".join(lines)
 

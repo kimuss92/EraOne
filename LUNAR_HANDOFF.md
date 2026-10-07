@@ -60,9 +60,15 @@ per-app Spotify control landed today) but the core mission is unchanged.
  core/claude_bridge.py ──drives Claude Code CLI window via UIA──> reads
    transcripts back into Era (no official Claude Code API used)
 
- lane_dispatch.py / lane_router.py — exist, have dedicated tests, but era_dispatch.py
-   has zero references to "lane_router" (grep-verified this session) — not shown wired into
-   the diagram above because its integration point, if any, is unconfirmed.
+  lane_dispatch.py / lane_router.py — WIRED (typed text only, corrected 2026-10-07):
+    _on_text_command (main.py:601) ──main.py:940──> _route_text_through_lanes (cm_flow.py:117)
+      ──cm_flow.py:128──> lane_dispatch.handle(text, dispatch=False) ──> lane_router.route()
+      └─ category "cm" ──> _arm_cm_handoff() ──> _run_cm_flow ──cm_flow.py:354──>
+           lane_dispatch.handle(...) ──> era_dispatch.run_task(...)
+      └─ "assistant" ──> normal Gemini flow. Voice is NOT routed through this path.
+    main.py:2779 calls lane_router.warm_up() at startup. The dependency on era_dispatch is
+    intentionally one-directional (lane_dispatch imports era_dispatch), which is why
+    era_dispatch.py still has zero references TO lane_router.
 ```
 Corrected since last update: `ui.py` was previously flagged "likely stale" — verified
 this session that `main.py` actively imports and drives it (`main.py:2463`, `from ui
@@ -83,7 +89,7 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 | era_telegram.py | ~28K chars | Telegram long-polling bridge into text-intent path | working (needs `doctor` if webhook set — see broken) |
 | era_scheduler.py | ~8K chars | Thin wrapper around APScheduler; `reload()` wipes jobs | working, fragile (see broken) |
 | era_offers.py | small | CM/ads offer logic | untested this session |
-| lane_dispatch.py / lane_router.py | 4.2K / 16.2K chars | Secondary router (lane router, formerly Hermes); NOT referenced by era_dispatch.py (0 grep hits, verified) | has dedicated tests (`test_lane_router.py`, `test_lane_wiring.py`) but wiring/entry point unconfirmed; last touched Jul 24 — looks parked |
+| lane_dispatch.py / lane_router.py | 4.2K / 16.2K chars | Lane router (formerly Hermes): classifies typed text cm vs assistant, CM work forwarded to `era_dispatch.run_task` | **live, wired** — called from `app/era_live/cm_flow.py:128,354` via `_route_text_through_lanes`; NOT referenced by era_dispatch.py (dependency is intentionally reversed); tests `test_lane_router.py`, `test_lane_wiring.py`; renamed `hermes_*→lane_*` in 222752f (2026-10-04) |
 | music_generate.py | — | Background-music generation for Reels | working per `cm-lane` skill |
 | media_control.py / media_host.py | — | Media/device control host process | untested this session |
 | ui.py | 21.6K chars | QWebEngineView wrapper hosting the React/Vite HUD (`ui/dist/`); WebSocket bridge to main.py; title-bridge exposes window controls | **live** — imported by main.py, verified this session |
@@ -169,17 +175,17 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 ## What is in progress
 - Wardrobe Reel generation (Delta Cuisine): master-anchored generation method (`wardrobe-reel-workflow` skill) replacing 6 independent prompt nodes; needs live validation against a real render run — done: the pipeline design; left: confirming it actually holds identity across shots in production
 - HUD modernization: Phase 1 (identity vs state color channels) done 2026-09-26 on `app/hud/*`; later phases not started; unclear if this modernization is meant to also cover, or eventually replace, `ui.py`'s HUD
-- Lane router (`lane_dispatch.py`/`lane_router.py`) — has dedicated tests but zero references from `era_dispatch.py` (verified this session); last source change Jul 24 — looks stalled rather than actively worked, but not confirmed abandoned
+- Lane router (`lane_dispatch.py`/`lane_router.py`) — **live, not stalled** (corrected 2026-10-07): wired for typed text through `_route_text_through_lanes` (`cm_flow.py:117`), dry-classified at `cm_flow.py:128` then dispatched at `cm_flow.py:354`; the old "zero references from era_dispatch.py" note was true but misleading — the dependency is lane_dispatch → era_dispatch by design. Voice path deliberately not routed (Stage 3 covers typed text only)
 
 ## What is next
-1. Determine whether `lane_dispatch.py`/`lane_router.py` are called from anywhere (a standalone entry point? a test-only harness?) given `era_dispatch.py` doesn't call them — then decide archive vs. finish-wiring
+1. ~~Determine whether `lane_dispatch.py`/`lane_router.py` are called from anywhere~~ — **answered 2026-10-07: yes, wired** (chain in the architecture sketch above). Remaining decision, if wanted: extend Stage 3 to the voice path (today only typed text is lane-routed), or leave voice as-is
 2. Clarify the `ui.py` vs. `app/hud/*` relationship: are these two independent UI surfaces serving different purposes (e.g. one is the always-on shell, one is a debug/ops panel), or is one meant to retire the other
 3. Move the 13 root-level `test_*.py` files into `/tests` (or confirm they're intentionally root-pinned) — low risk, but touches `conftest.py` fixture paths, so verify ERA_VAULT_DIR/ERA_LOCK_FILE isolation still holds after the move
 4. Optional optimization: if a `winrt`/`winsdk` CPython 3.14 wheel later ships (today: `winrt` has no distribution, `winsdk` is sdist-only, build-from-source, banned), the PowerShell GSMTC host in `actions/spotify_gsmtc_host.py` could be swapped for an in-process native path to shave the ~cold spawn — not blocking anything, track verbs already work via PowerShell
 
 ## Open questions for Lunar
 1. Should the 13 root-level `test_*.py` files be moved into `/tests` now, or is there a reason (CI, tooling path) they were left at root?
-2. Is `lane_dispatch.py`/`lane_router.py` a live secondary router with an entry point outside `era_dispatch.py`, or an abandoned experiment safe to archive?
+2. ~~Is `lane_dispatch.py`/`lane_router.py` a live secondary router... or an abandoned experiment safe to archive?~~ — **answered 2026-10-07: live and wired** (typed text; not safe to archive). Open sub-question: should voice also go through it?
 3. `main.py` drives `ui.py` (QWebEngineView + React/Vite) as its UI, while `app/hud/*` is a separate aiohttp browser-rendered HUD that just got a modernization pass — are both meant to be live simultaneously, and if so what is each one for?
 
 ## Standing decisions
@@ -208,6 +214,7 @@ files named explicitly. Line counts are `wc -l`-order approximate.
 7. Mic path is half-duplex by design (barge-in) — do not "fix" this into full-duplex without the user asking.
 
 ## Session log
+- 2026-10-07 — Corrected the lane-router status: `lane_dispatch.py`/`lane_router.py` are **wired, not parked**. Chain verified in code: `main.py:940` → `_route_text_through_lanes` (`cm_flow.py:117`) → `lane_dispatch.handle` (`cm_flow.py:128`, dry classify) → on CM, `_run_cm_flow` → `lane_dispatch.handle` (`cm_flow.py:354`) → `era_dispatch.run_task`; `main.py:2779` warms `lane_router` at startup; `test_lane_wiring.py` is the proof test. Scope is typed text only (voice untouched, per `cm_flow.py:121`). The earlier "zero references from era_dispatch.py" note was literally true but pointed the wrong way — the dependency is lane_dispatch → era_dispatch by design. Also noted: graphify's AST misses function-local `import x` + `x.f()` call sites, so the knowledge graph showed `lane_dispatch.handle` with no callers and repeated this stale claim as an AMBIGUOUS edge until checked against source.
 - 2026-09-27 (later still) — Spotify search fix round 3 (clean box, "one for all"): the search box showed "chill+music" because URI nav renders spaces as "+". Fixed by entering the query via UIA `SetValue` on Spotify's search combobox ("What do you want to play?") — clean text + focus-independent (keystroke typing failed on Windows foreground restrictions; argv nav ignored by a running Spotify). Removed the level-0 "top result" fallback from `_best_search_match` — it grabbed the STALE previous-query results before the new ones rendered (played the wrong Coldplay track for "viva la vida"); now requires a real word match and keeps polling. Live-verified 4/5 exact (5th was GSMTC title-read lag, not a miss).
 - 2026-09-27 (later) — Spotify search fix round 2: the "+"-cosmetic fix (Ctrl+L + typewrite) regressed search — Windows foreground restrictions made keystrokes land in the wrong window, leaving stale results (voice "chill music" failed). Reverted search to reliable `spotify:search:` URI navigation (box shows "+", cosmetic) and instead fixed the real gap: `_best_search_match` now does &/punctuation normalization + partial word-overlap scoring + a top-of-screen fallback for vibe queries (so "chill music" plays the top result). Note `minimize spotify after use` is an active standing rule; UIA reads need the window restored (invoke handles this).
 - 2026-09-27 — Spotify seek + content-play: added relative `spotify_forward`/`spotify_rewind` on GSMTC (tokens seek_forward/seek_rewind to dodge the router's next/prev rewrite; live-verified ±1 ms). Fixed Liked Songs / New Releases / Made For You: replaced blind pixel-ratio clicks (broke on resize/layout change) with URI/shortcut navigation + UIA `invoke()` of the primary "Play <context>" button (`actions/spotify_ui.py`) — live-verified Liked Songs + New Releases both play. Chose UIA after verifying (as promised) that Spotify's a11y tree IS reachable once warmed (635 elements incl. "Play Liked Songs"); a naive single walk sees only ~4 chrome buttons, so the helper polls until the tree populates.

@@ -1662,7 +1662,7 @@ def _detect_action(description: str) -> dict:
         )
         prompt = f'User instruction: "{description}"\nAvailable actions: {available}\nReturn JSON string ONLY: {{"action": "name", "value": null}}'
 
-        resp = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
+        resp = client.models.generate_content(model="gemini-3.1-flash-lite", contents=prompt)
         text = re.sub(r"```(?:json)?", "", resp.text).strip().rstrip("`").strip()
         return json.loads(text)
     except Exception:

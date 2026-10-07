@@ -109,7 +109,7 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
     try:
         code = generate_text(
             f"Write Python code to accomplish this task:\n\n{description}",
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             system_instruction=code_system_instruction,
         ).strip()
         code = re.sub(r"```(?:python)?", "", code).strip().rstrip("`").strip()
@@ -184,7 +184,7 @@ def _detect_language(text: str) -> str:
                 f"What language is this text written in? "
                 f"Reply with ONLY the language name in English (e.g. Turkish, English, French).\n\n"
                 f"Text: {text[:200]}",
-                model="gemini-2.5-flash-lite",
+                model="gemini-3.1-flash-lite",
             ).strip()
             or "English"
         )
@@ -209,7 +209,7 @@ def _translate_to_goal_language(content: str, goal: str) -> str:
             f"- Output ONLY the translated text, nothing else\n\n"
             f"Text to translate:\n{content[:4000]}"
         )
-        translated = generate_text(prompt, model="gemini-2.5-flash").strip()
+        translated = generate_text(prompt, model="gemini-3.8-flash").strip()
         print(f"[Executor] ✅ Translation done ({target_lang})")
         return translated
     except Exception as e:
@@ -960,7 +960,7 @@ class AgentExecutor:
                 "Write a single natural sentence summarizing what was accomplished. "
                 "Address the user as 'sir'. Be direct and positive."
             )
-            summary = generate_text(prompt, model="gemini-2.5-flash-lite").strip()
+            summary = generate_text(prompt, model="gemini-3.1-flash-lite").strip()
             if not summary:
                 return fallback
             if speak:

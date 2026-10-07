@@ -1,0 +1,23 @@
+Wrote docs/MANIFEST.md and runtime/manifest.json — 311 modules, 56 tools, 0 unparseable.
+{
+  "passed": true,
+  "real_worker": true,
+  "frontend_requested": true,
+  "positive_checks": {
+    "syntax": true,
+    "passed": true,
+    "frontend": true,
+    "lint": true,
+    "tests": true,
+    "test_summary": "........................................................................ [ 27%]\n........................................................................ [ 54%]\n........................................................................ [ 81%]\n.................................................                        [100%]\n265 passed in 2.83s\n",
+    "feature_contract": true,
+    "diagnosis": "Deep diagnosis complete \u2014 BROKEN \u2014 Era may not start or a core check fails. 0 syntax problem(s), doctor NOT READY with 12 note(s), 0 real error signature(s) in the last 24h. Report: /tmp/era-development-verification-o2_haq58/repository/runtime/development/eeeeeeeeeeeeeeee/workspace/runtime/diagnosis/diag_20261004_080326.md"
+  },
+  "failing_candidate_rejected": true,
+  "live_source_unchanged_until_approval": true,
+  "explicit_approval_required": true,
+  "feature_result": {
+    "value": 18
+  },
+  "mixed_python_changes_require_restart": true
+}

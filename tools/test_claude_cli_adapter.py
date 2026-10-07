@@ -230,6 +230,32 @@ def test_config_dir_selects_the_subscription_account():
     assert runner.calls[0]["env"]["CLAUDE_CONFIG_DIR"].endswith(".claude-freelance")
 
 
+def test_the_base_provider_strips_the_gateway_env(monkeypatch):
+    """Regression (2026-10-06): a user environment that points Claude Code at
+    OmniRoute (ANTHROPIC_MODEL=era-gateway + ANTHROPIC_BASE_URL) made the
+    subscription `claude -p` fail with a model/provider error. The strip used to
+    live ONLY on the voice subclass, so the autonomous-dev path -- which uses this
+    BASE provider -- inherited the gateway and broke. Every reasoning path must
+    strip it now."""
+    from core.llm.adapters.claude_cli import GATEWAY_ENV_VARS
+
+    for name in GATEWAY_ENV_VARS:
+        monkeypatch.setenv(name, "era-gateway")
+    monkeypatch.delenv("ERA_CLAUDE_KEEP_API_ENV", raising=False)
+    p, runner = provider()
+    p.generate(LlmRequest(alias="era.reason", messages=(LlmMessage.text("user", "q"),)))
+    env = runner.calls[0]["env"]
+    assert not [n for n in GATEWAY_ENV_VARS if n in env]
+
+
+def test_the_escape_hatch_keeps_the_gateway_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MODEL", "era-gateway")
+    monkeypatch.setenv("ERA_CLAUDE_KEEP_API_ENV", "1")
+    p, runner = provider()
+    p.generate(LlmRequest(alias="era.reason", messages=(LlmMessage.text("user", "q"),)))
+    assert runner.calls[0]["env"].get("ANTHROPIC_MODEL") == "era-gateway"
+
+
 def test_prompt_goes_via_stdin_not_argv():
     """A positional prompt is rejected by the CLI outright."""
     p, runner = provider()

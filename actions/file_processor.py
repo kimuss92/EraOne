@@ -115,7 +115,7 @@ class _LocalResponse:
 # migrated: using _GeminiModel / google-genai
 def _gemini_client():
 
-    return _GeminiModel("gemini-2.5-flash")
+    return _GeminiModel("gemini-3.8-flash")
 
 
 def _detect_type(path: Path) -> str:

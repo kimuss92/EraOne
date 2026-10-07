@@ -10,7 +10,7 @@ from core.utils import get_base_dir
 from core.vision_classifier import build_structured_vision_prompt, parse_structured_vision_response
 from core.vision_types import VisionElement, VisionResult
 
-_VISION_TEXT_MODEL = os.getenv("ERA_VISION_TEXT_MODEL", "gemini-2.5-flash")
+_VISION_TEXT_MODEL = os.getenv("ERA_VISION_TEXT_MODEL", "gemini-3.8-flash")
 _VISION_TIMEOUT = float(os.getenv("ERA_VISION_TIMEOUT_SECONDS", "2.5"))
 _CACHE_TTL = float(os.getenv("ERA_VISION_CACHE_TTL_SECONDS", "3"))
 

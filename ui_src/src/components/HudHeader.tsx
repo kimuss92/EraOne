@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import {
+  Code2,
   Command,
   Maximize,
   Minimize,
@@ -13,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import ModelIndicator from './ModelIndicator';
+import { useDevelopment, working } from '../lib/development';
 import { actions, isQtHost } from '../lib/transport';
 import { DOCK_QUERY, setState, togglePanel, useHud, useMedia } from '../lib/store';
 
@@ -80,6 +82,9 @@ interface Props {
 }
 
 function HudHeader({ toolCount, voice }: Props) {
+  const { jobs, stale } = useDevelopment();
+  const pending = jobs.filter(j => j.state === 'awaiting_approval').length;
+  const active = !stale && jobs.some(working);
   const link = useHud(s => s.link);
   const rtt = useHud(s => s.rttMs);
   const conn = useHud(s => s.connection);
@@ -143,6 +148,9 @@ function HudHeader({ toolCount, voice }: Props) {
         </span>
       )}
       <div className="flex-1" />
+      <button className={`dev-trigger ${active ? 'dev-trigger-active' : ''}`} aria-label="Development" title="Inspect source, stage improvements and review verified changes" onClick={() => setState({ drawer: 'development' })}>
+        <Code2 className="h-4 w-4" /><span>Development</span>{pending > 0 && <span className="dev-badge">{pending}</span>}
+      </button>
       <div className="hidden md:block"><Clock /></div>
 
       <nav className="flex items-center gap-1" aria-label="HUD controls">

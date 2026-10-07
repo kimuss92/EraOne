@@ -184,7 +184,7 @@ export interface Transcript {
   respAt?: number;
 }
 
-export type DrawerId = 'conversation' | 'diagnostics' | 'settings' | 'capabilities' | 'schedule' | 'shortcuts' | null;
+export type DrawerId = 'conversation' | 'diagnostics' | 'settings' | 'capabilities' | 'schedule' | 'shortcuts' | 'development' | null;
 
 export type NoticeKind = 'success' | 'info' | 'warn' | 'error' | 'approval';
 

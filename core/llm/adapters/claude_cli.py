@@ -249,6 +249,24 @@ class ClaudeCliProvider:
             # Selects WHICH subscription account runs this, the same mechanism
             # era_dispatch uses to keep brand accounts apart.
             env["CLAUDE_CONFIG_DIR"] = config_dir
+        # Strip the gateway vars (ANTHROPIC_BASE_URL/MODEL/API_KEY/AUTH_TOKEN) that a
+        # user environment sets to point Claude Code at OmniRoute (e.g.
+        # ANTHROPIC_MODEL=era-gateway). This path is the SUBSCRIPTION `claude -p`; left
+        # in place those vars make the CLI ignore the subscription login and fail with
+        # a model/provider error. That is exactly what broke autonomous development
+        # (core/development.py uses this BASE provider, while only the voice subclass
+        # stripped them). Done here so EVERY reasoning path -- dev, planning, quota
+        # failover, voice -- is on the subscription by default. ERA_CLAUDE_KEEP_API_ENV
+        # opts out. era_dispatch keeps its own identical copy for the CM lane
+        # (_GATEWAY_ENV_VARS); a test pins the two lists as the same.
+        if os.environ.get("ERA_CLAUDE_KEEP_API_ENV", "").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            for name in GATEWAY_ENV_VARS:
+                env.pop(name, None)
         return env
 
     @staticmethod

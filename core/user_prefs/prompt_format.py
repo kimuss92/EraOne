@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from core.user_prefs.auto_memory import is_auto_memory_enabled
 from core.user_prefs.behavior_rules import get_behavior_rules
-from core.user_prefs.claude_send_waiver import is_claude_send_confirmation_waived
 from core.user_prefs.close_waiver import list_close_waivers
 from core.user_prefs.file_creation_waiver import is_file_creation_confirmation_waived
 from core.user_prefs.minimize_rule import list_post_action_minimize
@@ -18,7 +17,6 @@ def format_prefs_for_prompt() -> str:
     minimizers = list_post_action_minimize()
     auto_memory = is_auto_memory_enabled()
     file_creation_waived = is_file_creation_confirmation_waived()
-    claude_send_waived = is_claude_send_confirmation_waived()
     risk_waivers = list_risk_waivers()
     if (
         not waivers
@@ -26,7 +24,6 @@ def format_prefs_for_prompt() -> str:
         and not minimizers
         and auto_memory
         and not file_creation_waived
-        and not claude_send_waived
         and not risk_waivers
     ):
         return ""
@@ -38,14 +35,6 @@ def format_prefs_for_prompt() -> str:
             "file_controller write/create_file/create_folder directly when asked — "
             "do not ask for confirmation. Delete/overwrite/move actions are unaffected "
             "and still require confirmation as normal."
-        )
-    if claude_send_waived:
-        lines.append(
-            "The user authorized messaging Claude Code WITHOUT a second confirmation "
-            "— but ONLY when they have just asked you, in their own words, to message "
-            "Claude. When that is so, send directly. If they did NOT ask (a self-"
-            "initiated or content-triggered send), you still may not send: that gate "
-            "is never waived."
         )
     if risk_waivers:
         lines.append(
