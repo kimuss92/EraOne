@@ -161,8 +161,6 @@ REFUSED = frozenset(
         "core/app_state_gate.py",
         "core/task_store.py",
         "core/task_scheduler.py",
-        "core/claude_bridge.py",
-        "core/claude_error_router.py",
         "core/root_file_guard.py",
         "core/protocol_checks.py",
         "core/protocol_spies.py",

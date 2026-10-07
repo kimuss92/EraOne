@@ -8,7 +8,7 @@ Verifies:
 4. sounddevice.RawOutputStream is never instantiated.
 5. No native-audio Live session used for screen analysis.
 6. One-shot failure returns fallback text.
-7. VISION_TEXT_MODEL defaults to gemini-2.5-flash.
+7. VISION_TEXT_MODEL defaults to gemini-3.8-flash.
 8. No real API/camera/screen calls.
 9. Client reuse via get_vision_client() singleton.
 10. Image optimization reduces size.
@@ -176,7 +176,7 @@ class TestVisionSilentMode(unittest.TestCase):
     def test_vision_text_model_configurable(self):
         import actions.screen_processor as sp_module
 
-        self.assertEqual(sp_module._VISION_TEXT_MODEL, "gemini-2.5-flash")
+        self.assertEqual(sp_module._VISION_TEXT_MODEL, "gemini-3.8-flash")
         self.assertNotEqual(sp_module._VISION_TEXT_MODEL, "gemini-2.5-flash-native-audio")
 
     def test_analyze_image_once_uses_vision_text_model(self):

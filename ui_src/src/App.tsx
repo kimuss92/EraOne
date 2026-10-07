@@ -3,6 +3,8 @@ import { FileUp, WifiOff } from 'lucide-react';
 import HudHeader from './components/HudHeader';
 import CoreStage from './components/CoreStage';
 import VisualWorkspace from './components/VisualWorkspace';
+import DevelopmentDrawer from './components/DevelopmentDrawer';
+import { DevelopmentProvider } from './lib/development';
 import ActivityPanel from './components/ActivityPanel';
 import SystemPanel from './components/SystemPanel';
 import ContextPanel, { MemoryPanel, SourcesPanel, WeatherPanel } from './components/ContextPanel';
@@ -183,7 +185,7 @@ export default function App() {
   const rightShown = dockRight ? showRight : overlay === 'right';
 
   return (
-    <div
+    <DevelopmentProvider><div
       className="hud-root relative flex h-screen w-screen flex-col overflow-hidden"
       style={{ '--sh': stateHue.h, '--ss': `${stateHue.s}%` } as CSSProperties}
       data-state={state}
@@ -254,6 +256,7 @@ export default function App() {
       {drawer === 'capabilities' && <CapabilitiesDrawer />}
       {drawer === 'schedule' && <ScheduleDrawer onSchedule={startSchedule} />}
       {drawer === 'shortcuts' && <ShortcutsDrawer />}
+      {drawer === 'development' && <DevelopmentDrawer />}
       {palette && (
         <CommandPalette
           focusInput={() => cmdRef.current?.focus()}
@@ -261,6 +264,6 @@ export default function App() {
           startSchedule={startSchedule}
         />
       )}
-    </div>
+    </div></DevelopmentProvider>
   );
 }

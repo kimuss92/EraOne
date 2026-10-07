@@ -79,8 +79,8 @@ class ModelEntry:
 # alias or renaming a model does not require a second edit here.
 _DISPLAY_RULES: tuple[tuple[str, str], ...] = (
     ("gemini-3.1-flash-live", "Gemini 3.1 Flash Live"),
-    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
-    ("gemini-2.5-flash", "Gemini 2.5 Flash"),
+    ("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite"),
+    ("gemini-3.8-flash", "Gemini 3.8 Flash"),
     ("claude-opus-5", "Claude Opus 5"),
     ("claude-sonnet-5", "Claude Sonnet 5"),
     ("claude-haiku", "Claude Haiku"),

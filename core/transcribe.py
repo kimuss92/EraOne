@@ -39,7 +39,7 @@ _MAX_SECONDS = 300
 
 # Flash is right here: transcription is a mechanical task, and the whole point is
 # that a voice note reaches Era as fast as a typed one would.
-_MODEL = "gemini-2.5-flash"
+_MODEL = "gemini-3.8-flash"
 
 _PROMPT = (
     "Transcribe this voice recording verbatim.\n"

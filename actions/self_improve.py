@@ -77,6 +77,8 @@ SAFETY_CRITICAL = frozenset(
         "tools/test_visual_engine.py",
         "tools/test_development.py",
         "core/development.py",
+        "core/source_discovery.py",
+        "tools/test_autonomy_recovery.py",
         "core/visual_engine.py",
         "core/feature_engine.py",
         "tools/era_development_worker.py",
@@ -664,6 +666,10 @@ def self_improve(
 
     if action == "list_backups":
         return _list_backups()
+
+    if action == "locate":
+        from actions.self_improve_locator import locate
+        return locate(description or file_path)
 
     if action == "find":
         matches = find_target_files(description or file_path)

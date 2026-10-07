@@ -121,6 +121,8 @@ def safe_write_json(path: Path, data: Any, backup_dir: Path | None = None) -> No
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
         _replace(tmp_path, path)
     except BaseException:
         try:
@@ -142,6 +144,8 @@ def safe_write_jsonl(path: Path, lines: list[dict], backup_dir: Path | None = No
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             for line in lines:
                 f.write(json.dumps(line, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         _replace(tmp_path, path)
     except BaseException:
         try:
@@ -228,29 +232,40 @@ def validate_json_file(path: Path, backup_dir: Path | None = None) -> dict:
         result["file_size"] = path.stat().st_size
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, (dict, list)):
-            result["status"] = "CORRUPTED_NO_BACKUP"
-            result["message"] = "Root value is not a JSON object or array"
-            return result
+            raise ValueError("Root value is not a JSON object or array")
         return result
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        latest = _latest_backup(path, backup_dir)
-        if latest is not None:
+    except (ValueError, UnicodeDecodeError) as e:
+        backups = _list_backups(path, backup_dir)
+        if backup_dir is None:
+            backups += _list_backups(path, path.parent)
+        for backup in backups:
             try:
-                json.loads(latest.read_text(encoding="utf-8"))
-                shutil.copy2(latest, path)
+                raw = backup.read_text(encoding="utf-8")
+                recovered = json.loads(raw)
+                if not isinstance(recovered, (dict, list)):
+                    continue
+                fd, name = tempfile.mkstemp(suffix=".recovery", dir=path.parent)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    _replace(name, path)
+                finally:
+                    Path(name).unlink(missing_ok=True)
                 result["status"] = "CORRUPTED_RECOVERED"
-                result["message"] = f"Recovered from backup: {latest.name}"
+                result["message"] = f"Recovered from backup: {backup.name}"
                 log_event(
                     memory_logger,
                     "memory.corruption.detected",
                     "WARNING",
                     path=safe_log_path(path),
                     status="CORRUPTED_RECOVERED",
-                    backup=safe_log_path(latest),
+                    backup=safe_log_path(backup),
                 )
                 return result
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
+            except (OSError, ValueError, UnicodeDecodeError):
+                continue
         result["status"] = "CORRUPTED_NO_BACKUP"
         result["message"] = f"Invalid JSON and no valid backup: {e}"
         log_event(

@@ -43,7 +43,7 @@ from core.vision_types import VisionResult
 # a working local-vision path that is simply unreachable, to rewire or retire
 # deliberately rather than delete as a side effect of a lint pass.
 
-_VISION_TEXT_MODEL = os.getenv("ERA_VISION_TEXT_MODEL", "gemini-2.5-flash")
+_VISION_TEXT_MODEL = os.getenv("ERA_VISION_TEXT_MODEL", "gemini-3.8-flash")
 _VISION_MAX_WIDTH = int(os.getenv("ERA_VISION_MAX_WIDTH", "1280"))
 _JPEG_Q = int(os.getenv("ERA_VISION_JPEG_QUALITY", "70"))
 _VISION_TIMEOUT_SECONDS = float(os.getenv("ERA_VISION_TIMEOUT_SECONDS", "12"))
@@ -51,7 +51,7 @@ _VISION_CACHE_TTL_SECONDS = float(os.getenv("ERA_VISION_CACHE_TTL_SECONDS", "3")
 # Hard ceiling for one look across ALL providers. Without it the chain could stack
 # gemini 12s + ollama 25s + openai 40s, and screen_process could run the chain twice.
 _VISION_TOTAL_BUDGET_SECONDS = float(os.getenv("ERA_VISION_TOTAL_BUDGET_SECONDS", "35"))
-# The structured-JSON prompt let gemini-2.5-flash think and then enumerate every
+# The structured-JSON prompt let gemini-3.8-flash think and then enumerate every
 # element on a busy page: 6 KB of output, 36-90s, so every look timed out at 12s.
 # No thinking + an output cap brings the same request to 2-3s.
 _VISION_MAX_OUTPUT_TOKENS = int(os.getenv("ERA_VISION_MAX_OUTPUT_TOKENS", "2048"))
@@ -172,7 +172,11 @@ def _call_gemini(
             "http_options": types.HttpOptions(timeout=remaining_ms),
         }
         if "flash" in _VISION_TEXT_MODEL:
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            kwargs["thinking_config"] = (
+                types.ThinkingConfig(thinking_level="low")
+                if _VISION_TEXT_MODEL.startswith("gemini-3")
+                else types.ThinkingConfig(thinking_budget=0)
+            )
         return types.GenerateContentConfig(**kwargs)
 
     def _call():

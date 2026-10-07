@@ -42,7 +42,17 @@ REPORT_DIR = _REPO_ROOT / "runtime" / "diagnosis"
 
 # Era's own source: top-level scripts + these packages. Everything else (node
 # modules, caches, third-party, media, backups) is noise and would blow the budget.
-_SOURCE_DIRS = ("actions", "agent", "app", "core", "memory", "utils", "tools", "windows", "features")
+_SOURCE_DIRS = (
+    "actions",
+    "agent",
+    "app",
+    "core",
+    "memory",
+    "utils",
+    "tools",
+    "windows",
+    "features",
+)
 _SKIP_PARTS = {"__pycache__", "node_modules", ".git", "dist"}
 _DOCTOR_TIMEOUT_S = 120
 
@@ -150,7 +160,7 @@ def _classify(event: str, level: str, rec: dict, raw: str) -> tuple[str, str] | 
     # these; sharing its list keeps one source of truth, so a type added there is
     # never counted as a live fault here.
     if event == "tool.execution.failed":
-        from core.claude_error_router import BENIGN_ERROR_TYPES
+        from core.tool_result import BENIGN_ERROR_TYPES
 
         if rec.get("error_type") in BENIGN_ERROR_TYPES:
             return (

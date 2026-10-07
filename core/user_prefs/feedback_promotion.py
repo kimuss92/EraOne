@@ -12,7 +12,6 @@ import re
 import core.user_prefs as _store
 from core.user_prefs.auto_memory import set_auto_memory
 from core.user_prefs.behavior_rules import add_behavior_rule
-from core.user_prefs.claude_send_waiver import set_claude_send_confirmation_waiver
 from core.user_prefs.close_waiver import set_close_confirmation_waiver
 from core.user_prefs.minimize_rule import set_post_action_minimize
 
@@ -94,25 +93,6 @@ _MINIMIZE_STOP_RE = re.compile(
     re.IGNORECASE,
 )
 
-# "don't ask (for) confirmation when I tell you to send a message/prompt to
-# Claude - just send it". This waives only the extra CONFIRMATION step; the
-# user-words gate (Era must have heard the user name Claude) is enforced
-# separately in the dispatch and is never touched by this flag. The revoke
-# shape ("ask me before messaging Claude") is matched first so it can't read
-# as a grant.
-_WAIVE_CLAUDE_SEND_RE = re.compile(
-    r"(?:don'?t|do not|no need to|stop|never)\s+(?:ask(?:ing)?\s+)?(?:me\s+)?"
-    r"(?:for\s+)?(?:my\s+)?(?:confirmation|permission)[^.]*?"
-    r"\b(?:send|sending|message|messaging|prompt|tell|telling|ask|asking)\b"
-    r"[^.]*?\bclaude\b",
-    re.IGNORECASE,
-)
-_REQUIRE_CLAUDE_SEND_RE = re.compile(
-    r"\b(?:ask|confirm|check)\b[^.]*?\bbefore\b[^.]*?"
-    r"\b(?:send|sending|message|messaging|prompt|tell|telling|ask|asking)\b"
-    r"[^.]*?\bclaude\b",
-    re.IGNORECASE,
-)
 
 _STOPWORDS = {"the", "a", "an", "app", "application", "it", "this", "that"}
 
@@ -140,8 +120,6 @@ def is_standing_instruction(text: str) -> bool:
         or _REQUIRE_CLOSE_RE.search(t)
         or _MEMORY_ASK_FIRST_RE.search(t)
         or _MEMORY_AUTO_RE.search(t)
-        or _WAIVE_CLAUDE_SEND_RE.search(t)
-        or _REQUIRE_CLAUDE_SEND_RE.search(t)
     )
 
 
@@ -196,14 +174,6 @@ def promote_feedback_to_prefs(text: str) -> str | None:
                 if app:
                     applied.append(set_close_confirmation_waiver(app, True))
                 break
-
-    # "just send it to Claude without asking" — waives only the extra
-    # confirmation step (the user-words gate is enforced elsewhere and is never
-    # opened by this). Revoke is checked first so it cannot read as a grant.
-    if _REQUIRE_CLAUDE_SEND_RE.search(t):
-        applied.append(set_claude_send_confirmation_waiver(False))
-    elif _WAIVE_CLAUDE_SEND_RE.search(t):
-        applied.append(set_claude_send_confirmation_waiver(True))
 
     # Standing behavior instructions ("minimize spotify when you're done",
     # "from now on ...") that aren't confirmation-related.

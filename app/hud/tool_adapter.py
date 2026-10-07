@@ -70,7 +70,6 @@ _TOOLS: dict[str, tuple[str, str, str]] = {
     "flight_finder": ("web", "FLIGHTS", "Searching flights"),
     "game_updater": ("system", "GAMES", "Updating games"),
     "premiere_control": ("apps", "PREMIERE", "Controlling Premiere Pro"),
-    "claude_bridge": ("apps", "CLAUDE", "Talking to Claude Code"),
     "self_diagnosis": ("system", "DIAGNOSIS", "Running self-diagnosis"),
     "self_improve": ("system", "SELF-IMPROVE", "Running self-improvement"),
     "self_heal": ("system", "SELF-HEAL", "Checking self-healing"),

@@ -29,6 +29,8 @@ import { useHud } from '../lib/store';
 import { clock, duration } from '../lib/format';
 import type { TimelineItem, ToolRun, ToolStatus } from '../lib/types';
 import PathText from './PathText';
+import TaskProgress from './TaskProgress';
+import { useDevelopment, working } from '../lib/development';
 
 export const CATEGORY_ICON: Record<string, typeof Globe> = {
   web: Globe,
@@ -170,7 +172,11 @@ function TimelineRow({ item }: { item: TimelineItem }) {
 }
 
 function ActivityPanel() {
+  const { jobs, stale } = useDevelopment();
+  const currentJob = jobs.find(working) || jobs.find(j => j.state === 'awaiting_approval');
+  const link = useHud(s => s.link);
   const tools = useHud(s => s.tools);
+  const currentTool = tools.find(t => t.status === 'running' && !['autonomous_development', 'self_improve'].includes(t.tool));
   const timeline = useHud(s => s.timeline);
   const running = tools.filter(t => t.status === 'running').length;
 
@@ -188,10 +194,11 @@ function ActivityPanel() {
     <section className="panel flex min-h-0 flex-1 flex-col" aria-label="Live activity">
       <div className="panel-head">
         <span className="micro panel-title">LIVE ACTIVITY</span>
-        <span className={`chip ${running ? 'chip-live' : 'chip-dim'} ml-auto`}>
-          {running ? `${running} RUNNING` : 'IDLE'}
+        <span className={`chip ${currentJob?.state === 'awaiting_approval' ? 'chip-warn' : running || (currentJob && !stale) ? 'chip-live' : 'chip-dim'} ml-auto`}>
+          {link !== 'online' ? 'OFFLINE' : currentJob && !stale ? currentJob.state === 'awaiting_approval' ? 'REVIEW' : 'DEVELOPING' : running ? `${running} RUNNING` : 'IDLE'}
         </span>
       </div>
+      {currentJob ? <TaskProgress name={currentJob.request} value={currentJob.progress} phase={currentJob.phase || currentJob.state} stale={stale || link !== 'online'} /> : currentTool ? <TaskProgress name={currentTool.activity} value={null} phase="Running; this tool does not report measured progress" stale={link !== 'online'} /> : null}
       <div className="custom-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
         {items.length === 0 && (
           <p className="px-1 pt-2 text-meta leading-relaxed t3">

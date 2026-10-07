@@ -163,10 +163,10 @@ function Card({ group, lead }: { group: CardGroup; lead: boolean }) {
       )}
       {openable && (
         <div className="mt-1.5 flex items-center gap-1.5">
-          <span className="flex items-center gap-1 text-micro ac-text"><ExternalLink className="h-3 w-3" aria-hidden="true" /> Click to open</span>
+          <button type="button" className="source-action" onClick={e => { stop(e); openIt(); }} onKeyDown={stop}><ExternalLink className="h-3 w-3" aria-hidden="true" /> Open</button>
           <button
             type="button"
-            className="mini-btn ml-auto !py-0.5"
+            className="source-action ml-auto"
             title="Show it selected in its folder"
             onClick={e => { stop(e); setMsg(''); actions.reveal(card.id).catch(fail); }}
             onKeyDown={stop}

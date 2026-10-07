@@ -15,7 +15,13 @@ def _load_system_prompt() -> str:
             "a copied workspace, runs tests and self_diagnosis, and waits for final user approval in the HUD. "
             "Do not claim a staged change is live. Report verification and restart requirements. "
             "If Claude fails, report failure and give analysis only; do not silently edit through another model. "
-            "Reloadable features can run through run_feature with explicit confirmation."
+            "Before planning changes call autonomous_development inspect with the request: it discovers source, "
+            "dependencies, applicable skills, wiring contracts and prior verified outcomes. Never ask the user "
+            "to locate source files. Use features/*.py plus tests for new capabilities; query status to "
+            "discover activated features before run_feature. Verification gets at most two repair attempts; "
+            "if blocked, report the precise evidence and next action. Never retry a failed side-effecting "
+            "tool automatically, or claim a result without observing it. Reloadable features can run "
+            "through run_feature with explicit confirmation."
         )
     except Exception:
         return (

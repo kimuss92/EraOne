@@ -6,7 +6,6 @@ import os
 import random
 import socket
 import sys
-import threading
 import time
 
 from app.era_constants import _RESUME_ACK
@@ -37,46 +36,6 @@ class ReconnectMixin:
                 return
             await asyncio.sleep(min(1.0, max(0.0, deadline - time.time())))
 
-    _ERROR_FLUSH_EVERY_S = 60.0
-
-    def _maybe_flush_error_reports(self) -> None:
-        """Deliver a failure report held back while the user was at the keyboard.
-
-        Board item 17c. `core/claude_error_router.py` cannot send while the user
-        is typing — the GUI paste would steal focus and their next keystrokes
-        would land in Claude's chat box — so it queues the report instead. That
-        queue needs a moment to drain, and this is the only loop Era actually
-        runs on a timer, which is why the tick lives here rather than in
-        `core/background_manager.py` (that module has no importers: a flush
-        wired there would never run at all).
-
-        Off-thread because the send blocks; throttled because this loop ticks
-        every 5s; try/except-wrapped because this task owns standby, and a fault
-        in error REPORTING must never be the thing that stops Era idling.
-
-        Deliberately silent (`notify=None`): the user was already told the report
-        was being held, and this fires when they are away — speaking into an
-        empty room is the very thing the standby comment below warns about. The
-        router still logs the delivery, and the report lands in Claude Code,
-        which is where it was always meant to be seen.
-        """
-        now = time.time()
-        if now - getattr(self, "_last_error_flush_check", 0.0) < self._ERROR_FLUSH_EVERY_S:
-            return
-        self._last_error_flush_check = now
-        try:
-            from core.claude_error_router import flush_pending, pending_count
-
-            if not pending_count():
-                return
-            threading.Thread(
-                target=flush_pending,
-                name="era-claude-report-flush",
-                daemon=True,
-            ).start()
-        except Exception as e:
-            print(f"[era] [CLAUDE-ROUTER] flush tick ignored: {e}")
-
     async def _monitor_idle_state(self) -> None:
         while True:
             # Sleep in small slices so a GoAway teardown is observed promptly
@@ -85,7 +44,6 @@ class ReconnectMixin:
                 if self._go_away_event.is_set():
                     return
                 await asyncio.sleep(0.1)
-            self._maybe_flush_error_reports()
             if self._standby_active:
                 continue
             # A voice-muted mic is the user's deliberate quiet mode, not idleness:
@@ -108,11 +66,6 @@ class ReconnectMixin:
                 while self._standby_active:
                     if self._go_away_event.is_set():
                         return
-                    # Standby is the best moment of all to send: the user is
-                    # provably away. Without this the queue would wait for them
-                    # to come BACK — at which point they are at the keyboard
-                    # again and the router rightly refuses to send.
-                    self._maybe_flush_error_reports()
                     await asyncio.sleep(1.0)
 
     async def _resume_from_standby(self, reason: str, speak_ack: bool = True) -> None:

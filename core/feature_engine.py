@@ -111,7 +111,12 @@ def restore() -> None:
                 continue
         seen = set()
         for _, job in sorted(records, key=lambda item: item[0], reverse=True):
-            for item in job.get("files", []):
+            files = job.get("files", [])
+            if not isinstance(files, list):
+                continue
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
                 rel = item.get("path", "")
                 if not re.fullmatch(r"features/[a-zA-Z0-9_]+\.py", rel) or rel in seen:
                     continue

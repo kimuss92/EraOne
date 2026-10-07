@@ -321,10 +321,6 @@ def canonicalize_tool_call(tool: str, parameters: dict | None) -> tuple[str, dic
     if tool == "audio_control":
         return tool, params
 
-    # ── Claude-bridge guard: "ask" / "reply" / "status" are generic action words.
-    if tool == "claude_bridge":
-        return tool, params
-
     # ── Spotify-bridge guard: the keyless Spicetify lane owns generic words like
     # "play", "pause", "next", "search", "like", "status" — every one of which the
     # flat action map already binds elsewhere (computer_settings/window_control).

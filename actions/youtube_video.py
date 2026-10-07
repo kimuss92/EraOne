@@ -328,7 +328,7 @@ def _summarize_with_gemini(transcript: str, video_url: str) -> str:
     from core.ai_provider import GeminiModel  # genai.configure() is gone in google-genai 2.x
 
     model = GeminiModel(
-        model_name="gemini-2.5-flash",
+        model_name="gemini-3.8-flash",
         system_instruction=(
             "You are Era One, an AI assistant. "
             "Summarize YouTube video transcripts clearly and concisely. "

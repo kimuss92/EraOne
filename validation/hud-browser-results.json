@@ -1,0 +1,15 @@
+{
+  "rendering_uses_fixtures": true,
+  "no_era_backend_started": true,
+  "no_workspace_toolbar": true,
+  "progress_in_live_activity": true,
+  "progress_matches_fixture_45": true,
+  "sleek_file_controls_visible": true,
+  "offline_source_inspection": true,
+  "approval_checkbox_gate": true,
+  "progress_follows_new_snapshot": true,
+  "reduced_motion": true,
+  "mobile_development_access": true,
+  "javascript_errors": [],
+  "external_requests": []
+}

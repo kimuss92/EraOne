@@ -157,7 +157,9 @@ def test_a_new_ability_gets_the_checklist_not_a_guessed_file(desc):
     assert "NEW ability" in out
     assert "app/tool_declarations.py" in out
     assert "Edit " not in out, "no existing file is the answer for something that does not exist"
-    assert "cannot create a file" in out, "she must not pretend to start it"
+    assert "autonomous_development propose" in out
+    assert "final approval" in out
+    assert "features/<name>.py" in out
 
 
 def test_an_edit_that_mentions_an_action_is_not_a_new_ability():
@@ -265,4 +267,4 @@ def test_the_refusal_points_at_locate_before_asking_the_user(tmp_path, monkeypat
 def test_the_prompt_tells_her_to_locate_first():
     text = (REPO / "core" / "prompt.txt").read_text(encoding="utf-8-sig").replace("\r\n", "\n")
     assert 'action="locate"' in text
-    assert "must never be\n  asked for one first" in text
+    assert "Never ask the user to find repository files" in text

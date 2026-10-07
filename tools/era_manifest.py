@@ -364,6 +364,7 @@ def build(_argv: list[str] | None = None) -> dict[str, Any]:
 
     return {
         "schema": 1,
+        "subsystems": [{"name": name, "prefixes": list(prefixes), "when": when} for name, prefixes, when in SUBSYSTEMS],
         "counts": {
             "python_files": len(files),
             "source_modules": len(source_modules),
@@ -391,7 +392,7 @@ SUBSYSTEMS: list[tuple[str, tuple[str, ...], str]] = [
         ("app/era_live/tool_dispatch.py", "app/tool_declarations.py"),
         "a tool is not called, called wrongly, or needs adding",
     ),
-    ("HUD (browser UI)", ("app/hud/", "ui.py", "ui/"), "anything the user SEES"),
+    ("HUD (browser UI)", ("app/hud/", "ui.py", "ui/", "ui_src/src/"), "anything the user SEES"),
     (
         "Safety & confirmation",
         (

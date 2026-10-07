@@ -489,24 +489,6 @@ def classify_action(
             "reason": f"Read-only or local Gmail action: {action or 'status'}",
         }
 
-    # --- Claude Code bridge ---
-    # Claude Code has tools of its own and may run in an auto-approve mode, so a
-    # message sent there is an instruction to an agent that can act on this
-    # machine OUTSIDE Era's gates. A prompt-injected "tell Claude to delete X"
-    # must reach the user first. Reading the reply is harmless.
-    if tool == "claude_bridge":
-        if action in ("ask", "reply"):
-            return {
-                "risk_level": MEDIUM,
-                "requires_confirmation": True,
-                "reason": "Sending instructions to Claude Code, which can act on this machine.",
-            }
-        return {
-            "risk_level": LOW,
-            "requires_confirmation": False,
-            "reason": f"Reading the Claude Code conversation: {action or 'status'}",
-        }
-
     if tool in {"shutdown_era", "close_era", "exit_era"}:
         return {
             "risk_level": LOW,
@@ -787,7 +769,7 @@ def classify_action(
     # the supervisor are exactly what the pipeline cannot protect Era from
     # breaking, so touching those must be confirmed by the user out loud.
     if tool == "self_improve":
-        if action in ("propose", "list_backups", "find", ""):
+        if action in ("propose", "list_backups", "find", "locate", ""):
             return {
                 "risk_level": LOW,
                 "requires_confirmation": False,

@@ -104,7 +104,7 @@ aliases:
   # ── Gemini generate (non-voice) ───────────────────────────────────────────
   era.fast:
     provider: gemini
-    model: gemini-2.5-flash-lite
+    model: gemini-3.1-flash-lite
     role: Cheap, quick text and JSON. Today's core/ai_provider DEFAULT_FAST_MODEL.
     capabilities:
       tools: false
@@ -131,7 +131,7 @@ aliases:
 
   era.smart:
     provider: gemini
-    model: gemini-2.5-flash
+    model: gemini-3.8-flash
     role: Heavier Gemini text and the vision path. Today's DEFAULT_SMART_MODEL
       and core/vision_service's _VISION_TEXT_MODEL.
     capabilities:

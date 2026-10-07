@@ -53,7 +53,7 @@ Task: {task}"""
         # Construction inside the try: a client-init failure (bad/absent key,
         # SDK change) is just as much "the planner could not be reached", and
         # outside it escaped as a non-OpError past every handler above.
-        model = GeminiModel("gemini-2.5-flash")  # genai.configure() is gone in google-genai 2.x
+        model = GeminiModel("gemini-3.8-flash")  # genai.configure() is gone in google-genai 2.x
         raw = (model.generate_content(prompt).text or "").strip()
     except Exception as e:
         raise OpError(f"the planner could not be reached ({e})") from e

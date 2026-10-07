@@ -48,7 +48,7 @@ def _gemini_search_once(query: str) -> str:
 
     client = genai.Client(api_key=get_api_key())
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=query,
         config={"tools": [{"google_search": {}}]},
     )

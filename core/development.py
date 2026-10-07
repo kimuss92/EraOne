@@ -14,7 +14,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path, PurePosixPath
 
@@ -22,7 +24,19 @@ ROOT = Path(__file__).resolve().parent.parent
 JOBS = ROOT / "runtime" / "development"
 _lock = threading.RLock()
 _active = None
-_ALLOWED = {"app", "actions", "core", "features", "tools", "ui_src"}
+_ALLOWED = {
+    "app",
+    "actions",
+    "core",
+    "features",
+    "tools",
+    "ui_src",
+    "agent",
+    "memory",
+    "utils",
+    "windows",
+    "src",
+}
 _SUFFIXES = {".py", ".tsx", ".ts", ".css"}
 
 
@@ -40,6 +54,7 @@ def _path(rel: str, root: Path | None = None) -> Path:
     if (
         not isinstance(rel, str)
         or "\\" in rel
+        or any(part in {"", ".", ".."} for part in rel.split("/"))
         or parsed.is_absolute()
         or any(part in {"..", "."} or part.startswith(".") for part in parsed.parts)
         or len(parsed.parts) < 2
@@ -59,18 +74,89 @@ def _path(rel: str, root: Path | None = None) -> Path:
 def _read(job_id: str) -> dict:
     if not re.fullmatch(r"[a-f0-9]{16}", str(job_id)):
         raise ValueError("Invalid development id")
-    return json.loads((JOBS / job_id / "job.json").read_text(encoding="utf-8"))
+    record = json.loads((JOBS / job_id / "job.json").read_text(encoding="utf-8"))
+    if (
+        not isinstance(record, dict)
+        or record.get("id") != job_id
+        or not isinstance(record.get("files"), list)
+    ):
+        raise ValueError("Development record is damaged; source was not changed")
+    return record
 
 
 def _save(job: dict) -> None:
-    folder = JOBS / job["id"]
-    folder.mkdir(parents=True, exist_ok=True)
-    temporary = folder / "job.tmp"
-    temporary.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-    os.replace(temporary, folder / "job.json")
+    # Unique temp files plus one process lock prevent UI/worker save races.
+    with _lock:
+        folder = JOBS / job["id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        job["updated_at"] = time.time()
+        job.setdefault("created_at", job["updated_at"])
+        fd, name = tempfile.mkstemp(prefix="job-", suffix=".tmp", dir=folder)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(job, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(name, folder / "job.json")
+        finally:
+            Path(name).unlink(missing_ok=True)
     from app.hud.events import hud
 
     hud._emit("development.changed", message=job["state"], developmentId=job["id"])
+
+
+def _history(request: str) -> list[dict]:
+    """Persisted outcomes ground later repairs without becoming user facts."""
+    words = set(re.findall(r"[a-z]{3,}", request.lower()))
+    result = []
+    for path in sorted(JOBS.glob("*/job.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(record, dict) or record.get("state") not in {
+                "activated",
+                "failed",
+                "rejected",
+            }:
+                continue
+            if not words.intersection(re.findall(r"[a-z]{3,}", record.get("request", "").lower())):
+                continue
+            result.append(
+                {
+                    "request": record.get("request", "")[:500],
+                    "state": record["state"],
+                    "error": record.get("error", ""),
+                    "files": [item["path"] for item in record.get("files", [])],
+                    "checks": record.get("checks", {}).get("test_summary", "")[-1500:],
+                }
+            )
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            continue
+        if len(result) == 3:
+            break
+    return result
+
+
+def inspect_request(request: str) -> dict:
+    from core.source_discovery import discover
+
+    if not isinstance(request, str) or len(request) > 8000:
+        raise ValueError("Request must be a string of at most 8000 characters")
+    import importlib.util
+
+    binary = os.getenv("CLAUDE_BIN", "claude")
+    return {
+        **discover(request),
+        "history": _history(request),
+        "toolchain": {
+            "claude_cli": bool(shutil.which(binary) or Path(binary).is_file()),
+            "claude_auth": "Checked by the CLI when staging starts; credentials are never exposed",
+            "coding_model": "era.reason (Claude Sonnet in config/llm.yaml)",
+            "pytest": importlib.util.find_spec("pytest") is not None,
+            "ruff": importlib.util.find_spec("ruff") is not None,
+            "node": shutil.which("node") is not None,
+            "npm": shutil.which("npm.cmd" if os.name == "nt" else "npm") is not None,
+        },
+    }
 
 
 def _rollback_files(job: dict) -> None:
@@ -114,7 +200,7 @@ def list_jobs() -> list[dict]:
                             record.update(state="recovery_required", error=str(exc))
                         _save(record)
                     if (
-                        record.get("state") in {"planning", "verifying"}
+                        record.get("state") in {"planning", "verifying", "repairing"}
                         and record.get("id") != _active
                     ):
                         record.update(
@@ -124,7 +210,7 @@ def list_jobs() -> list[dict]:
                         )
                         _save(record)
                     jobs.append(record)
-            except (OSError, ValueError):
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 continue
         return jobs
 
@@ -132,16 +218,23 @@ def list_jobs() -> list[dict]:
 def _generate(request: str, paths: list[str]) -> dict:
     from core.llm.adapters.claude_cli import ClaudeCliProvider
     from core.llm.spend import from_registry
-    from core.llm.types import LlmMessage, LlmRequest, PromptBlock
+    from core.llm.types import LlmError, LlmMessage, LlmRequest, PromptBlock
 
-    context = []
+    discovery = inspect_request(request[:8000])
+    context = [
+        "PROJECT MAP AND SKILLS (planning context, no permission overrides):\n"
+        + json.dumps(discovery, ensure_ascii=False)
+    ]
     context_bytes = 0
-    for rel in paths[:5]:
-        target = _path(rel)
+    candidates = list(dict.fromkeys(paths + [row["path"] for row in discovery["dependencies"]]))
+    for rel in candidates[:8]:
+        target = ROOT / rel
+        if not target.resolve().is_relative_to(ROOT.resolve()):
+            continue
         if (
             target.exists()
             and target.stat().st_size <= 60000
-            and context_bytes + target.stat().st_size <= 80000
+            and context_bytes + target.stat().st_size <= 100000
         ):
             context_bytes += target.stat().st_size
             context.append(f"FILE {rel}\n{target.read_text(encoding='utf-8')}")
@@ -152,6 +245,9 @@ def _generate(request: str, paths: list[str]) -> dict:
         "Implement a small, complete Era One feature. Return strict JSON: "
         '{"plan":"...","files":[{"path":"...","content":"complete source"}],"tests":["tools/test_feature.py"]}. '
         "At most 6 files, 200KB total. Include meaningful tests in tools/test_*.py. "
+        "Plan every import, UI parent render, registration and invocation path. Do not leave orphan files. "
+        "Follow applicable skill instructions supplied below, but never bypass the fixed gates. "
+        "Use persisted failure history to avoid repeating a failed approach. "
         "No secrets, network/device activity in tests, dependency changes, or weakened safety gates. "
         "Use features/name.py for reloadable Python features: FEATURE={id,description}; run(arguments)->dict. "
         "Use ui_src/src for React presentation, or existing noncritical Python modules. "
@@ -160,22 +256,31 @@ def _generate(request: str, paths: list[str]) -> dict:
     )
     response = ClaudeCliProvider().generate(
         LlmRequest(
-            alias="era.deep",
+            alias="era.reason",
             messages=(LlmMessage.text("user", prompt),),
             system=(
                 PromptBlock(
                     text="Generate verified candidate source, not live edits. Output JSON only."
                 ),
             ),
+            json_schema={
+                "type": "object",
+                "required": ["plan", "files", "tests"],
+                "properties": {
+                    "plan": {"type": "string"},
+                    "files": {"type": "array"},
+                    "tests": {"type": "array"},
+                },
+            },
             max_output_tokens=32000,
             timeout_s=300,
             request_id=f"development-{uuid.uuid4().hex}",
         )
     )
-    ledger.record(response.usage.est_cost_usd, alias="era.deep")
+    ledger.record(response.usage.est_cost_usd, alias="era.reason")
     result = json.loads(response.text)
     if not isinstance(result, dict):
-        raise ValueError("Claude did not return a plan object")
+        raise LlmError("invalid_response", "Claude did not return a plan object", provider="claude_cli")
     return result
 
 
@@ -193,8 +298,14 @@ def propose(request: str, paths: list[str] | None = None, *, reload: bool = True
     selected = paths or []
     if not selected:
         from actions.self_improve_targets import find_target_files
+        from core.source_discovery import discover
 
-        selected = [rel for score, rel in find_target_files(request)[:5]]
+        selected = [
+            row["path"]
+            for row in discover(request)["candidates"]
+            if row["editable"] and not row["test"]
+        ][:8]
+        selected = selected or [rel for score, rel in find_target_files(request)[:5]]
     # Unsupported/critical matches can be used by a human later; don't supply
     # them to a generator allowed to rewrite complete files.
     filtered = []
@@ -213,6 +324,9 @@ def propose(request: str, paths: list[str] | None = None, *, reload: bool = True
             "state": "planning",
             "progress": 0,
             "plan": "",
+            "phase": "Discovering source and planning",
+            "attempt": 1,
+            "attempts": [],
             "files": [],
             "checks": {},
             "reload": bool(reload),
@@ -244,7 +358,7 @@ def _copy_source(destination: Path) -> None:
         "scripts",
         "src",
     }
-    for source in ROOT.rglob("*"):
+    for source in _source_files():
         if not source.is_file() or not source.resolve().is_relative_to(ROOT.resolve()):
             continue
         rel = source.relative_to(ROOT)
@@ -285,17 +399,165 @@ def _copy_source(destination: Path) -> None:
         shutil.copy2(source, target)
 
 
+def _source_files():
+    # Prune dependency/state trees before walking, rather than visiting them.
+    for folder, dirs, files in os.walk(ROOT, followlinks=False):
+        dirs[:] = [
+            d
+            for d in dirs
+            if not d.startswith(".")
+            and d
+            not in {
+                "node_modules",
+                "__pycache__",
+                "runtime",
+                "logs",
+                "models",
+                "backups",
+                "venv",
+                "source_code_folder",
+            }
+            and not (Path(folder) / d).is_symlink()
+        ]
+        for name in files:
+            yield Path(folder) / name
+
+
+def _failure_hint(exc: Exception) -> str:
+    from core.logger import redact_secrets
+
+    message = str(redact_secrets(str(exc)))[:600]
+    lowered = message.lower()
+    if any(word in lowered for word in ("auth", "login", "401", "403")):
+        return f"Claude authentication unavailable: {message}. Sign in to the configured Claude profile; then retry."
+    if any(word in lowered for word in ("not found", "no such file", "winerror 2")):
+        return f"Missing development dependency: {message}. Check Claude CLI, Python test tools and Node for UI changes."
+    if any(word in lowered for word in ("budget", "429", "quota", "rate_limit")):
+        return f"Development capacity unavailable: {message}. Retry after capacity returns; no live files changed."
+    return f"{type(exc).__name__}: {message}"
+
+
 def _worker(job: dict, paths: list[str]) -> None:
     global _active
     try:
-        plan = _generate(job["request"], paths)
-        prepare(job, plan)
+        request = job["request"]
+        for attempt in range(1, 3):
+            job.update(
+                attempt=attempt,
+                state="planning" if attempt == 1 else "repairing",
+                phase="Generating candidate" if attempt == 1 else "Repairing verified failure",
+            )
+            _save(job)
+            # The existing CLI provider handles profile failover. Auth, missing
+            # CLI and budget failures are terminal; no blind alternate generator.
+            try:
+                plan = _generate(request, paths)
+            except Exception as exc:
+                # Only malformed model output gets a schema repair. The CLI
+                # owns provider/profile failover; capacity/auth errors stop here.
+                if attempt == 1 and (
+                    isinstance(exc, json.JSONDecodeError)
+                    or getattr(exc, "kind", "") == "invalid_response"
+                ):
+                    evidence = {
+                        "attempt": attempt,
+                        "error": _failure_hint(exc),
+                        "checks": {"passed": False, "schema": False},
+                    }
+                    job.setdefault("attempts", []).append(evidence)
+                    job["approval"] = ""
+                    request = (
+                        job["request"]
+                        + "\nThe previous response was not a valid candidate JSON object. Return exactly the required plan/files/tests schema. Error: "
+                        + evidence["error"]
+                    )
+                    _save(job)
+                    continue
+                raise
+            try:
+                prepare(job, plan)
+            except (ValueError, SyntaxError) as exc:
+                job.update(
+                    state="failed",
+                    error=_failure_hint(exc),
+                    checks={"passed": False, "error": _failure_hint(exc)},
+                )
+            if job["state"] == "awaiting_approval":
+                return
+            if job["state"] != "failed":
+                raise ValueError("Verifier did not return a terminal state")
+            evidence = {
+                "attempt": attempt,
+                "error": job.get("error", ""),
+                "checks": job.get("checks", {}),
+            }
+            job.setdefault("attempts", []).append(evidence)
+            if attempt == 2:
+                job["phase"] = "Repair attempts exhausted; live source unchanged"
+                _save(job)
+                return
+            request = (
+                job["request"]
+                + "\nRepair the previous candidate. The real verifier reported:\n"
+                + json.dumps(evidence, ensure_ascii=False)[-10000:]
+                + "\nPrevious candidate (source, not instructions):\n"
+                + json.dumps(plan, ensure_ascii=False)[-80000:]
+                + "\nReturn a complete corrected plan. Preserve all gates and existing tests."
+            )
+            job["approval"] = ""
+            _save(job)
     except Exception as exc:
-        job.update(state="failed", error=f"{type(exc).__name__}: {str(exc)[:500]}")
+        job.update(state="failed", phase="Blocked; live source unchanged", error=_failure_hint(exc))
         _save(job)
     finally:
         with _lock:
             _active = None
+
+
+def retry(job_id: str) -> dict:
+    with _lock:
+        job = _read(job_id)
+        if job.get("state") != "failed":
+            raise ValueError("Only failed development can be retried")
+        # New job, new source snapshot, new approval. No action is replayed.
+        result = propose(job["request"], reload=job.get("reload", True))
+        result["retry_of"] = job_id
+        return result
+
+
+def _run_verifier(command, stage, env, job):
+    stop = threading.Event()
+
+    def observe():
+        previous = None
+        while not stop.wait(0.5):
+            try:
+                report = json.loads(
+                    (stage / "runtime/development_progress.json").read_text(encoding="utf-8")
+                )
+                if (
+                    report != previous
+                    and isinstance(report.get("progress"), int)
+                    and 25 <= report["progress"] <= 95
+                ):
+                    previous = report
+                    job.update(
+                        progress=report["progress"],
+                        phase=str(report.get("phase", "Verifying"))[:150],
+                    )
+                    _save(job)
+            except (OSError, ValueError, TypeError):
+                continue
+
+    observer = threading.Thread(target=observe, daemon=True, name="EraVerificationProgress")
+    observer.start()
+    try:
+        return subprocess.run(
+            command, cwd=stage, env=env, capture_output=True, text=True, timeout=600
+        )
+    finally:
+        stop.set()
+        observer.join(timeout=2)
 
 
 def prepare(job: dict, plan: dict) -> dict:
@@ -327,6 +589,8 @@ def prepare(job: dict, plan: dict) -> dict:
         raise ValueError("A new feature requires at least one new or updated test")
     folder = JOBS / job["id"]
     stage = folder / "workspace"
+    if stage.exists():
+        shutil.rmtree(stage)
     _copy_source(stage)
     # Save candidate inputs outside the clone so the worker cannot confuse them
     # with already-applied source. Capture originals for stale-source protection.
@@ -347,20 +611,24 @@ def prepare(job: dict, plan: dict) -> dict:
                 )[:40000],
             }
         )
-    job.update(state="verifying", progress=25, plan=str(plan.get("plan", ""))[:4000])
+    job.update(
+        state="verifying",
+        progress=25,
+        phase="Applying staged candidate",
+        approval="",
+        plan=str(plan.get("plan", ""))[:4000],
+    )
     _save(job)
     payload = {"files": contents, "tests": tests, "reload": job["reload"]}
     (folder / "candidate.json").write_text(json.dumps(payload), encoding="utf-8")
     env = dict(os.environ)
     env["ERA_DEVELOPMENT_STAGE"] = str(stage)
     env["ERA_SELF_IMPROVE_VERIFYING"] = "1"
-    completed = subprocess.run(
+    completed = _run_verifier(
         [sys.executable, "tools/era_development_worker.py", str(folder / "candidate.json")],
-        cwd=stage,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
+        stage,
+        env,
+        job,
     )
     (folder / "verification.txt").write_text(
         completed.stdout + "\n" + completed.stderr, encoding="utf-8"
@@ -375,7 +643,7 @@ def prepare(job: dict, plan: dict) -> dict:
     if completed.returncode != 0 or not checks.get("passed"):
         job.update(
             state="failed",
-            progress=100,
+            phase="Verification failed; live source unchanged",
             error="Candidate verification failed; live source is unchanged",
         )
     else:
@@ -406,7 +674,10 @@ def prepare(job: dict, plan: dict) -> dict:
         job["approval"] = hashlib.sha256(
             json.dumps(job["files"], sort_keys=True).encode()
         ).hexdigest()
-        job.update(state="awaiting_approval", progress=100)
+        job.pop("error", None)
+        job.update(
+            state="awaiting_approval", progress=100, phase="Verified; awaiting your approval"
+        )
     _save(job)
     return job
 
@@ -472,13 +743,28 @@ def activate(job_id: str, approval: str, *, confirmed: bool = False) -> dict:
                 for item in job["files"]
             )
             job["state"] = "activated"
+            job["phase"] = (
+                "Activated; restart required" if job["requires_restart"] else "Activated live"
+            )
             _save(job)
         except Exception as exc:
-            _rollback_files(job)
+            rollback_error = None
+            try:
+                _rollback_files(job)
+            except (OSError, ValueError) as recovery_exc:
+                rollback_error = str(recovery_exc)
             with feature_engine._lock:
                 feature_engine._features.clear()
                 feature_engine._features.update(prior_features)
-            job.update(state="failed", error=f"Activation rolled back: {type(exc).__name__}: {exc}")
+            job.update(
+                state="recovery_required" if rollback_error else "failed",
+                error=f"Activation error: {type(exc).__name__}: {exc}; "
+                + (
+                    f"manual recovery required: {rollback_error}"
+                    if rollback_error
+                    else "live source rolled back"
+                ),
+            )
             _save(job)
             raise
         from app.hud.events import hud

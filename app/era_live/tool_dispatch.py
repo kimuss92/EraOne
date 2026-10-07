@@ -120,21 +120,20 @@ from memory.memory_manager import (
 )
 from memory.transient_filter import is_transient_memory_key
 
-# "Launch Protocol One" / "launch protocol 1" — the user's own words are the only
-# way to start a maintenance cycle (see _protocol_one_commanded).
-# The user naming Claude in their own words is what authorises a claude_bridge
-# send (see _claude_send_authorized). "Cloud" is how ASR often hears "Claude".
-_CLAUDE_MENTION = re.compile(r"\b(?:claude|clawed|cloud\s+code)\b", re.IGNORECASE)
-CLAUDE_CONVERSATION_S = 20 * 60
-
-# Shown when a claude_bridge send is declined because the user has not named
-# Claude in their own words (see _claude_send_authorized). This is a handled
-# refusal that needs the user, NOT a tool failure: it is returned as a
-# successful ToolResult so it is never logged as tool.execution.failed and
-# never feeds the sustained-failure auto-reporter.
-CLAUDE_SEND_NEEDS_USER_MSG = (
-    "Not sent. I only message Claude Code when you ask me to in your own words "
-    "- say, for example, 'ask Claude Code about the search'."
+# Model-facing acknowledgement returned the instant a crew `ask` is handed to a
+# background task (see _start_background_crew_ask). A crew turn can run for
+# minutes; awaiting it inline blocks the receive loop from draining the socket,
+# which trips Gemini's keepalive (1011) and kills the session mid-call -- and the
+# result then has nowhere to return, so the HUD shows the real outcome while Era
+# stays silent (the exact "panels disagree / never reports back" bug). The real
+# outcome is delivered when the crew finishes, through _deliver_crew_outcome ->
+# _deliver_or_queue_cm_report, which survives a reconnect. This text tells the
+# model to say it is on it WITHOUT inventing an answer the crew has not given.
+_CREW_BG_ACK = (
+    "The crew is now working on this in the background. Tell the user, in your own "
+    "words, that you have put the crew on it and will report back the moment they "
+    "answer. Do NOT claim the crew has answered yet, do NOT invent their findings, "
+    "and do NOT call the crew tool again for this request."
 )
 
 _PROTOCOL_ONE_COMMAND = re.compile(r"\blaunch\s+protocol\s+(?:one|1)\b", re.IGNORECASE)
@@ -891,6 +890,24 @@ class ToolDispatchMixin:
             EraState.PROCESSING, reason="tool_call", metadata={"tool": name}
         )
 
+        # ── Crew 'ask': never awaited on the receive loop ───────────────────
+        # A crew turn runs for seconds to minutes. Awaiting it here keeps the
+        # `async for ... in session.receive()` loop suspended, so Gemini's
+        # keepalive ping goes unanswered and the session is torn down (1011)
+        # mid-call -- after which the result reaches the HUD (fed straight from
+        # the ToolResult) but not the model (its channel is gone), so Era never
+        # reports the outcome. Hand the turn to a background task, like the CM
+        # lane does for its long jobs, and answer the model NOW; the real
+        # outcome is spoken when the crew finishes, through a path that survives
+        # a reconnect (see _start_background_crew_ask / _deliver_crew_outcome).
+        if self._crew_ask_should_background(name, hud_args):
+            self._start_background_crew_ask(fc, hud_call, hud_args)
+            if not self.ui.muted and not self._standby_active:
+                self.ui.set_state("LISTENING")
+            return build_function_response(
+                fc, ToolResult.ok(message=_CREW_BG_ACK), types.FunctionResponse
+            )
+
         # In-flight count: a planned GoAway renewal must never close the socket
         # while an action is mid-execution, because the tool result would have
         # nowhere to go and the model would be left believing it never ran.
@@ -970,6 +987,136 @@ class ToolDispatchMixin:
             self.ui.set_state("LISTENING")
 
         return build_function_response(fc, result, types.FunctionResponse)
+
+    # ── Crew: run off the receive loop, report the real outcome ─────────────
+    def _crew_ask_should_background(self, name: str, args: dict) -> bool:
+        """True for a crew `ask` that should run as a background task.
+
+        Only `ask` is slow enough to matter -- `status`/`list` return in
+        milliseconds and stay inline. A crew call inside a SCHEDULED chain is
+        left inline too: a later step may feed the crew's answer, and an
+        immediate "working on it" ack would break that hand-off.
+        """
+        if name != "crew":
+            return False
+        if str((args or {}).get("action") or "ask").strip().lower() != "ask":
+            return False
+        try:
+            from core.task_scheduler import current_task
+
+            if current_task.get() is not None:
+                return False
+        except Exception:  # noqa: BLE001 — no scheduler context means the live path
+            pass
+        # While a brand-ask is open, _execute_tool_raw holds every non-whitelisted
+        # tool so Era just asks and waits. Backgrounding would skip that hold, so
+        # fall through to the inline path (which returns the hold message) instead.
+        try:
+            if self._pending_cm_ask_active():
+                return False
+        except Exception:  # noqa: BLE001 — no CM-ask state means nothing to hold for
+            pass
+        return True
+
+    def _start_background_crew_ask(self, fc, hud_call, hud_args: dict) -> None:
+        """Run a crew `ask` off the receive loop and report its real outcome.
+
+        The HUD row opened by `_execute_tool` stays *running* until this worker
+        finishes it with the TRUE result, so the panel shows running -> real
+        outcome and never a premature "success". The task-trace line is written
+        here too (same shape and fields as the inline path), and the spoken
+        outcome goes through `_deliver_or_queue_cm_report`, which speaks now if a
+        session is live and otherwise delivers on the next reconnect -- so a
+        failure is reported even when the session rotated mid-call.
+
+        Created as a plain background task (not adopted into the session's
+        TaskGroup), exactly like the CM lane's long jobs, so a rotation that
+        tears the session down cannot cancel the crew turn or lose its result.
+        """
+        from crew.runtime import run_tool
+
+        user_text = getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", "")
+        # Consume the router's trace crumbs now: the foreground call returns the
+        # ack and never reaches the code that would read or clear them, so the
+        # worker owns them and they must not leak onto the next tool call.
+        routed = getattr(self, "_trace_routed", None) or ("crew", dict(hud_args))
+        safety = getattr(self, "_trace_safety", None)
+        self._trace_routed = self._trace_safety = None
+
+        async def _worker() -> None:
+            loop = asyncio.get_running_loop()
+            try:
+                result = await loop.run_in_executor(None, lambda: run_tool(dict(hud_args)))
+            except Exception as exc:  # noqa: BLE001 — a crew crash is still an outcome to report
+                result = ToolResult.fail(
+                    message=f"The crew failed: {type(exc).__name__}",
+                    error=f"The crew failed: {type(exc).__name__}",
+                    error_type="BotError",
+                )
+            if not isinstance(result, ToolResult):
+                result = ToolResult.from_any(result)
+
+            # A staged replace that needs the user's yes: put the plan in front
+            # of the user over a channel the model cannot edit, and let the
+            # existing confirmation flow take over (the store was armed
+            # in-process by crew/runtime). No spoken "outcome" in this case --
+            # the announced plan already asks the question.
+            confirmation = result.error_type == "ConfirmationRequired" and isinstance(
+                result.data.get(PREVIEW_KEY), str
+            )
+            if confirmation:
+                try:
+                    result.data[ANNOUNCED_KEY] = bool(
+                        self._announce_pending_plan(result.data[PREVIEW_KEY])
+                    )
+                except Exception as e:  # noqa: BLE001
+                    print(f"[era] [CREW] could not announce the crew plan: {e}")
+
+            try:
+                hud.tool_finished(hud_call, "crew", hud_args, result, routed_to="crew")
+            except Exception as e:  # noqa: BLE001 — the HUD must never break the report
+                print(f"[era] [CREW] HUD finish skipped: {e}")
+
+            try:
+                from core.task_trace import trace
+
+                trace(
+                    "tool",
+                    app="era",
+                    user_text=user_text,
+                    requested="crew",
+                    requested_args=hud_args,
+                    tool=routed[0],
+                    args=routed[1],
+                    safety=safety,
+                    ok=bool(result.success),
+                    error_type=result.error_type,
+                    result=result.short_message(300),
+                    duration_ms=result.duration_ms,
+                    verification=result.verification_status,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            if not confirmation:
+                self._deliver_crew_outcome(result)
+
+        self._spawn_background_task(_worker(), "crew-ask")
+
+    def _deliver_crew_outcome(self, result: ToolResult) -> None:
+        """Speak the crew's real outcome -- success OR failure -- through the
+        reconnect-surviving path, so the HUD and Era can never disagree and a
+        failure is never swallowed when the live session rotated mid-call."""
+        if result.success:
+            answer = result.short_message(800).strip() or "Done."
+            spoken = f"The crew's finished, sir. {answer}"
+        else:
+            reason = result.short_message(400).strip() or (result.error_type or "no reason given")
+            spoken = f"The crew couldn't finish that, sir. {reason}"
+        try:
+            self._deliver_or_queue_cm_report(spoken, verbatim=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[era] [CREW] could not deliver the crew outcome: {e}")
 
     def _handle_set_voice(self, args: dict) -> str:
         """Switch Era's voice between Fish Audio (primary) and Gemini (fallback).
@@ -1282,7 +1429,7 @@ class ToolDispatchMixin:
         return (
             f"NOT started — I have not touched any of my code, and nothing is running "
             f"in the background. {message} Tell the user exactly this: you could not "
-            f"tell which file to change, so you did nothing, and ask which file they "
+            f'tell which file to change. First call self_improve action="locate" or autonomous_development inspect, then ask which file they '
             f"mean. Do NOT say you are working on it."
         )
 
@@ -1839,37 +1986,6 @@ class ToolDispatchMixin:
                 duration_ms=duration(),
             )
 
-        # A claude_bridge send that the user has ALREADY authorised in their own
-        # words needs no second confirmation once they've set the standing
-        # "just send it" preference. safety_guard keeps this MEDIUM/confirm by
-        # default (it is a pure function and cannot see the live user-words
-        # window); the downgrade lives here because it depends on BOTH the runtime
-        # user-words gate AND the stored waiver. The user-words gate is the
-        # injection boundary and is NEVER waived — if it has not passed, this
-        # leaves requires_confirmation set and the staging gate below refuses the
-        # send outright.
-        if requires_confirmation and tool_name == "claude_bridge":
-            cb_action = str(parameters.get("action") or "").lower().strip()
-            if cb_action in ("ask", "reply") and self._claude_send_authorized(cb_action):
-                try:
-                    from core.user_prefs import is_claude_send_confirmation_waived
-
-                    waived = is_claude_send_confirmation_waived()
-                except Exception:
-                    waived = False
-                if waived:
-                    requires_confirmation = False
-                    print(
-                        "[era] [SAFETY] claude_bridge: user-authorised + standing "
-                        "'just send it' waiver — sending without a second confirmation"
-                    )
-                    log_event(
-                        main_logger,
-                        "tool.claude_bridge.confirmation_waived",
-                        "INFO",
-                        action=cb_action,
-                    )
-
         if requires_confirmation:
             print(f"[era] [WARN] confirmation required ({risk_level})")
             confirmed = bool(parameters.get("confirmed", False))
@@ -1936,35 +2052,6 @@ class ToolDispatchMixin:
                     duration_ms=duration(),
                 )
             else:
-                # A claude_bridge send is authorised by the USER's own words, not
-                # by the model-driven confirmation gate (see _claude_send_authorized).
-                # Check it HERE, before staging: otherwise an unauthorised or
-                # self-initiated send is parked as a pending confirmation the model
-                # then loops on — every confirm re-runs the same user-words check
-                # inside _execute_tool_raw, which cannot pass until the user speaks,
-                # so each confirm returns "Not sent" and, mis-read as a failure,
-                # trips the sustained-failure auto-reporter (era-bridge 651c2d2f).
-                if tool_name == "claude_bridge":
-                    cb_action = str(parameters.get("action") or "").lower().strip()
-                    if cb_action in ("ask", "reply") and not self._claude_send_authorized(
-                        cb_action
-                    ):
-                        print(
-                            "[era] [WAIT] claude_bridge send not user-authorised; "
-                            "refusing up front (no confirmation staged)"
-                        )
-                        log_event(
-                            main_logger,
-                            "tool.claude_bridge.unauthorized",
-                            "INFO",
-                            action=cb_action,
-                        )
-                        return ToolResult.ok(
-                            message=CLAUDE_SEND_NEEDS_USER_MSG,
-                            action_name=cb_action,
-                            tool_name=tool_name,
-                            duration_ms=duration(),
-                        )
                 expired = self._pending_store.expire_all()
                 if expired:
                     print(f"[era] [CLEAN] expired {expired} stale pending confirmation(s)")
@@ -2097,17 +2184,6 @@ class ToolDispatchMixin:
                 duration_ms=result.duration_ms,
             )
             self._log_caught_exception(tool_name, parameters, result)
-            # A streak of identical failures is reported to Claude Code by code,
-            # not by the model; the router owns every gate (cooldown, idle, benign).
-            from core.claude_error_router import note_failure
-
-            note_failure(
-                tool_name,
-                parameters.get("action"),
-                result.error_type,
-                result.short_message(800),
-                notify=self._claude_bridge_notify,
-            )
 
         return result
 
@@ -2118,7 +2194,7 @@ class ToolDispatchMixin:
         log its frames now. A held gate is the system working — never logged."""
         try:
             from core import handled_exceptions
-            from core.claude_error_router import BENIGN_ERROR_TYPES
+            from core.tool_result import BENIGN_ERROR_TYPES
 
             if not handled_exceptions.installed() or result.error_type in BENIGN_ERROR_TYPES:
                 return
@@ -2147,36 +2223,6 @@ class ToolDispatchMixin:
             )
         except Exception as e:  # diagnostics must never change a tool's outcome
             print(f"[era] [SELF-HEAL] caught-exception capture failed: {e}")
-
-    def _claude_send_authorized(self, action: str) -> bool:
-        """Sending to Claude Code needs the USER's words, not only the confirmation
-        gate: that gate is model-driven, and Claude Code can act on this machine
-        outside Era's gates, so an injected "tell Claude to run X" must fail here.
-
-        ask: the user named Claude in the last 3 minutes. reply: the same, OR it
-        continues a conversation the user opened within CLAUDE_CONVERSATION_S —
-        which is what lets Era sustain a multi-turn exchange it was asked to have."""
-        if self._user_words_match(_CLAUDE_MENTION, window_s=180.0):
-            self._claude_authorized_at = time.time()
-            return True
-        if action == "reply":
-            since = getattr(self, "_claude_authorized_at", 0.0)
-            return time.time() - since < CLAUDE_CONVERSATION_S
-        return False
-
-    def _claude_bridge_notify(self, text: str) -> None:
-        """Tell Era about bridge progress. The text is always composed by Era's own
-        code and never contains Claude's words, so it may enter the live session
-        and prompt Era to call read_reply — Claude's reply itself only ever
-        arrives as a tool result."""
-        try:
-            self.ui.write_log(f"SYS: {text}")
-        except Exception:
-            pass
-        try:
-            self.speak(text)
-        except Exception:
-            pass
 
     def _announce_pending_plan(self, preview_text: str) -> bool:
         """Put the resolved plan in front of the user WITHOUT going through the model.
@@ -2691,29 +2737,6 @@ class ToolDispatchMixin:
             )
             result = r or "Done."
 
-        elif tool_name == "claude_bridge":
-            from actions.claude_bridge import claude_bridge
-
-            cb_args = dict(args)
-            cb_action = str(cb_args.get("action") or "").lower().strip()
-            if cb_action in ("ask", "reply") and not self._claude_send_authorized(cb_action):
-                # A deliberate, handled refusal — not a tool failure. Returned as a
-                # successful ToolResult (not a bare "Not sent..." string, which the
-                # first-line classifier reads as a failure) so it is never logged as
-                # tool.execution.failed nor fed to the auto-reporter. The staging
-                # gate above normally refuses first; this covers the confirm path
-                # and any caller that reaches _execute_tool_raw directly.
-                result = ToolResult.ok(
-                    message=CLAUDE_SEND_NEEDS_USER_MSG,
-                    action_name=cb_action,
-                    tool_name="claude_bridge",
-                )
-            else:
-                # read_reply can wait up to 45s for Claude, so never on the loop.
-                result = await loop.run_in_executor(
-                    None, lambda: claude_bridge(cb_args, notify=self._claude_bridge_notify)
-                )
-
         elif tool_name == "system_performance":
             r = await loop.run_in_executor(
                 None, lambda: system_performance(parameters=args, response=None, player=self.ui)
@@ -3222,6 +3245,14 @@ class ToolDispatchMixin:
                     reload=args.get("reload", True),
                 )
                 result = f"Development {job['id']} started in staging. Review verified changes in the HUD; final approval is required."
+            elif action == "inspect":
+                result = json.dumps(
+                    await asyncio.to_thread(development.inspect_request, args.get("request", ""))
+                )
+            elif action == "retry":
+                result = json.dumps(
+                    await asyncio.to_thread(development.retry, args.get("job_id", ""))
+                )
             elif action == "reject":
                 result = json.dumps(
                     await asyncio.to_thread(development.reject, args.get("job_id", ""))
@@ -3236,7 +3267,7 @@ class ToolDispatchMixin:
                 )
             else:
                 raise ValueError(
-                    "Only propose/status/reject are allowed; final approval belongs to the user in the HUD"
+                    "Only inspect/propose/status/retry/reject are allowed; final approval belongs to the user in the HUD"
                 )
 
         elif tool_name == "run_feature":
@@ -3254,7 +3285,7 @@ class ToolDispatchMixin:
             improve_args = dict(args)
             improve_action = str(improve_args.get("action") or "propose").lower().strip()
 
-            if improve_action in ("propose", "list_backups", ""):
+            if improve_action in ("propose", "list_backups", "find", "locate", ""):
                 # Read-only and fast enough to answer inline.
                 r = await asyncio.to_thread(
                     self_improve, improve_args, None, self.ui, None, self.speak

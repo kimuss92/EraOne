@@ -1,3 +1,7 @@
+# Current release: Autonomous development + HUD
+
+Start with [AUTONOMY_HUD_RELEASE.md](AUTONOMY_HUD_RELEASE.md) and [WINDOWS_TEST_SCENARIOS.md](WINDOWS_TEST_SCENARIOS.md). Use a test copy and preserve your newest local credentials/memory before replacing files.
+
 # EraOne stability update
 
 Start here for this ZIP. This is the existing Windows assistant with reliability

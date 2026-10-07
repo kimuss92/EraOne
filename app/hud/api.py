@@ -161,10 +161,11 @@ class HudApi:
         return web.json_response({"jobs": await asyncio.to_thread(development.list_jobs)})
 
     async def development_action(self, r: web.Request):
-        self._need_engine()
         from core import development
 
         body = await _json_body(r)
+        if body.get("action") != "inspect":
+            self._need_engine()
         try:
             if body.get("action") == "propose":
                 result = await asyncio.to_thread(development.propose, body.get("request", ""))
@@ -175,10 +176,14 @@ class HudApi:
                     body.get("approval"),
                     confirmed=body.get("confirmed"),
                 )
+            elif body.get("action") == "retry":
+                result = await asyncio.to_thread(development.retry, body.get("id"))
+            elif body.get("action") == "inspect":
+                result = await asyncio.to_thread(development.inspect_request, body.get("request", ""))
             elif body.get("action") == "reject":
                 result = await asyncio.to_thread(development.reject, body.get("id"))
             else:
-                raise ValueError("Use propose, approve, or reject")
+                raise ValueError("Use inspect, propose, retry, approve, or reject")
             return web.json_response(result)
         except (ValueError, OSError) as exc:
             return web.json_response({"error": str(exc)}, status=409)
