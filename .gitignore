@@ -54,6 +54,12 @@ config/speaker_enrollment.pth
 config/speaker_profile.json*
 memory/*.json
 memory/*.json.bak*
+# Learned memory/feedback DATA stays on the local machine, never on the remote
+# (the .py implementation under memory/ is still tracked; only the data is not).
+memory/*.jsonl
+memory/*.jsonl.bak*
+memory/organization/
+source_code_folder/feedback_memory.json
 .claude-flow/
 
 # Added 2026-09-30 for GitHub publish: local worktrees + backup snapshots, not source
