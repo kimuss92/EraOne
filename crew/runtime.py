@@ -46,6 +46,12 @@ REVIEW_BUDGET_S = 90.0  # a Nabar review gets its own, shorter budget
 _OBS_CHARS = 1500
 _TERMINAL = frozenset({"ConfirmationRequired", "ConfirmationBusy", "ReviewPaused"})
 _WRITE_CAPS = frozenset({"vault.create", "vault.append"})
+# Idempotent reads: an identical repeat inside one turn yields nothing new and
+# only burns steps. The loop answers a repeat with a "redundant" observation
+# instead of re-running it, so a bot that keeps re-searching is told to use what
+# it already has — the fix for a researcher exhausting MAX_STEPS in a
+# vault.search / vault.read loop without ever finishing.
+_READ_CAPS = frozenset({"vault.read", "vault.search"})
 
 LLM = Callable[[str, str, str], dict]  # (system, user, tier) -> reply dict; {} = unavailable
 
@@ -184,6 +190,7 @@ class InProcessTransport(Transport):
         effects: list[dict] = []
         used: list[str] = []
         bad_format = 0
+        seen_reads: dict[str, str] = {}  # read key -> obs id that already answered it
         for step in range(1, MAX_STEPS + 1):
             if turn.deadline and time.monotonic() > turn.deadline:
                 return fail("StepLimit", f"{spec.id} ran out of time for this request.")
@@ -227,6 +234,24 @@ class InProcessTransport(Transport):
             if name not in spec.capabilities or name not in CAPABILITIES:
                 observations.append((obs_id, name, f"DENIED: {spec.id} was not granted {name!r}."))
                 continue
+            dedup_key = None
+            if name in _READ_CAPS:
+                dedup_key = f"{name}:{json.dumps(args, sort_keys=True, ensure_ascii=False)}"
+                prior = seen_reads.get(dedup_key)
+                if prior is not None:
+                    # Same read, same args, already answered this turn: re-running it
+                    # changes nothing and spends a step the bot needs to finish. Point
+                    # it back at the result it has instead of executing again.
+                    observations.append(
+                        (
+                            obs_id,
+                            name,
+                            f"REDUNDANT: an identical {name} already ran at {prior}; its "
+                            "result is above. Reuse it or reply with final — do not repeat "
+                            "the same query.",
+                        )
+                    )
+                    continue
             result = self._execute(spec, turn, name, args)
             used.append(name)
             if not result.success and result.error_type in _TERMINAL:
@@ -244,6 +269,8 @@ class InProcessTransport(Transport):
             rendered = _render(result)
             executed[obs_id] = rendered
             observations.append((obs_id, name, rendered))
+            if dedup_key is not None and result.success:
+                seen_reads[dedup_key] = obs_id
         return fail("StepLimit", f"{spec.id} used all {MAX_STEPS} steps without finishing.")
 
     def _execute(self, spec: BotSpec, turn: Turn, name: str, args: dict) -> ToolResult:

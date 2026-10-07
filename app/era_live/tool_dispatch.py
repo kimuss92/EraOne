@@ -3182,14 +3182,30 @@ class ToolDispatchMixin:
         elif tool_name == "visual_engine":
             from core import visual_engine
 
-            command = json.loads(args.get("command", "{}"))
-            result = json.dumps(
-                await asyncio.to_thread(
-                    visual_engine.snapshot
-                    if command.get("action") == "snapshot"
-                    else lambda: visual_engine.apply(command)
+            try:
+                command = json.loads(args.get("command", "{}"))
+                result = json.dumps(
+                    await asyncio.to_thread(
+                        visual_engine.snapshot
+                        if command.get("action") == "snapshot"
+                        else lambda: visual_engine.apply(command)
+                    )
                 )
-            )
+            except ValueError as exc:
+                # apply()/snapshot() reject an invalid HUD command by design —
+                # edited state is never trusted as markup (and json.loads raises
+                # ValueError on malformed JSON). A bad command the model sent is
+                # an EXPECTED tool failure, not a crash. Report it gracefully so
+                # it logs as tool.execution.failed and never reaches the generic
+                # handler that calls log_crash(tool.execution.exception) — which
+                # feeds core/self_heal, making it loop trying to "repair" the
+                # safety-critical validator behind the guard that blocks it.
+                # This mirrors how actions/scheduled_task catches TaskError.
+                result = {
+                    "success": False,
+                    "message": f"Visual command rejected: {exc}",
+                    "error_type": "VisualCommandRejected",
+                }
 
         elif tool_name == "autonomous_development":
             from core import development, feature_engine

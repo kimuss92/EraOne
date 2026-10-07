@@ -266,6 +266,37 @@ def test_an_unreachable_gateway_is_transport_down_not_an_exception(keyfile):
     assert out.error_type == "TransportDown" and "unreachable" in out.data["detail"]
 
 
+def test_a_transient_probe_blip_is_retried_not_a_refused_turn(keyfile, monkeypatch):
+    # The gateway is up but the first toolsets probe times out (cold start / rebind).
+    # The retry reaches it, so the crew turn runs instead of being refused.
+    monkeypatch.setattr("crew.hermes_transport.time.sleep", lambda *_a, **_k: None)
+    fake = FakeHttp()
+    seen = {"toolsets": 0}
+
+    def flaky(method, url, headers, body, timeout):
+        if url.endswith("/v1/toolsets"):
+            seen["toolsets"] += 1
+            if seen["toolsets"] == 1:
+                raise TimeoutError("transient blip")
+        return fake(method, url, headers, body, timeout)
+
+    t, _ = make(keyfile, http=flaky)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.success, out.data.get("detail")
+    assert seen["toolsets"] >= 2  # first probe timed out; the retry reached the gateway
+
+
+def test_a_probe_that_times_out_every_retry_still_fails_closed(keyfile, monkeypatch):
+    # A genuinely unreachable gateway must still refuse — the retry absorbs a blip,
+    # it never turns a real outage into a run.
+    monkeypatch.setattr("crew.hermes_transport.time.sleep", lambda *_a, **_k: None)
+    http = FakeHttp()
+    http.raise_on_toolsets = TimeoutError("down")
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "TransportDown" and "unreachable" in out.data["detail"]
+
+
 def test_drift_is_caught_by_the_periodic_recheck(keyfile):
     now = [0.0]
     t, http = make(keyfile, clock=lambda: now[0])
