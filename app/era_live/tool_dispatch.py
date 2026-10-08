@@ -2771,8 +2771,9 @@ class ToolDispatchMixin:
                 "high": TaskPriority.HIGH,
             }
             priority = priority_map.get(args.get("priority", "normal").lower(), TaskPriority.NORMAL)
+            task_speak = getattr(self, "speak_dispatched", None) or self.speak
             task_id = get_queue().submit(
-                goal=args.get("goal", ""), priority=priority, speak=self.speak
+                goal=args.get("goal", ""), priority=priority, speak=task_speak
             )
             result = f"Task started (ID: {task_id})."
 
