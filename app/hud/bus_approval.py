@@ -12,6 +12,10 @@ description (tool_adapter.describe — the same clipped/masked text the Activity
 panel shows), the gate's reason, the risk level and the expiry. Raw parameters
 never leave the backend.
 
+The on-screen card clears itself after APPROVAL_VISIBLE_S. That is display only:
+the confirmation stays armed in the store, so the user's own spoken or typed
+answer still resolves it, and the bus keeps tracking it until the store drops it.
+
 Mixed into HudBus (app/hud/events.py); relies on its lock, ``_emit`` and
 ``_poke``. Every method swallows its own errors (degrade-never-raise).
 """
@@ -23,6 +27,9 @@ from typing import Any
 
 from app.hud import tool_adapter
 from app.hud.bus_const import APPROVAL_RECHECK_S
+
+# How long the Action Required card stays on screen before it clears itself.
+APPROVAL_VISIBLE_S = 15.0
 
 
 def _live_pending() -> Any:
@@ -40,27 +47,45 @@ class ApprovalMixin:
 
     def approval_public(self) -> dict | None:
         a = self._approval
-        return None if a is None else {k: v for k, v in a.items() if not k.startswith("_")}
+        if a is None or a.get("_hidden"):
+            return None
+        return {k: v for k, v in a.items() if not k.startswith("_")}
 
     def _approval_next_deadline(self) -> float | None:
         a = self._approval
-        return None if a is None else a["_next"]
+        if a is None:
+            return None
+        if a.get("_hidden"):
+            return a["_next"]
+        return min(a["_next"], a["_hide_at"])
 
     def _approval_label(self) -> str:
         a = self._approval
-        return "" if a is None else f"Approval required · {a['title']}"
+        if a is None or a.get("_hidden"):
+            return ""
+        return f"Approval required · {a['title']}"
 
     def _sync_approval(self) -> None:
         """Make the HUD's approval match the store. Call under the bus lock."""
         try:
             p = _live_pending()
             a = self._approval
+            now = time.monotonic()
             if a is not None and p is not None and p.confirmation_id == a["id"]:
-                a["_next"] = time.monotonic() + APPROVAL_RECHECK_S
+                a["_next"] = now + APPROVAL_RECHECK_S
+                if not a.get("_hidden") and now >= a["_hide_at"]:
+                    # Display timeout only: the store still holds the confirmation.
+                    a["_hidden"] = True
+                    self._emit(
+                        "approval.resolved",
+                        toolName=a["tool"],
+                        metadata={"id": a["id"], "reason": "display_timeout"},
+                    )
                 return
             if a is not None:
                 self._approval = None
-                self._emit("approval.resolved", toolName=a["tool"], metadata={"id": a["id"]})
+                if not a.get("_hidden"):
+                    self._emit("approval.resolved", toolName=a["tool"], metadata={"id": a["id"]})
             if p is not None:
                 d = tool_adapter.describe(p.tool, p.parameters)
                 self._approval = {
@@ -73,7 +98,9 @@ class ApprovalMixin:
                     "risk": str(p.risk_level or "").upper(),
                     "createdAt": p.created_at,
                     "expiresAt": p.expires_at,
-                    "_next": time.monotonic() + APPROVAL_RECHECK_S,
+                    "_next": now + APPROVAL_RECHECK_S,
+                    "_hide_at": now + APPROVAL_VISIBLE_S,
+                    "_hidden": False,
                 }
                 self._emit(
                     "approval.requested",
