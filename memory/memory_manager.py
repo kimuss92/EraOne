@@ -985,7 +985,7 @@ def retrieve_ranked_memory(query: str, top_k: int = 5, category: str | None = No
 # so the model was handed confident-looking noise instead of "I don't have
 # that". Prompt injection of the memory block is deliberately NOT floored:
 # there the job is a recency digest, not an answer.
-_RETRIEVAL_MIN_SCORE = 0.15
+_RETRIEVAL_MIN_SCORE = 0.16
 
 
 def retrieve_context_reinforced(query: str, top_k: int = 5) -> str:

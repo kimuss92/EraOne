@@ -214,6 +214,18 @@ def test_a_cosine_below_the_cut_scores_exactly_zero():
     assert sr.score(0.99) == 1.0
 
 
+def test_a_near_floor_semantic_match_is_not_returned_as_answer(enabled, monkeypatch):
+    """Borderline semantic noise must stay below the answerability floor."""
+    _stub_scores(monkeypatch, {"unrelated_fact": 0.15})
+    memory = {"notes": {"unrelated_fact": {"value": "a synthetic fact"}}}
+
+    ranked = rank_memory_entries(
+        memory, "what is the current weather", top_k=5, min_score=_RETRIEVAL_MIN_SCORE
+    )
+
+    assert ranked == []
+
+
 def test_the_cut_stays_above_the_measured_noise_ceiling():
     """The number is a noise budget. An unanswerable query reached cosine 0.404
     against this store; the cut must not drop under that without the sweep in
@@ -309,6 +321,24 @@ requires_model = pytest.mark.skipif(
 )
 
 
+def _measurement_memory():
+    """A fixed, synthetic corpus: quality tests must not depend on user memory."""
+    entries = {
+        "favorite_football_team": "The football club I support is Example FC.",
+        "job": "My occupation is video editing.",
+        "current_city": "I live in Example City.",
+        "birthday": "My birthday is April 1, 2000.",
+        "preferred_name": "Please call me Alex.",
+        "magnific_browser_preference": "I use Firefox for Magnific.",
+        "son_favorite_song": "My child likes the song Example Song.",
+        "startup_greeting_preference": "When I start the app, greet me with Hello again.",
+        "restart_rule": "After a crash, restart the app automatically.",
+        "era_architecture_goal": "The main project design goal is reliability.",
+        "era_voice_upgrade_vibe_voice": "We chose Example Voice as the speech synthesis engine.",
+    }
+    return {"test_facts": {key: {"value": value} for key, value in entries.items()}}
+
+
 @requires_model
 def test_measured_recall_beats_the_lexical_baseline(enabled):
     """THE acceptance-point-4 measurement. Numbers, not adjectives.
@@ -317,9 +347,7 @@ def test_measured_recall_beats_the_lexical_baseline(enabled):
     store may push it up, and that must not be a failure. Falling back to the
     lexical baseline, however, means this feature has silently stopped working.
     """
-    from memory.memory_manager import load_memory
-
-    memory = load_memory()
+    memory = _measurement_memory()
     top1 = top3 = 0
     misses = []
     for query, want in PARAPHRASES:
@@ -337,16 +365,16 @@ def test_measured_recall_beats_the_lexical_baseline(enabled):
         f"{LEXICAL_TOP1} — semantic recall has stopped contributing. Misses: {misses}"
     )
     assert top1 >= MEASURED_TOP1, f"top-1 recall fell to {top1}/12 from {MEASURED_TOP1}: {misses}"
-    assert top3 >= MEASURED_TOP3, f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}"
+    assert top3 >= MEASURED_TOP3, (
+        f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}: {misses}"
+    )
 
 
 @requires_model
 def test_an_unanswerable_query_still_returns_nothing(enabled):
     """The cost side of the same coin, and the reason the cut is 0.36 and not
     0.25 (which scored 10/12 but returned noise for 3 of these 8)."""
-    from memory.memory_manager import load_memory
-
-    memory = load_memory()
+    memory = _measurement_memory()
     noisy = {}
     for query in UNANSWERABLE:
         ranked = rank_memory_entries(memory, query, top_k=5, min_score=_RETRIEVAL_MIN_SCORE)
