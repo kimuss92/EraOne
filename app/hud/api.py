@@ -53,6 +53,9 @@ class HudApi:
         r.add_get("/api/conversation", self.conversation)
         r.add_get("/api/activity", self.activity)
         r.add_get("/api/events", self.events)
+        r.add_get("/api/tasks", self.tasks)
+        r.add_get("/api/tasks/events", self.task_events)
+        r.add_get("/api/tasks/{task_id}", self.task)
         r.add_get("/api/memory", self.memory)
         r.add_get("/api/memory/search", self.memory_search)
         r.add_get("/api/settings", self.get_settings)
@@ -109,6 +112,31 @@ class HudApi:
     async def events(self, r: web.Request):
         limit = _int(r.query.get("limit"), 100, 1, 300)
         return web.json_response({"events": hud.recent_events(limit)}, dumps=_dumps)
+
+    async def tasks(self, r: web.Request):
+        from agent.task_queue import get_queue
+
+        limit = _int(r.query.get("limit"), 100, 1, 500)
+        rows = await asyncio.to_thread(get_queue().get_all_statuses)
+        return web.json_response({"tasks": rows[:limit]}, dumps=_dumps)
+
+    async def task_events(self, r: web.Request):
+        from agent.task_queue import get_queue
+
+        limit = _int(r.query.get("limit"), 100, 1, 500)
+        events = await asyncio.to_thread(get_queue().get_recent_task_events, limit)
+        return web.json_response({"events": events}, dumps=_dumps)
+
+    async def task(self, r: web.Request):
+        from agent.task_queue import get_queue
+
+        queue = get_queue()
+        task_id = r.match_info.get("task_id", "")
+        row = await asyncio.to_thread(queue.get_status, task_id)
+        if row is None:
+            raise web.HTTPNotFound(text="task not found")
+        events = await asyncio.to_thread(queue.get_task_events, task_id)
+        return web.json_response({"task": row, "events": events}, dumps=_dumps)
 
     async def memory(self, _r: web.Request):
         return web.json_response(await asyncio.to_thread(status.memory_overview), dumps=_dumps)

@@ -57,7 +57,7 @@ function ApprovalPrompt() {
 
   return (
     <section
-      className="approval mx-auto w-full max-w-3xl"
+      className="approval w-full"
       aria-label="Action required"
       aria-live="assertive"
       tabIndex={-1}
@@ -92,7 +92,7 @@ function ApprovalPrompt() {
           <Check className="h-3.5 w-3.5" /> Approve
         </button>
         <button type="button" className="mini-btn" disabled={!!sent} onClick={() => answer('no')}>
-          <X className="h-3.5 w-3.5" /> Reject
+          <X className="h-3.5 w-3.5" /> Cancel
         </button>
         <span className="text-meta t3" role="status">
           {sent ? `Sent “${sent}” — waiting for ERA ONE…` : 'or say “yes” / “no”'}

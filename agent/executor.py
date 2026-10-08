@@ -38,6 +38,40 @@ from core.safety_guard import classify_action
 from core.self_healing_router import route_tool_call
 from core.tool_result import ToolResult
 from core.verification import verify_tool_result
+from core.win_subprocess import NO_WINDOW
+
+PLAN_TIMEOUT_SECONDS = 60.0
+
+
+async def _run_in_daemon_thread(fn: Callable, *args):
+    """Run blocking planner work without asyncio shutdown waiting on a hung call."""
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def finish(value=None, error: BaseException | None = None) -> None:
+        if future.done():
+            return
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(value)
+
+    def run() -> None:
+        try:
+            value = fn(*args)
+        except BaseException as error:
+            try:
+                loop.call_soon_threadsafe(finish, None, error)
+            except RuntimeError:
+                pass
+        else:
+            try:
+                loop.call_soon_threadsafe(finish, value, None)
+            except RuntimeError:
+                pass
+
+    threading.Thread(target=run, daemon=True, name="AgentPlanner").start()
+    return await future
 
 # Shared with EraLive so confirmations created on either path are mutually
 # resolvable (previously two independent stores caused confirm RuntimeErrors).
@@ -128,6 +162,7 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
             text=True,
             timeout=120,
             cwd=str(Path.home()),
+            creationflags=NO_WINDOW,
         )
 
         try:
@@ -782,6 +817,22 @@ async def _jit_before_mutation(tool: str, action: str) -> None:
         pass
 
 
+def _safe_speak(speak: Callable | None, text: str) -> None:
+    """Progress speech must never terminate a recovery the task still needs.
+
+    The FINAL outcome announcement is the queue's job and is isolated there;
+    these mid-flight lines ("having trouble, retrying", "adjusting my
+    approach") are on the execution path, and a speaker that raises (no
+    session, TTS down) used to abort the retry/fix/replan they were narrating.
+    """
+    if not speak:
+        return
+    try:
+        speak(text)
+    except Exception as e:  # noqa: BLE001 — narration is never load-bearing
+        print(f"[Executor] ⚠️ could not speak progress: {e}")
+
+
 class AgentExecutor:
     MAX_REPLAN_ATTEMPTS = 2
 
@@ -790,22 +841,31 @@ class AgentExecutor:
         goal: str,
         speak: Callable | None = None,
         cancel_flag: threading.Event | None = None,
-    ) -> str:
+    ) -> ToolResult:
         print(f"\n[Executor] 🎯 Goal: {goal}")
 
         replan_attempts = 0
         completed_steps = []
+        skipped_errors = []
         step_results = {}
-        plan = await asyncio.to_thread(create_plan, goal)
+        if cancel_flag and cancel_flag.is_set():
+            return ToolResult.fail("Task cancelled.", error_type="Cancelled")
+        try:
+            plan = await asyncio.wait_for(
+                _run_in_daemon_thread(create_plan, goal), timeout=PLAN_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            return ToolResult.fail(
+                f"Task planning timed out after {PLAN_TIMEOUT_SECONDS:g} seconds.",
+                error_type="PlanningTimeout",
+            )
 
         while True:
             steps = plan.get("steps", [])
 
             if not steps:
                 msg = "I couldn't create a valid plan for this task, sir."
-                if speak:
-                    speak(msg)
-                return msg
+                return ToolResult.fail(msg, error_type="InvalidPlan")
 
             success = True
             failed_step = None
@@ -813,9 +873,7 @@ class AgentExecutor:
 
             for step in steps:
                 if cancel_flag and cancel_flag.is_set():
-                    if speak:
-                        speak("Task cancelled, sir.")
-                    return "Task cancelled."
+                    return ToolResult.fail("Task cancelled.", error_type="Cancelled")
 
                 step_num = step.get("step", "?")
                 tool = step.get("tool", "generated_code")
@@ -836,9 +894,11 @@ class AgentExecutor:
 
                 while attempt <= 3:
                     if cancel_flag and cancel_flag.is_set():
-                        break
+                        return ToolResult.fail("Task cancelled.", error_type="Cancelled")
                     try:
                         result_obj = await asyncio.to_thread(_call_tool_result, tool, params, speak)
+                        if result_obj.error_type == "ConfirmationRequired":
+                            return result_obj
                         step_results[step_num] = result_obj.message
 
                         # Verification status display
@@ -875,8 +935,15 @@ class AgentExecutor:
                         decision = recovery["decision"]
                         user_msg = recovery.get("user_message", "")
 
+                        # The recovery decision took time; the task may have been
+                        # cancelled while it was being made. No retry, no skip,
+                        # and above all no ALTERNATIVE tool: a cancelled task
+                        # must not start new side effects through its rescue path.
+                        if cancel_flag and cancel_flag.is_set():
+                            return ToolResult.fail("Task cancelled.", error_type="Cancelled")
+
                         if speak and user_msg:
-                            speak(user_msg)
+                            _safe_speak(speak, user_msg)
 
                         if decision == ErrorDecision.RETRY:
                             attempt += 1
@@ -885,15 +952,13 @@ class AgentExecutor:
 
                         elif decision == ErrorDecision.SKIP:
                             print(f"[Executor] ⏭️ Skipping step {step_num}")
-                            completed_steps.append(step)
+                            skipped_errors.append(f"Step {step_num}: {error_msg}")
                             step_ok = True
                             break
 
                         elif decision == ErrorDecision.ABORT:
                             msg = f"Task aborted, sir. {recovery.get('reason', '')}"
-                            if speak:
-                                speak(msg)
-                            return msg
+                            return ToolResult.fail(msg, error=error_msg, error_type="TaskAborted")
 
                         else:
                             fix_suggestion = recovery.get("fix_suggestion", "")
@@ -902,14 +967,23 @@ class AgentExecutor:
                                     fixed_step = await asyncio.to_thread(
                                         generate_fix, step, error_msg, fix_suggestion
                                     )
+                                    # generate_fix called a model; the flag may
+                                    # have been set while it thought. Re-check
+                                    # before dispatching the alternative.
+                                    if cancel_flag and cancel_flag.is_set():
+                                        return ToolResult.fail(
+                                            "Task cancelled.", error_type="Cancelled"
+                                        )
                                     if speak:
-                                        speak("Trying an alternative approach, sir.")
+                                        _safe_speak(speak, "Trying an alternative approach, sir.")
                                     res_obj = await asyncio.to_thread(
                                         _call_tool_result,
                                         fixed_step["tool"],
                                         fixed_step["parameters"],
                                         speak,
                                     )
+                                    if res_obj.error_type == "ConfirmationRequired":
+                                        return res_obj
                                     if res_obj.success:
                                         step_results[step_num] = res_obj.message
                                         completed_steps.append(step)
@@ -935,20 +1009,38 @@ class AgentExecutor:
                 if not success:
                     break
 
+            if cancel_flag and cancel_flag.is_set():
+                return ToolResult.fail("Task cancelled.", error_type="Cancelled")
             if success:
-                return await asyncio.to_thread(self._summarize, goal, completed_steps, speak)
+                if skipped_errors:
+                    return ToolResult.fail(
+                        "Task incomplete; skipped failed steps: " + "; ".join(skipped_errors),
+                        error_type="PartialCompletion",
+                    )
+                # The queue owns the final announcement, after recording status.
+                summary = await asyncio.to_thread(self._summarize, goal, completed_steps, None)
+                return ToolResult.ok(summary)
 
             if replan_attempts >= self.MAX_REPLAN_ATTEMPTS:
-                msg = f"Task failed after {replan_attempts} replan attempts, sir."
-                if speak:
-                    speak(msg)
-                return msg
+                msg = f"Task failed after {replan_attempts} replan attempts, sir. {failed_error}"
+                return ToolResult.fail(msg, error=failed_error, error_type="ReplanLimit")
 
             if speak:
-                speak("Adjusting my approach, sir.")
+                _safe_speak(speak, "Adjusting my approach, sir.")
 
             replan_attempts += 1
-            plan = await asyncio.to_thread(replan, goal, completed_steps, failed_step, failed_error)
+            try:
+                plan = await asyncio.wait_for(
+                    _run_in_daemon_thread(
+                        replan, goal, completed_steps, failed_step, failed_error
+                    ),
+                    timeout=PLAN_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                return ToolResult.fail(
+                    f"Task replanning timed out after {PLAN_TIMEOUT_SECONDS:g} seconds.",
+                    error_type="PlanningTimeout",
+                )
 
     def _summarize(self, goal: str, completed_steps: list, speak: Callable | None) -> str:
         fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."

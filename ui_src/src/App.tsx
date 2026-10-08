@@ -46,6 +46,7 @@ export default function App() {
   const palette = useHud(s => s.palette);
   const showLeft = useHud(s => s.showLeft);
   const showRight = useHud(s => s.showRight);
+  const approval = useHud(s => s.approval);
   const overlay = useHud(s => s.overlay);
   const dockLeft = useMedia(DOCK_QUERY.left);
   const dockRight = useMedia(DOCK_QUERY.right);
@@ -59,6 +60,17 @@ export default function App() {
 
   useEffect(() => { connect(); }, []);
   useScheduleSync();
+
+  // High-risk approvals live with the activity feed, never over the central sphere.
+  // Open the left rail while an approval is visible so its action buttons are reachable.
+  useEffect(() => {
+    if (!approval || link !== 'online') return;
+    if (dockLeft) {
+      if (!showLeft) setState({ showLeft: true });
+    } else if (overlay !== 'left') {
+      setState({ overlay: 'left' });
+    }
+  }, [approval?.id, link, dockLeft, showLeft, overlay]);
 
   // "+ Schedule": pre-fill the command bar only — nothing is sent until Enter.
   const startSchedule = useCallback(() => {
@@ -83,6 +95,23 @@ export default function App() {
     if (link !== 'online') return;
     api<Caps>('/api/capabilities').then(setCaps).catch(() => setCaps(null));
     api<HudSettings>('/api/settings').then(s => setSoundsEnabled(s.hud_sounds)).catch(() => {});
+    api<{ events: Array<{ task_id: string; seq: number; ts: number; status: string; goal: string; message: string; error_type?: string }> }>(
+      '/api/tasks/events?limit=100',
+    ).then(({ events }) => {
+      const restored = events.map(event => ({
+        id: `task-${event.task_id}-${event.seq}`,
+        ts: event.ts,
+        kind: 'task',
+        label: `Task ${event.status} · ${event.goal.slice(0, 120)}`,
+        detail: event.message,
+        tone: event.status === 'completed' ? 'ok' as const : event.status === 'failed' ? 'bad' as const : event.status === 'cancelled' ? 'warn' as const : 'info' as const,
+      }));
+      setState(s => {
+        const byId = new Map(s.timeline.map(item => [item.id, item]));
+        restored.forEach(item => byId.set(item.id, item));
+        return { timeline: [...byId.values()].sort((a, b) => a.ts - b.ts).slice(-40) };
+      });
+    }).catch(() => {});
     const loadStatus = () =>
       api<{ voice: { tts: string; stt: string } }>('/api/status').then(s => setVoice(s.voice)).catch(() => setVoice(null));
     loadStatus();
@@ -212,6 +241,7 @@ export default function App() {
       <main className="relative z-[var(--z-content)] flex min-h-0 flex-1 gap-3 p-3">
         {leftShown && (
           <aside className={`rail rail-left ${dockLeft ? '' : 'rail-overlay'}`}>
+            <ApprovalPrompt />
             <ActivityPanel />
             <ScheduledPanel onSchedule={startSchedule} />
             <SystemPanel />
@@ -225,7 +255,6 @@ export default function App() {
           <VisualWorkspace />
           <CoreStage nodes={nodes} />
           <div className="relative z-[var(--z-stage)] shrink-0 space-y-3 pt-2">
-            <ApprovalPrompt />
             <LiveTranscript />
             <CommandBar ref={cmdRef} onFiles={sendFiles} />
           </div>

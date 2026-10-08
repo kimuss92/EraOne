@@ -205,7 +205,18 @@ from app.wake import (  # noqa: F401  (re-export: preserves public + internal na
     init_vosk,
 )
 
-get_queue().set_executor_factory(lambda: AgentExecutor())
+_agent_task_queue = get_queue()
+_agent_task_queue.set_executor_factory(lambda: AgentExecutor())
+_agent_task_queue.set_event_callback(
+    lambda event: hud._emit(
+        "task.status.changed",
+        toolName="agent_task",
+        label=f"Agent task · {event['status']}",
+        message=event.get("error") or event.get("result") or event.get("goal", ""),
+        metadata=event,
+    )
+)
+_agent_task_queue.start()
 
 
 from app.era_live.audio import AudioIOMixin

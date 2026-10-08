@@ -182,6 +182,14 @@ function pushTimeline(item: Omit<TimelineItem, 'id'>): void {
   }));
 }
 
+function upsertTaskTimeline(item: TimelineItem): void {
+  setState(s => ({
+    timeline: [...s.timeline.filter(existing => existing.id !== item.id), item]
+      .sort((a, b) => a.ts - b.ts)
+      .slice(-MAX_TIMELINE),
+  }));
+}
+
 function mapModel(data: Record<string, unknown>) {
   return {
     label: String(data.label || ''),
@@ -254,6 +262,22 @@ function onEvent(e: AgentEvent): void {
     case 'schedule.changed':
       window.dispatchEvent(new Event('era:schedule'));
       break;
+    case 'task.status.changed': {
+      const taskId = String(md.task_id || '');
+      const seq = Number(md.seq);
+      const status = String(md.status || 'unknown');
+      if (!taskId || !Number.isFinite(seq)) break;
+      const tone = status === 'completed' ? 'ok' : status === 'failed' ? 'bad' : status === 'cancelled' ? 'warn' : 'info';
+      upsertTaskTimeline({
+        id: `task-${taskId}-${seq}`,
+        ts: e.ts,
+        kind: 'task',
+        label: `Task ${status} · ${String(md.goal || '').slice(0, 120)}`,
+        detail: String(md.error || md.result || ''),
+        tone,
+      });
+      break;
+    }
     case 'agent.state.changed':
       if (e.seq > lastStateSeq) {
         lastStateSeq = e.seq;
