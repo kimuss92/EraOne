@@ -73,6 +73,10 @@ os.environ["ERA_MEMORY_DIR"] = str(_TEST_MEMORY_DIR)
 # Ollama happens to be running. Off here; tools/test_semantic_recall.py turns it
 # back on for the tests whose subject it actually is.
 os.environ["ERA_SEMANTIC_RECALL"] = "0"
+# Never let importing application startup from tests launch PC Manager's UI
+# automation. Unit tests that exercise the watchdog must inject their own fake
+# sampler/boost and opt in explicitly.
+os.environ["ERA_RAM_WATCHDOG"] = "0"
 # The user's live high-risk waivers (e.g. "shut down without asking") must not
 # leak into the copy: power-gate tests assert the default confirm-first behaviour.
 _prefs_copy = _TEST_MEMORY_DIR / "user_prefs.json"

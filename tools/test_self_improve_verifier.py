@@ -25,11 +25,18 @@ def sandbox(tmp_path, monkeypatch):
     """A repo-relative module self_improve may rewrite; backups stay in tmp_path.
     Leading underscore keeps pytest from collecting it."""
     target = REPO_ROOT / "tools" / "_verifier_selftest.py"
+    original = target.read_bytes() if target.exists() else None
     target.write_text("X = 1\n", encoding="utf-8")
     monkeypatch.setattr(self_improve, "BACKUP_ROOT", tmp_path / "backups")
-    yield target
-    target.unlink(missing_ok=True)
-    shutil.rmtree(tmp_path, ignore_errors=True)
+    try:
+        yield target
+    finally:
+        if original is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(original)
+            assert target.read_bytes() == original, "sandbox did not restore the tracked source"
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 def _landed(tmp_path: Path, rel: str, before: str, after: str) -> tuple[Path, Path]:

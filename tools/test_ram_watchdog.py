@@ -1,6 +1,7 @@
 # tools/test_ram_watchdog.py
 from __future__ import annotations
 
+import os
 import time
 
 from core.ram_watchdog import (
@@ -11,7 +12,7 @@ from core.ram_watchdog import (
 )
 
 
-def _watchdog(percent, *, result="PC Boost triggered — cleaning, sir.", **kwargs):
+def _watchdog(percent, *, result="SIMULATED: PC Boost triggered; test stub only.", **kwargs):
     """A watchdog whose RAM reading and boost call are both fakes."""
     calls: list[float] = []
 
@@ -134,6 +135,11 @@ def test_garbage_env_falls_back_to_defaults(monkeypatch):
     wd = RamWatchdog()
     assert wd.threshold == DEFAULT_THRESHOLD_PERCENT
     assert wd.interval == DEFAULT_INTERVAL_SECONDS
+
+
+def test_pytest_disables_the_real_watchdog_by_default():
+    assert os.environ["ERA_RAM_WATCHDOG"] == "0"
+    assert RamWatchdog().start() is False
 
 
 def test_watchdog_can_be_disabled_by_env(monkeypatch):
