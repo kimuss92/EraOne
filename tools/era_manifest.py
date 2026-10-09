@@ -50,6 +50,9 @@ REPO = Path(__file__).resolve().parent.parent
 # and a backup copy of a module would otherwise appear as a second definition
 # of every symbol in it.
 EXCLUDE_DIRS = {
+    # Timestamped pre-edit copies (docs/HERMES_SESSION_START.md RULES). One held a
+    # deliberately broken test fixture and made the parse check fail.
+    ".backups",
     ".git",
     ".claude",
     ".claude-flow",
@@ -364,7 +367,10 @@ def build(_argv: list[str] | None = None) -> dict[str, Any]:
 
     return {
         "schema": 1,
-        "subsystems": [{"name": name, "prefixes": list(prefixes), "when": when} for name, prefixes, when in SUBSYSTEMS],
+        "subsystems": [
+            {"name": name, "prefixes": list(prefixes), "when": when}
+            for name, prefixes, when in SUBSYSTEMS
+        ],
         "counts": {
             "python_files": len(files),
             "source_modules": len(source_modules),

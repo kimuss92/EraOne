@@ -58,6 +58,10 @@ _MAX_BACKLOG_FRAMES = 48
 
 _END_OF_TURN = object()
 
+# Turns whose held Gemini audio may wait for Fish at once. Normally one; a few
+# covers tool round trips without letting a stuck worker hoard audio.
+_MAX_HELD_TURNS = 3
+
 
 def split_sentences(text: str, *, final: bool = False) -> tuple[list[str], str]:
     """Split `text` into complete sentences plus the unconsumed remainder.
@@ -79,7 +83,16 @@ def split_sentences(text: str, *, final: bool = False) -> tuple[list[str], str]:
             # A NEWLINE is exempt: it is an unambiguous break, so a short line
             # ("Line one") is a real utterance, not a "Dr." false positive.
             is_newline_break = "\n" in m.group(0)
-            if not is_newline_break and len(candidate) < _MIN_SENTENCE_CHARS and rest.strip():
+            # "!" / "?" are never abbreviations, so a short "Hello!" is a real
+            # sentence. Absorbing it made Era wait for the NEXT sentence before
+            # speaking at all (+2.2 s measured on 2026-10-09).
+            is_exclaim = candidate.rstrip("\"')]").endswith(("!", "?"))
+            if (
+                not is_newline_break
+                and not is_exclaim
+                and len(candidate) < _MIN_SENTENCE_CHARS
+                and rest.strip()
+            ):
                 buf = buf[: m.end()] + rest
                 nxt = _SENTENCE_END.search(buf, m.end())
                 if not nxt:
@@ -108,6 +121,59 @@ def split_sentences(text: str, *, final: bool = False) -> tuple[list[str], str]:
     return out, buf
 
 
+# ── First-audio fast path ───────────────────────────────────────────────────
+# Gemini's transcript arrives at ~1 word per 100 ms, and Fish answers in ~0.34 s,
+# so in fish_audio mode the user mostly waits for the FIRST sentence to be
+# complete (median 1.46 s, up to 2.6 s, measured 2026-10-09). For the first
+# chunk of a turn only, release earlier — every later sentence plays while the
+# one before it is still speaking, so it gains nothing from being split.
+_FIRST_CLAUSE_MIN_WORDS = 4  # "Sure," alone is too thin to start on
+_FIRST_MAX_WORDS = 12  # a run-on opener is cut at a word boundary past this
+_ABBREVIATIONS = frozenset(
+    {"mr", "mrs", "ms", "dr", "st", "vs", "etc", "e.g", "i.e", "jr", "sr", "no", "fig"}
+)
+_CLAUSE_BREAK = re.compile(r"(?<=[A-Za-z\)\"'])[,;:—–](?=\s|$)")
+
+
+def _ends_a_sentence(text: str) -> bool:
+    """A buffer ending in terminal punctuation that is clearly a sentence end."""
+    t = text.rstrip().rstrip("\"')]")
+    if not t or t[-1] not in ".!?…":
+        return False
+    if t[-1] in "!?…":
+        return True
+    word = t[:-1].split()[-1].lower() if t[:-1].split() else ""
+    # "3." may be "3.5" split across chunks; "Dr." / "e.g." are not ends.
+    return len(word) >= 3 and word.isalpha() and word not in _ABBREVIATIONS
+
+
+def release_first(buf: str) -> tuple[str, str]:
+    """Release the turn's opening words early. ("", buf) when nothing is ready.
+
+    Called only while a turn has produced no speech yet and split_sentences()
+    found no complete sentence. Three cases, in order:
+      * the buffer already ends a sentence (the next chunk has not arrived to
+        supply the whitespace the regular splitter waits for);
+      * a clause break (comma, colon, dash) after at least four words;
+      * a run-on past twelve words, cut at the last word boundary.
+    """
+    text = buf.strip()
+    if not text:
+        return "", buf
+    if _ends_a_sentence(text):
+        return text, ""
+    for m in _CLAUSE_BREAK.finditer(buf):
+        head = buf[: m.end()].strip()
+        if len(head.split()) >= _FIRST_CLAUSE_MIN_WORDS:
+            return head, buf[m.end() :].lstrip()
+    # A word counts only once whitespace follows it: the last one may still be arriving.
+    complete = [m for m in re.finditer(r"\S+", buf) if m.end() < len(buf)]
+    if len(complete) >= _FIRST_MAX_WORDS:
+        end = complete[_FIRST_MAX_WORDS - 1].end()
+        return buf[:end].strip(), buf[end:].lstrip()
+    return "", buf
+
+
 class SpeechOut:
     """Buffers streamed text, synthesizes it locally, feeds Era's audio queue.
 
@@ -123,6 +189,14 @@ class SpeechOut:
         self._pending: asyncio.Queue = asyncio.Queue()
         self._worker: asyncio.Task | None = None
         self._generation = 0  # bumped on interrupt to orphan in-flight work
+        # Which turn a queued sentence belongs to, and that turn's held Gemini audio.
+        # Gemini finishes a turn seconds before Fish finishes SPEAKING it, so the
+        # fallback audio must outlive Gemini's turn_complete: on 2026-10-07 it was
+        # dropped there and a late Fish failure "replayed 0 buffered chunk(s)" —
+        # a silent reply. Released when the turn's last sentence has played.
+        self._turn_no = 0
+        self._held_audio: dict[int, list[bytes]] = {}
+        self._first_out = False  # has this turn released any text to synthesis yet?
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> bool:
@@ -176,8 +250,13 @@ class SpeechOut:
             return
         self._buf += delta
         sentences, self._buf = split_sentences(self._buf)
+        if not sentences and not self._first_out:
+            head, self._buf = release_first(self._buf)
+            sentences = [head] if head else []
+        if sentences:
+            self._first_out = True
         for s in sentences:
-            self._pending.put_nowait((self._generation, s))
+            self._pending.put_nowait((self._generation, self._turn_no, s))
 
     def pending_text(self) -> str:
         """Text produced but not yet voiced — for barge-in resume context.
@@ -190,14 +269,24 @@ class SpeechOut:
         """
         return (self._buf or "").strip()
 
-    def end_turn(self) -> None:
-        """Flush the tail and mark the end of the turn."""
+    def end_turn(self, held_audio: list[bytes] | None = None) -> None:
+        """Flush the tail and mark the end of the turn.
+
+        ``held_audio`` is Gemini's own audio for this turn, kept as the fallback
+        until the turn's last sentence has actually been synthesized.
+        """
         if not self.start():
             return
         sentences, self._buf = split_sentences(self._buf, final=True)
         for s in sentences:
-            self._pending.put_nowait((self._generation, s))
-        self._pending.put_nowait((self._generation, _END_OF_TURN))
+            self._pending.put_nowait((self._generation, self._turn_no, s))
+        self._pending.put_nowait((self._generation, self._turn_no, _END_OF_TURN))
+        if held_audio:
+            self._held_audio[self._turn_no] = list(held_audio)
+            while len(self._held_audio) > _MAX_HELD_TURNS:  # bounded: oldest goes first
+                self._held_audio.pop(min(self._held_audio))
+        self._turn_no += 1
+        self._first_out = False
 
     def say(self, text: str) -> None:
         """Speak a complete utterance. Used by speak(); needs no Live session.
@@ -215,8 +304,9 @@ class SpeechOut:
             return
         sentences, _ = split_sentences(text, final=True)
         for s in sentences:
-            self._pending.put_nowait((self._generation, s))
-        self._pending.put_nowait((self._generation, _END_OF_TURN))
+            self._pending.put_nowait((self._generation, self._turn_no, s))
+        self._pending.put_nowait((self._generation, self._turn_no, _END_OF_TURN))
+        self._turn_no += 1
 
     # ── Interrupt ────────────────────────────────────────────────────────────
     def interrupt(self) -> int:
@@ -229,6 +319,8 @@ class SpeechOut:
         """
         self._generation += 1
         self._buf = ""
+        self._held_audio.clear()  # an interrupted reply must never replay later
+        self._first_out = False
         dropped = 0
         while not self._pending.empty():
             try:
@@ -239,20 +331,26 @@ class SpeechOut:
         return dropped
 
     # ── Fallback ─────────────────────────────────────────────────────────────
-    def _request_fallback(self) -> None:
+    def _request_fallback(self, turn_no: int | None = None) -> None:
         """Ask the engine to finish this turn with Gemini's own audio.
 
         Routed through the engine (not done here) because the recovery needs the
-        buffered cloud audio and the voice-mode flip, neither of which the
-        streamer owns. getattr-guarded so SpeechOut stays usable standalone and
-        in tests, where there is no engine to call back into.
+        voice-mode flip, which the streamer does not own. When the failing
+        sentence's turn has already completed on Gemini's side, its held audio
+        lives HERE (see end_turn) and is handed over; otherwise the engine still
+        has it in its live buffer. getattr-guarded so SpeechOut stays usable
+        standalone and in tests, where there is no engine to call back into.
         """
         self._buf = ""
+        held = self._held_audio.pop(turn_no, None) if turn_no is not None else None
         cb = getattr(self.era, "_tts_fallback", None)
         if cb is None:
             return
         try:
-            cb("fish synthesis failed")
+            if held:
+                cb("fish synthesis failed", held_audio=held)
+            else:
+                cb("fish synthesis failed")
         except Exception as e:
             print(f"[TTS] fallback request failed: {e}")
 
@@ -270,11 +368,14 @@ class SpeechOut:
     async def _run(self) -> None:
         while True:
             try:
-                generation, item = await self._pending.get()
+                generation, turn_no, item = await self._pending.get()
                 if generation != self._generation:
                     continue  # orphaned by an interrupt
 
                 if item is _END_OF_TURN:
+                    # Every sentence of this turn has been voiced: its fallback
+                    # audio can no longer be needed.
+                    self._held_audio.pop(turn_no, None)
                     # Only now is the turn really over: every sentence ahead of
                     # this sentinel has already been synthesized and enqueued,
                     # because the worker is strictly sequential.
@@ -327,7 +428,7 @@ class SpeechOut:
                     # it. Only trip this when NO audio came — a mid-stream cut
                     # (some frames already played) must not double up with a
                     # Gemini replay of the same words.
-                    self._request_fallback()
+                    self._request_fallback(turn_no)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

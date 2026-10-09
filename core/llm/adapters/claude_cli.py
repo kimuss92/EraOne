@@ -47,6 +47,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from core.llm import claude_accounts, registry
+from core.llm.adapters import omniroute
 from core.llm.types import (
     Capability,
     LlmError,
@@ -320,7 +321,7 @@ class ClaudeCliProvider:
                 # whole engine down.
                 encoding="utf-8",
                 errors="replace",
-                            creationflags=NO_WINDOW,
+                creationflags=NO_WINDOW,
             )
         except FileNotFoundError as e:
             raise LlmError(
@@ -356,6 +357,11 @@ class ClaudeCliProvider:
             raise LlmError("unsupported", "nothing to ask", provider=self.name, alias=request.alias)
 
         rid = request.request_id or f"claude-{int(time.time() * 1000)}"
+
+        # OmniRoute era-gateway first; on any gateway failure, the accounts below.
+        routed = omniroute.try_first(request)
+        if routed is not None:
+            return routed
 
         # ── account failover ────────────────────────────────────────────────
         # One subscription hitting its usage limit used to stop every Claude

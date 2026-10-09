@@ -191,6 +191,35 @@ class TestTurnLoop:
         assert_crew_failure_shape(res)
         assert res.error_type == "StepLimit"
 
+    def test_a_bot_out_of_steps_wraps_up_with_what_it_gathered(self, vault):
+        # Six distinct searches use the whole budget; the capability-free wrap-up
+        # call then turns them into an answer instead of discarding them.
+        searches = [call("vault.search", query=f"q{i}") for i in range(runtime.MAX_STEPS)]
+        t, llm = crew({"drew": [*searches, final("partial: found the action list")]})
+        res = ask(t, "drew")
+        assert res.success, res.message
+        assert res.message == "partial: found the action list"
+        assert res.data["wrapped_up"] is True
+        assert len(res.data["capabilities_used"]) == runtime.MAX_STEPS
+        assert "STEP BUDGET EXHAUSTED" in llm.calls[-1][1]
+
+    def test_the_bot_is_told_its_step_budget_before_it_runs_out(self, vault):
+        searches = [call("vault.search", query=f"q{i}") for i in range(runtime.MAX_STEPS)]
+        t, llm = crew({"drew": [*searches, final("ok")]})
+        ask(t, "drew")
+        prompts = [user for _, user in llm.calls]
+        assert "STEP BUDGET" not in prompts[0]
+        assert "2 steps left" in prompts[runtime.MAX_STEPS - 2]
+        assert "LAST step" in prompts[runtime.MAX_STEPS - 1]
+
+    def test_a_wrap_up_that_still_calls_a_capability_runs_nothing(self, vault):
+        before = note(vault)
+        searches = [call("vault.search", query=f"q{i}") for i in range(runtime.MAX_STEPS)]
+        t, _ = crew({"drew": [*searches, call("vault.append", path=NOTE, content="late")]})
+        res = ask(t, "drew")
+        assert res.error_type == "StepLimit"
+        assert note(vault) == before
+
     def test_an_identical_repeated_read_runs_once_and_is_flagged_redundant(self, vault):
         # Drew searches, then re-issues the exact same search, then finishes.
         t, llm = crew(

@@ -30,7 +30,7 @@ from dataclasses import replace
 from core.confirmation_preview import PREVIEW_KEY
 from core.logger import log_event, setup_logger
 from core.tool_result import ToolResult
-from crew import nabar
+from crew import nabar, step_budget
 from crew import router as crew_router
 from crew.cache import CrewCaches
 from crew.capabilities import CAPABILITIES, CapabilityContext, caller_for, describe
@@ -95,13 +95,34 @@ def _fence(text: str) -> str:
     return text.replace("</untrusted", "<\\/untrusted").replace("<untrusted", "<\\untrusted")
 
 
-def _user(turn: Turn, observations: list[tuple[str, str, str]]) -> str:
+def _user(turn: Turn, observations: list[tuple[str, str, str]], budget_note: str = "") -> str:
     parts = [f"TASK: {turn.task}"]
     if turn.context:
         parts.append(f"CONTEXT: {json.dumps(turn.context, default=str)[:1500]}")
     for obs_id, cap, text in observations:
         parts.append(f'<untrusted id="{obs_id}" capability="{cap}">\n{_fence(text)}\n</untrusted>')
+    if budget_note:
+        # Outside the <untrusted> fences on purpose: this is Era's instruction, not data.
+        parts.append(budget_note)
     return "\n\n".join(parts)
+
+
+def _done(spec, text, step, used, effects, executed, final_json) -> ToolResult:
+    """A finished turn. Only observations of capabilities that actually RAN are
+    evidence: a DENIED or format-error observation proves nothing, and Nabar may
+    cite only evidence (his check's text must appear in it)."""
+    return ToolResult.ok(
+        message=text,
+        data={
+            "bot": spec.id,
+            "steps": step,
+            "capabilities_used": used,
+            "effects": effects,
+            "final_json": final_json,
+            "observation_ids": list(executed),
+            "observation_texts": executed,
+        },
+    )
 
 
 def _render(result: ToolResult) -> str:
@@ -194,31 +215,21 @@ class InProcessTransport(Transport):
         for step in range(1, MAX_STEPS + 1):
             if turn.deadline and time.monotonic() > turn.deadline:
                 return fail("StepLimit", f"{spec.id} ran out of time for this request.")
-            reply = self._ask(spec, turn, _system(spec, self._bots), _user(turn, observations))
+            reply = self._ask(
+                spec,
+                turn,
+                _system(spec, self._bots),
+                _user(turn, observations, step_budget.note(step, MAX_STEPS)),
+            )
             if not isinstance(reply, dict) or not reply:
                 return fail("LLMUnavailable", f"{spec.id} could not reach a model.")
             if "__unavailable__" in reply:  # the transport found no model that may answer
                 return fail("LLMUnavailable", f"{spec.id}: {reply['__unavailable__']}")
             if "final" in reply:
                 final = reply["final"]
-                text = (
-                    json.dumps(final, ensure_ascii=False) if isinstance(final, dict) else str(final)
-                )
-                return ToolResult.ok(
-                    message=text.strip() or "Done.",
-                    data={
-                        "bot": spec.id,
-                        "steps": step,
-                        "capabilities_used": used,
-                        "effects": effects,
-                        "final_json": final if isinstance(final, dict) else None,
-                        # Only observations of capabilities that actually RAN: a DENIED or
-                        # format-error observation is not evidence of anything, and Nabar
-                        # may cite only evidence (his check's text must appear in it).
-                        "observation_ids": list(executed),
-                        "observation_texts": executed,
-                    },
-                )
+                text = step_budget.final_text(reply) or "Done."
+                json_final = final if isinstance(final, dict) else None
+                return _done(spec, text, step, used, effects, executed, json_final)
             call = reply.get("call")
             if not isinstance(call, dict) or not isinstance(call.get("capability"), str):
                 bad_format += 1
@@ -271,6 +282,15 @@ class InProcessTransport(Transport):
             observations.append((obs_id, name, rendered))
             if dedup_key is not None and result.success:
                 seen_reads[dedup_key] = obs_id
+        # Budget spent: one capability-free call turns the gathered work into an
+        # answer (crew/step_budget.py). Nothing it returns is executed.
+        if observations and not (turn.deadline and time.monotonic() > turn.deadline):
+            user = _user(turn, observations, step_budget.WRAP_UP_NOTE)
+            text = step_budget.final_text(self._ask(spec, turn, _system(spec, self._bots), user))
+            if text is not None:
+                result = _done(spec, text, MAX_STEPS, used, effects, executed, None)
+                result.data["wrapped_up"] = True
+                return result
         return fail("StepLimit", f"{spec.id} used all {MAX_STEPS} steps without finishing.")
 
     def _execute(self, spec: BotSpec, turn: Turn, name: str, args: dict) -> ToolResult:

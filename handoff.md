@@ -8,6 +8,97 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-09 · The four P0s from the audit, plus Karim's three decisions
+Source: `docs/AUDIT_2026-10-09.md` §5b. Backups: `.backups/20261009-p0fix/` (now git-ignored).
+
+**1. Regression gate green again.**
+- `.backups` is excluded in `tools/era_manifest.py` `EXCLUDE_DIRS`, in `pytest.ini` `norecursedirs`, and in `.gitignore`. Ruff honours `.gitignore`; `ruff.toml` itself is protected by the ecc config-protection hook.
+- The manifest is regenerated: 317 modules, 0 unparseable.
+- `test_apply_routes_through_claude_generator` now stubs `_generate_repair`. A new autouse guard in `conftest.py` (`_block_live_self_improve_repair`) stops any test from reaching the live repair model.
+- 44 committed files carried formatter drift from `e7b82fb` (the `creationflags=NO_WINDOW` arguments were never formatted). `ruff format` was applied to the 44 `.py` files only. Two `.md` files it also touched were restored, as `ruff.toml` says.
+
+**2. Crew step limit.** In October, 11 of 35 asks died as "used all 6 steps", throwing away their work.
+- The bot is now told its budget on its last two steps.
+- After step 6, one capability-free wrap-up call turns what it gathered into an answer (`data.wrapped_up`). Nothing from that call is executed.
+- A bot that still won't stop ends as `StepLimit`, as before.
+- Code: `crew/step_budget.py` (new) and `crew/runtime.py`.
+- Hermes: one retry of a chat call on a transport error (timeout/reset), only while ≥20 s of the 240 s crew deadline remain. HTTP errors are never retried. Code: `crew/hermes_transport.py` `_post_chat`.
+
+**3. Fish reliability.**
+- **(a) Silent turn fixed.** The held Gemini fallback audio used to be cleared at Gemini's `turn_complete`, while Fish was still speaking the turn, so a late Fish failure replayed 0 chunks. `SpeechOut` now tags each sentence with its turn and keeps that turn's held audio until the turn's last sentence is voiced. `audio.py` hands it over via `end_turn(held_audio=...)`.
+- **(b) DNS.** `ClientConnectorError` (DNS/refused) gets one immediate retry before the 30 s cooldown.
+- **(c) Encoding.** The double-UTF-8 mojibake in `core/tts_fish.py` is repaired.
+
+**4. Fish first-audio delay** (`app/era_live/speech_out.py`).
+- `!`/`?` sentences are never "too short".
+- `release_first()` handles the first chunk of a turn only. It releases:
+  - a sentence already ending a chunk (not "Dr." or "3.");
+  - else the first clause break after ≥4 words;
+  - else 12 complete words.
+- **Replay of the 7 recorded live turns: median wait 1,455 → 586 ms, worst case 2,618 → 808 ms.**
+- `FISH.prewarm()`: a tiny "Hm." synthesis when the user starts speaking, and only if Fish has been idle ≥15 s.
+  - Measured, idle median 835 → 707 ms, and it removed a 1.6 s outlier.
+  - A connection-only HEAD warm-up was measured too and did nothing (891 vs 883 ms), so it was dropped.
+
+**Karim's decisions, applied:**
+- **Voice:** Gemini is the first-run default (`core/voice_mode.py`). Live voice switching was already persistent. `config/voice.json` is now set to **`fish_audio`** for testing.
+- **OmniRoute for model calls:** new `core/llm/adapters/omniroute.py`. `ClaudeCliProvider.generate()` asks `era-gateway` first and falls back to the two subscription accounts on any gateway failure (`llm.omniroute.fallback`).
+  - Every answer logs `llm.omniroute.answered` with combo, model and member.
+  - Loopback-only: a process env pointing elsewhere is ignored, key included.
+  - Config: `config/llm.yaml` `routing.omniroute`; kill switch `ERA_OMNIROUTE=0`; never on under pytest.
+  - **Live-verified:** `era.reason` → provider `omniroute`, model `claude-sonnet-5`, member `cc`, 'pong'.
+
+**Verified:** full `pytest tools/` → **6,119 passed, 1 skipped (opt-in paid Lyria), 0 failed, 14:16**. Baseline was 3 failed / 6,076 passed. `ruff check .` is clean. `era_doctor` is READY. The manifest is regenerated (319 modules, 0 unparseable).
+
+**Tests:** 6 new crew/Hermes tests, 6 new Fish fallback/DNS tests, 12 new splitter/prewarm cases and 14 new OmniRoute tests.
+- The crew and Fish-fallback tests were shown to FAIL on the pre-fix code (2/2 and 6/6).
+- One existing Hermes test now needs two consecutive timeouts, because a single blip is retried.
+- Two voice-mode tests now seed Fish as the user's explicit choice instead of relying on the old default.
+
+**Not done / open:**
+- The CM lane (`era_dispatch.py`, the Claude CLI *with tools*) still runs on the subscription, not OmniRoute.
+- Hermes crew turns use Hermes's own providers (Nous). Pointing those at `era-gateway` is a Hermes profile change, outside this repo.
+- `crew/runtime.py` is 515 lines (495 before); `claude_cli.py` 534 (528 before). Both are over the 500-line rule.
+- Nothing is committed.
+- A live voice test in Fish mode is owed: say a few things and listen for first-audio speed and for no silent turns.
+
+### 2026-10-09 · Hermes session 1 — Phase 0 audit (no code changes)
+**Report:** `docs/AUDIT_2026-10-09.md`. Era stopped throughout.
+
+**What changed:** only `docs/AUDIT_2026-10-09.md` (new), this entry, and a TODO row.
+No source file was edited. Backups of `handoff.md` and `TODO.md` are in
+`.backups/20261009-180027/`.
+
+**What is verified (numbers measured this session):**
+- **Baseline:** `pytest tools/ -q` → **3 failed, 6,076 passed, 1 skipped, 15:48**. `era_doctor` → READY, 0 errors.
+  All 3 failures are pre-existing:
+  - two are `.backups/` being indexed by `tools/era_manifest.py` (missing from `EXCLUDE_DIRS`);
+  - one is `test_apply_routes_through_claude_generator`, which leaks a **real Gemini call** through the unstubbed `_generate_repair` (`actions/self_improve.py:294`).
+- **OmniRoute:** `era-gateway` → `claude-sonnet-5` via provider `cc`, strategy `priority`. HTTP 200 ×3, end to end 10.9 s / 6.8 s / 2.1 s.
+  Gotcha: the Claude desktop app's process env sets `ANTHROPIC_BASE_URL=https://api.anthropic.com`, so probes from Claude Code must read the **user-scope** env.
+- **Fish TTS:** first audio byte on `latency=low`, warm connection: 337 / 355 / 331 ms p50 for 3 / 9 / 15 words. `balanced` is the same; `normal` is +0.5 s. Cold connection 446–937 ms. RTT ~60 ms.
+- **Era's wait** from first Gemini text to the first Fish request: median **1,455 ms**, max 2,618 ms (7 live turns through the real `split_sentences`).
+  **Verdict: the slowness is Era's sentence handling (~80%), not Fish (~20%) and not the network (<5%).**
+  Fixes F1–F6 are proposed and **not applied**.
+
+**What is open:** the P0 order is in audit §5b:
+1. regression gate red;
+2. crew/Hermes ~50% failure rate;
+3. Fish DNS fallback with one silent turn;
+4. Fish first-audio latency.
+
+Vision timeouts and self-edit permission errors were **not reproduced** in the logs.
+
+Also open: `ruff format --check` flags **45 committed files**. Commit `e7b82fb` left a leading blank line in them; the working tree is clean of `.py` diffs.
+
+**Blocked on Karim:**
+- (a) voice order: the master prompt says Gemini primary, the code and RULES say Fish primary;
+- (b) whether every model call must go through `era-gateway`, which conflicts with the deliberate gateway-env strip on `claude -p`;
+- (c) the active voice is currently `gemini_audio` (`config/voice.json`), so confirm whether Fish should be re-enabled;
+- (d) approve changing session 2's task from "vision timeouts" to "regression gate + Hermes".
+
+**Process note:** my first OmniRoute probe read the Claude desktop **process** env, so it sent the OmniRoute key to `api.anthropic.com`, which rejected it with 401. Nothing was printed or logged. If you consider that key exposed, rotate it in OmniRoute.
+
 ### 2026-09-30 · Items 17c + 18, and a bug that silently ate whole reports
 **Objectives:** 10, 8 — the two items the board had queued next
 

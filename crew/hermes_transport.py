@@ -63,6 +63,10 @@ DEFAULT_BASE = "http://127.0.0.1:8642/p/era_one"
 KEY_ENTRY = "hermes_era_one_api_key"
 RECHECK_S = 300.0
 CHAT_TIMEOUT_S = 90.0
+# One retry of a chat call that failed at the transport level (timeout, reset).
+# Skipped when less than this much of the crew call's deadline remains.
+CHAT_RETRIES = 1
+CHAT_RETRY_MIN_ROOM_S = 20.0
 PROBE_TIMEOUT_S = 5.0
 # A single transient probe failure — the gateway still binding 8642 right after
 # login, a provider cold start, a GC pause — must not refuse a whole crew turn.
@@ -302,6 +306,33 @@ class HermesAgentTransport(InProcessTransport):
         return True
 
     # ── the model call: text in, text out ───────────────────────────────────
+    def _post_chat(self, spec: BotSpec, turn: Turn, key: str, payload: dict) -> tuple[int, Any]:
+        """POST one completion, retrying ONCE on a transport-level failure.
+
+        2026-10-08 logs: two crew asks died on a single `TimeoutError` from the
+        gateway, discarding the whole turn. A dropped connection or a slow provider
+        cold start is worth one more try — but only while the call's wall-clock
+        deadline leaves room for it. An HTTP answer (500, 401...) is never retried
+        here; it returns as-is so the existing checks decide.
+        """
+        body = json.dumps(payload).encode("utf-8")
+        url = f"{self._base}/v1/chat/completions"
+        for attempt in range(1 + CHAT_RETRIES):
+            try:
+                return self._http("POST", url, self._headers(key), body, CHAT_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - retried once, then re-raised
+                room = turn.deadline - time.monotonic() if turn.deadline else float("inf")
+                if attempt >= CHAT_RETRIES or room < CHAT_RETRY_MIN_ROOM_S:
+                    raise
+                log_event(
+                    runtime_logger,
+                    "crew.hermes.chat_retry",
+                    "WARNING",
+                    bot=spec.id,
+                    error_type=type(exc).__name__,
+                )
+        raise RuntimeError("unreachable")  # pragma: no cover - the loop returns or raises
+
     def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
         tier, _ = crew_router.choose_tier(spec, turn, system, user)
         payload: dict = {
@@ -315,13 +346,7 @@ class HermesAgentTransport(InProcessTransport):
             payload["model"] = f"era-{tier}"
         try:
             key = read_key(self._config_path)  # again, at call time: a turn has many calls
-            status, body = self._http(
-                "POST",
-                f"{self._base}/v1/chat/completions",
-                self._headers(key),
-                json.dumps(payload).encode("utf-8"),
-                CHAT_TIMEOUT_S,
-            )
+            status, body = self._post_chat(spec, turn, key, payload)
         except HermesKeyMissing as exc:
             crew_router.log_turn(spec.id, tier, "hermes", 0, 0, False)
             return {"__unavailable__": str(exc)}

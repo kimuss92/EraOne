@@ -59,6 +59,9 @@ def test_apply_routes_through_claude_generator(sandbox, monkeypatch):
         return "def broken(:\n"
 
     monkeypatch.setattr(cs, "_generate_via_claude_cli", fake_generate)
+    # The guided repair pass is a SECOND model call. Unstubbed, a live Gemini call
+    # repaired the broken output, so the rollback this test asserts never happened.
+    monkeypatch.setattr(si, "_generate_repair", lambda *a, **k: "def still_broken(:\n")
 
     result = si.self_improve(
         {

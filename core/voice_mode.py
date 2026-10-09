@@ -60,10 +60,13 @@ class VoiceModeConfig:
     """
 
     def __init__(self) -> None:
-        self.mode = MODE_FISH_AUDIO
+        # First-run default only: Gemini's own voice (Karim, 2026-10-09). The
+        # user switches by voice at any time and that choice persists in
+        # config/voice.json, which reload() applies over this.
+        self.mode = MODE_GEMINI_AUDIO
         # The durable user preference. Mirrors config/voice.json; only a
         # persisting set_mode() (a deliberate switch) changes it.
-        self.preferred = MODE_FISH_AUDIO
+        self.preferred = MODE_GEMINI_AUDIO
         # Set when the quota auto-switch moves Era off her primary voice, so she
         # can explain *why* her voice changed and the UI can distinguish it from
         # a manual switch. Deliberately not persisted: it describes one incident,

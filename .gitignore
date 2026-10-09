@@ -66,4 +66,6 @@ source_code_folder/feedback_memory.json
 .claude/worktrees/
 .phase1_backups/
 **/.phase1_backups/
+# Timestamped pre-edit copies made per docs/HERMES_SESSION_START.md RULES.
+.backups/
 .git.disabled-bak-*/

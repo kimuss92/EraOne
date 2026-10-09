@@ -243,6 +243,25 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _block_live_self_improve_repair(monkeypatch):
+    """actions.self_improve's guided repair pass calls a real model (generate_text).
+
+    A test that stubbed only the first generator still reached it: on 2026-10-09
+    a live Gemini call repaired a deliberately broken file, so the rollback under
+    test never happened and every run spent quota. Tests that exercise the repair
+    pass install their own stub, which replaces this one.
+    """
+    module = sys.modules.get("actions.self_improve")
+    if module is not None:
+
+        def _no_live_repair(*_args, **_kwargs):
+            raise RuntimeError("live model repair call blocked under pytest; stub _generate_repair")
+
+        monkeypatch.setattr(module, "_generate_repair", _no_live_repair)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_vision_provider_health():
     """core.vision_resilience benches a provider after it fails; that is process-wide
     state, so one test's simulated Ollama/Gemini failure would silently skip the provider

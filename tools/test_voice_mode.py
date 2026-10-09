@@ -29,12 +29,12 @@ def test_only_two_modes_remain():
     assert set(VALID_MODES) == {MODE_FISH_AUDIO, MODE_GEMINI_AUDIO}
 
 
-def test_fish_is_the_primary_default():
-    assert VoiceModeConfig.__init__.__defaults__ in (None, ())
-    # The in-code default before any config load is the primary voice.
-    c = VoiceModeConfig.__new__(VoiceModeConfig)
-    c.mode = MODE_FISH_AUDIO
-    assert c.is_fish()
+def test_gemini_is_the_first_run_default(monkeypatch):
+    # Karim, 2026-10-09: Gemini first; the user switches by voice and it persists.
+    # reload() is stubbed so this reads the in-code default, not config/voice.json.
+    monkeypatch.setattr(VoiceModeConfig, "reload", lambda self: None)
+    c = VoiceModeConfig()
+    assert c.is_gemini() and c.preferred == MODE_GEMINI_AUDIO
 
 
 def test_predicates_are_mutually_exclusive(cfg):
@@ -141,7 +141,8 @@ def test_deliberate_switch_persists_and_survives_relaunch(filed):
 
 def test_transient_fallback_touches_neither_preference_nor_file(filed):
     vm, p = filed
-    c = vm.VoiceModeConfig()  # seeds fish
+    c = vm.VoiceModeConfig()
+    c.set_mode(MODE_FISH_AUDIO)  # the user's deliberate, saved choice
     c.set_mode(MODE_GEMINI_AUDIO, persist=False)  # auto-fallback
     assert c.is_gemini()  # active voice moved
     assert c.preferred == MODE_FISH_AUDIO  # preference untouched
@@ -152,6 +153,7 @@ def test_transient_fallback_does_not_survive_relaunch(filed):
     """The core guarantee: an auto-fallback never rewrites the saved choice."""
     vm, _ = filed
     c = vm.VoiceModeConfig()
+    c.set_mode(MODE_FISH_AUDIO)  # the user's deliberate, saved choice
     c.set_mode(MODE_GEMINI_AUDIO, persist=False)
     assert c.is_gemini()
     # Relaunch returns to the user's real preference, not the fallback.

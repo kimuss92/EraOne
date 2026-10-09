@@ -411,13 +411,46 @@ def test_every_model_call_logs_even_when_hermes_fails(keyfile, rec):
     assert len(rec.lines) == 1 and LINE.match(rec.lines[0])
 
 
-def test_a_network_error_mid_turn_is_llm_unavailable(keyfile):
+def test_a_network_error_that_persists_is_llm_unavailable(keyfile):
     http = FakeHttp()
-    http.chats = [TimeoutError("slow")]
+    http.chats = [TimeoutError("slow"), TimeoutError("still slow")]
     t, _ = make(keyfile, http)
     out = t.dispatch("tester", Turn(task="t"))
     assert_crew_failure_shape(out)
     assert out.error_type == "LLMUnavailable"
+
+
+def _chat_posts(http):
+    return [c for c in http.calls if c[1].endswith("/chat/completions")]
+
+
+def test_one_transient_chat_failure_is_retried_and_the_turn_succeeds(keyfile):
+    # 2026-10-08: two crew asks died on a single gateway TimeoutError.
+    http = FakeHttp()
+    http.chats = [TimeoutError("blip")]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.success, out.message
+    assert len(_chat_posts(http)) == 2
+
+
+def test_an_http_error_is_not_retried(keyfile):
+    http = FakeHttp()
+    http.chats = [(502, None)]
+    t, _ = make(keyfile, http)
+    assert t.dispatch("tester", Turn(task="t")).error_type == "LLMUnavailable"
+    assert len(_chat_posts(http)) == 1
+
+
+def test_no_retry_when_the_crew_deadline_has_no_room(keyfile):
+    import time as _time
+
+    http = FakeHttp()
+    http.chats = [TimeoutError("blip")]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t", deadline=_time.monotonic() + 5))
+    assert out.error_type == "LLMUnavailable"
+    assert len(_chat_posts(http)) == 1
 
 
 def test_prose_from_hermes_is_not_trusted_as_an_answer(keyfile):

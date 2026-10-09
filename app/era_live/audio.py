@@ -132,7 +132,28 @@ class AudioIOMixin:
         if buf:
             buf.clear()
 
-    def _tts_fallback(self, reason: str = "") -> None:
+    def _prewarm_fish(self) -> None:
+        """Wake Fish while the user is still talking (fish_audio mode only).
+
+        Fire-and-forget on the running loop; FISH.prewarm() is rate-limited,
+        skips itself when Fish is already warm, and never raises.
+        """
+        try:
+            if not VOICE_CFG.is_fish():
+                return
+            from core.tts_fish import FISH
+
+            self._fish_prewarm_task = asyncio.get_running_loop().create_task(FISH.prewarm())
+        except Exception:  # noqa: BLE001 - an optimisation must never touch the turn
+            pass
+
+    def _take_cloud_audio_buffer(self) -> list[bytes]:
+        """Hand over this turn's held Gemini audio and start the next turn empty."""
+        buf = list(getattr(self, "_cloud_audio_buffer", None) or [])
+        self._clear_cloud_audio_buffer()
+        return buf
+
+    def _tts_fallback(self, reason: str = "", held_audio: list[bytes] | None = None) -> None:
         """PRIMARY TTS failed -> finish this turn with Gemini's own audio.
 
         Called by SpeechOut when the Fish backend returns nothing. Three steps,
@@ -152,8 +173,10 @@ class AudioIOMixin:
         try:
             if VOICE_CFG.is_gemini():
                 return  # already fallen back
-            buffered = list(getattr(self, "_cloud_audio_buffer", None) or [])
-            self._clear_cloud_audio_buffer()
+            # held_audio: the failing sentence's turn already completed on Gemini's
+            # side, so SpeechOut kept its audio. Anything in the live buffer belongs
+            # to a later turn and plays after it, in order.
+            buffered = list(held_audio or []) + self._take_cloud_audio_buffer()
             if self.audio_in_queue is not None:
                 for chunk in buffered:
                     self.audio_in_queue.put_nowait(chunk)
@@ -670,6 +693,7 @@ class AudioIOMixin:
                                     # "said after the task parked?" must not see a
                                     # sentence begun before it as said "now".
                                     self._inflight_started_at = time.time()
+                                    self._prewarm_fish()
                                 in_buf.append(txt)
                                 self._last_user_text = txt
                                 self._inflight_user_text = " ".join(in_buf)
@@ -724,7 +748,12 @@ class AudioIOMixin:
                                 # gap between two sentences and drop Era to
                                 # LISTENING mid-reply. The streamer sets it
                                 # once the last sentence is on the queue.
-                                self.speech_out.end_turn()
+                                #
+                                # The held Gemini audio goes WITH the turn: Fish
+                                # is still speaking it, so a late Fish failure
+                                # must still find its fallback (2026-10-07: it
+                                # was cleared here and the reply went silent).
+                                self.speech_out.end_turn(held_audio=self._take_cloud_audio_buffer())
                             elif self._turn_done_event:
                                 self._turn_done_event.set()
 

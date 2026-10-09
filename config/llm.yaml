@@ -321,6 +321,17 @@ routing:
   # absolute default media app, never auto-route to YouTube...) and would also
   # skip _note_user_utterance, which feeds the window authorising save_memory.
   # Measure it before believing it is free.
+  # Every claude_cli alias (era.reason / era.deep / era.cheap: autonomous dev,
+  # planning, Gemini quota failover, Claude voice) asks OmniRoute's `era-gateway`
+  # combo FIRST, and falls back to the subscription `claude -p` accounts only if
+  # the gateway fails. Karim, 2026-10-09: "keep OmniRoute with the combo ... so Era
+  # stays always working even if I hit the usage limit." Adapter and key rules:
+  # core/llm/adapters/omniroute.py. Kill switch: ERA_OMNIROUTE=0.
+  omniroute:
+    enabled: true
+    combo: era-gateway
+    timeout_s: 90 # measured 2.1-10.9 s on 2026-10-09; first call after idle is slowest
+
   deterministic_media_bypass:
     enabled: false
     env_override: ERA_DETERMINISTIC_MEDIA_BYPASS

@@ -1,4 +1,4 @@
-"""Fish Audio TTS client Ã¢ÂÂ Era's PRIMARY speech synthesis backend.
+"""Fish Audio TTS client — Era's PRIMARY speech synthesis backend.
 
 Contract: hand it text, get back raw **int16
 mono PCM at RECEIVE_SAMPLE_RATE (24 kHz)**, ready for ``audio_in_queue``.
@@ -11,17 +11,18 @@ a no-op.
 
 SECURITY: the API key is NEVER hardcoded and never logged. It is resolved at
 call time from config/api_keys.json (``fish_audio.api_key`` or
-``fish_audio_api_key``) or the ``FISH_AUDIO_API_KEY`` environment variable Ã¢ÂÂ
+``fish_audio_api_key``) or the ``FISH_AUDIO_API_KEY`` environment variable —
 the same layering the rest of Era's config uses.
 
 Degrade, never raise: every failure returns b"" and records WHY, so the router
 can fall back to Gemini instead of Era going silent. A 401/402 (bad key /
-out of credit) sets a long cooldown Ã¢ÂÂ retrying those per sentence is pointless
+out of credit) sets a long cooldown — retrying those per sentence is pointless
 and just burns latency on every utterance.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 
@@ -34,7 +35,7 @@ except ImportError:  # pragma: no cover - aiohttp is in requirements.txt
     aiohttp = None  # type: ignore[assignment]
 
 DEFAULT_ENDPOINT = "https://api.fish.audio/v1/tts"
-# Free-tier model by default Ã¢ÂÂ the whole reason Fish is primary here. Any of
+# Free-tier model by default — the whole reason Fish is primary here. Any of
 # s1 / s2-pro / s2.1-pro / s2.1-pro-free / drama-3-preview is accepted.
 DEFAULT_MODEL = "s2.1-pro-free"
 SYNTH_TIMEOUT_S = 45.0
@@ -43,6 +44,12 @@ SYNTH_TIMEOUT_S = 45.0
 # every single sentence. Auth/billing problems will not fix themselves in 30s.
 COOLDOWN_AUTH_S = 900.0  # 401 / 402
 COOLDOWN_TRANSIENT_S = 30.0  # 503, timeout, network
+# A DNS miss / refused connect fails before anything is sent: retry it once at once.
+CONNECT_RETRIES = 1
+CONNECT_RETRY_PAUSE_S = 0.25
+# Pre-warm (see FishAudioClient.prewarm) only after this long without a request.
+PREWARM_IDLE_S = 15.0
+PREWARM_TEXT = "Hm."
 
 
 def _log(msg: str) -> None:
@@ -98,9 +105,11 @@ class FishAudioClient:
     def __init__(self) -> None:
         self._session = None
         self._cooldown_until = 0.0
+        self._last_prewarm = float("-inf")
+        self._last_use = float("-inf")  # monotonic time of the last synthesis request
         self.last_error = ""
 
-    # Ã¢ÂÂÃ¢ÂÂ Session Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+    # ── Session ──────────────────────────────────────────────────────────────
     async def _get_session(self):
         if aiohttp is None:
             _log("aiohttp not installed; Fish Audio unavailable")
@@ -117,7 +126,7 @@ class FishAudioClient:
                 pass
         self._session = None
 
-    # Ã¢ÂÂÃ¢ÂÂ Cooldown Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+    # ── Cooldown ─────────────────────────────────────────────────────────────
     def in_cooldown(self) -> bool:
         return time.time() < self._cooldown_until
 
@@ -127,12 +136,36 @@ class FishAudioClient:
     def _cool(self, seconds: float, reason: str) -> None:
         self._cooldown_until = time.time() + seconds
         self.last_error = reason
-        _log(f"{reason} Ã¢ÂÂ pausing Fish for {int(seconds)}s; Gemini covers the gap.")
+        _log(f"{reason} — pausing Fish for {int(seconds)}s; Gemini covers the gap.")
 
     def reset_cooldown(self) -> None:
         self._cooldown_until = 0.0
 
-    # Ã¢ÂÂÃ¢ÂÂ Synthesis Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+    # ── Connection pre-warm ─────────────────────────────────────────────────
+    async def prewarm(self) -> bool:
+        """Wake Fish before the first sentence of a turn, while the user is talking.
+
+        After ~15 s idle the first request of a turn is slow on Fish's side:
+        median 835 ms to first audio vs ~340 ms warm (measured 2026-10-09). A
+        connection-only warm-up (HEAD) changed nothing (891 vs 883 ms); a tiny
+        real synthesis brought it to 707 ms and removed a 1.6 s outlier, so that
+        is what this sends. The audio is discarded. Skipped when Fish was used
+        recently (it is still warm) and rate-limited; never raises.
+        """
+        now = time.monotonic()
+        if now - self._last_use < PREWARM_IDLE_S or self.in_cooldown():
+            return False
+        if now - self._last_prewarm < PREWARM_IDLE_S or not is_configured():
+            return False
+        self._last_prewarm = now
+        try:
+            async for _ in self.stream(PREWARM_TEXT):
+                pass
+        except Exception:  # noqa: BLE001 - a warm-up must never surface
+            return False
+        return True
+
+    # ── Synthesis ────────────────────────────────────────────────────────────
     async def stream(self, text: str):
         """Yield int16 mono PCM @ 24 kHz for `text` AS IT ARRIVES.
 
@@ -141,7 +174,7 @@ class FishAudioClient:
         frames reach the speakers in a few hundred ms instead of after the whole
         clip is buffered (measured: ~4x faster to first audio on a long reply).
 
-        Yields nothing on ANY failure Ã¢ÂÂ an empty stream is the caller's signal to
+        Yields nothing on ANY failure — an empty stream is the caller's signal to
         fall back to Gemini. Sets a cooldown on failure exactly like the old
         buffered path so a dead key does not cost a round trip per sentence.
         """
@@ -174,41 +207,54 @@ class FishAudioClient:
 
         carry = b""
         produced = False
-        try:
-            async with session.post(
-                cfg["endpoint"],
-                json=body,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=SYNTH_TIMEOUT_S, sock_connect=10),
-            ) as r:
-                if r.status != 200:
-                    detail = (await r.text())[:200]
-                    if r.status in (401, 403):
-                        self._cool(COOLDOWN_AUTH_S, f"auth rejected (HTTP {r.status})")
-                    elif r.status == 402:
-                        self._cool(COOLDOWN_AUTH_S, "out of Fish Audio credit (HTTP 402)")
-                    else:
-                        self._cool(COOLDOWN_TRANSIENT_S, f"HTTP {r.status}: {detail}")
-                    return
-                async for chunk in r.content.iter_chunked(FRAME_BYTES):
-                    if not chunk:
-                        continue
-                    buf = carry + chunk
-                    # Never split an int16 sample across two yields.
-                    cut = len(buf) - (len(buf) % 2)
-                    carry = buf[cut:]
-                    if cut:
+        self._last_use = time.monotonic()
+        for attempt in range(1 + CONNECT_RETRIES):
+            try:
+                async with session.post(
+                    cfg["endpoint"],
+                    json=body,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=SYNTH_TIMEOUT_S, sock_connect=10),
+                ) as r:
+                    if r.status != 200:
+                        detail = (await r.text())[:200]
+                        if r.status in (401, 403):
+                            self._cool(COOLDOWN_AUTH_S, f"auth rejected (HTTP {r.status})")
+                        elif r.status == 402:
+                            self._cool(COOLDOWN_AUTH_S, "out of Fish Audio credit (HTTP 402)")
+                        else:
+                            self._cool(COOLDOWN_TRANSIENT_S, f"HTTP {r.status}: {detail}")
+                        return
+                    async for chunk in r.content.iter_chunked(FRAME_BYTES):
+                        if not chunk:
+                            continue
+                        buf = carry + chunk
+                        # Never split an int16 sample across two yields.
+                        cut = len(buf) - (len(buf) % 2)
+                        carry = buf[cut:]
+                        if cut:
+                            produced = True
+                            yield buf[:cut]
+                    if carry:  # a stray final byte — pad rather than drop a sample
                         produced = True
-                        yield buf[:cut]
-                if carry:  # a stray final byte Ã¢ÂÂ pad rather than drop a sample
-                    produced = True
-                    yield carry + bytes(1)  # pad a stray final byte to a whole sample
-        except TimeoutError:
-            self._cool(COOLDOWN_TRANSIENT_S, f"timed out after {SYNTH_TIMEOUT_S}s")
-            return
-        except Exception as e:
-            self._cool(COOLDOWN_TRANSIENT_S, f"request failed: {type(e).__name__}")
-            return
+                        yield carry + bytes(1)  # pad a stray final byte to a whole sample
+                break
+            except TimeoutError:
+                self._cool(COOLDOWN_TRANSIENT_S, f"timed out after {SYNTH_TIMEOUT_S}s")
+                return
+            except aiohttp.ClientConnectorError as e:
+                # DNS miss or refused connect: nothing was sent or played yet, so one
+                # immediate retry is free. 2026-10-02..08 logged 14 ClientConnectorDNSError
+                # cooldowns, each one costing 30s of Fish and a voice flip.
+                if attempt < CONNECT_RETRIES and not produced:
+                    _log(f"connect failed ({type(e).__name__}); retrying once")
+                    await asyncio.sleep(CONNECT_RETRY_PAUSE_S)
+                    continue
+                self._cool(COOLDOWN_TRANSIENT_S, f"request failed: {type(e).__name__}")
+                return
+            except Exception as e:
+                self._cool(COOLDOWN_TRANSIENT_S, f"request failed: {type(e).__name__}")
+                return
 
         if produced:
             self.last_error = ""
@@ -228,9 +274,9 @@ class FishAudioClient:
 FISH = FishAudioClient()
 
 
-# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+# ──────────────────────────────────────────────────────────────────────────────
 # Voice cloning (model creation)
-# Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+# ──────────────────────────────────────────────────────────────────────────────
 # POST https://api.fish.audio/model, multipart/form-data. Verified against the
 # live OpenAPI schema (api.fish.audio/openapi.json):
 #   required: type="tts", title, train_mode="fast", voices=<file(s)>
@@ -252,7 +298,7 @@ async def create_voice_model(
     """Clone a voice from a reference clip. Returns {"id": ...} or {"error": ...}.
 
     Degrades like the rest of this module: never raises, so a failed clone is a
-    reported error rather than a traceback. ``visibility`` defaults to private Ã¢ÂÂ
+    reported error rather than a traceback. ``visibility`` defaults to private —
     a cloned voice is personal data and must not be published by accident.
     """
     from pathlib import Path

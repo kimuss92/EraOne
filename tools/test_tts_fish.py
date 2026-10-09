@@ -288,3 +288,97 @@ def test_default_latency_is_low():
     # Fastest time-to-first-audio; the default (non-cloned) voice tolerates
     # 'low' fine, and streaming still carries most of the latency win.
     assert tts_fish.get_fish_config()["latency"] == "low"
+
+
+def test_fallback_plays_handed_over_turn_audio_before_the_live_buffer():
+    VOICE_CFG.mode = MODE_FISH_AUDIO
+    eng = _fake_engine()
+    eng._buffer_cloud_audio(b"next-turn")
+    eng._tts_fallback("fish synthesis failed", held_audio=[b"t1a", b"t1b"])
+    assert eng.audio_in_queue.items == [b"t1a", b"t1b", b"next-turn"]
+    assert eng._cloud_audio_buffer == []
+
+
+# ── DNS / connect failure: one immediate retry before the cooldown ─────────────
+class _FakeResp:
+    status = 200
+
+    def __init__(self, data):
+        self._data = data
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    @property
+    def content(self):
+        data = self._data
+
+        class _C:
+            async def iter_chunked(self, n):
+                yield data
+
+        return _C()
+
+
+class _FlakySession:
+    closed = False
+
+    def __init__(self, failures):
+        self.failures = failures
+        self.posts = 0
+
+    def post(self, *a, **k):
+        import aiohttp
+
+        self.posts += 1
+        if self.posts <= self.failures:
+            raise aiohttp.ClientConnectorError(None, OSError("dns"))
+        return _FakeResp(b"\x00\x01" * 10)
+
+
+def _stream_with(monkeypatch, session):
+    monkeypatch.setenv("FISH_AUDIO_API_KEY", "k")
+    monkeypatch.setattr(tts_fish, "CONNECT_RETRY_PAUSE_S", 0)
+    client = tts_fish.FishAudioClient()
+    client._session = session
+    return client, asyncio.run(client.synthesize("hello there"))
+
+
+def test_one_dns_failure_is_retried_and_speech_still_arrives(monkeypatch):
+    session = _FlakySession(failures=1)
+    client, pcm = _stream_with(monkeypatch, session)
+    assert pcm and session.posts == 2
+    assert not client.in_cooldown()
+
+
+def test_a_dns_failure_that_persists_still_cools_down(monkeypatch):
+    session = _FlakySession(failures=5)
+    client, pcm = _stream_with(monkeypatch, session)
+    assert pcm == b"" and session.posts == 2
+    assert client.in_cooldown()
+
+
+# ── Pre-warm: a tiny synthesis while the user talks, only when Fish went cold ──
+def test_prewarm_synthesizes_once_when_cold_and_skips_when_warm(monkeypatch):
+    monkeypatch.setenv("FISH_AUDIO_API_KEY", "k")
+    client = tts_fish.FishAudioClient()
+    said = []
+
+    async def _fake_stream(text):
+        said.append(text)
+        client._last_use = __import__("time").monotonic()
+        yield b"\x00\x00"
+
+    monkeypatch.setattr(client, "stream", _fake_stream)
+    assert asyncio.run(client.prewarm()) is True
+    assert said == [tts_fish.PREWARM_TEXT]
+    assert asyncio.run(client.prewarm()) is False  # just used: still warm
+    assert said == [tts_fish.PREWARM_TEXT]
+
+
+def test_prewarm_does_nothing_without_a_key():
+    client = tts_fish.FishAudioClient()
+    assert asyncio.run(client.prewarm()) is False

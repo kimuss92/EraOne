@@ -235,3 +235,116 @@ def test_failed_synthesis_does_not_stall_the_turn(monkeypatch):
         assert era.audio_in_queue.qsize() == 0
 
     asyncio.run(_run())
+
+
+# ── Held Gemini audio outlives Gemini's turn_complete (2026-10-07 silent turn) ──
+class _FallbackEra(_FakeEra):
+    def __init__(self):
+        super().__init__()
+        self.fallbacks = []
+
+    def _tts_fallback(self, reason, held_audio=None):
+        self.fallbacks.append((reason, held_audio))
+
+
+def test_a_fish_failure_after_gemini_finished_still_gets_the_held_audio(monkeypatch):
+    async def _fail(text):
+        return
+        yield  # pragma: no cover - an empty stream is Fish's failure signal
+
+    monkeypatch.setattr(_FISH, "stream", _fail)
+
+    async def _run():
+        era = _FallbackEra()
+        s = SpeechOut(era)
+        s.feed("A sentence Fish cannot voice. ")
+        # Gemini's turn_complete arrives BEFORE the worker reaches the sentence.
+        s.end_turn(held_audio=[b"g1", b"g2"])
+        assert await _drain(s, era)
+        await s.stop()
+        assert era.fallbacks and era.fallbacks[0][1] == [b"g1", b"g2"]
+
+    asyncio.run(_run())
+
+
+def test_held_audio_is_released_once_the_turn_is_voiced(stub_synth):
+    async def _run():
+        era = _FallbackEra()
+        s = SpeechOut(era)
+        s.feed("Fish voices this one fine. ")
+        s.end_turn(held_audio=[b"g1"])
+        assert await _drain(s, era)
+        await s.stop()
+        assert era.fallbacks == []
+        assert s._held_audio == {}
+
+    asyncio.run(_run())
+
+
+def test_interrupt_discards_held_audio():
+    s = SpeechOut(_FallbackEra())
+    s._held_audio[0] = [b"g1"]
+    s.interrupt()
+    assert s._held_audio == {}
+
+
+# ── First-audio fast path (measured 2026-10-09: median wait 1,455 -> 586 ms) ──
+from app.era_live.speech_out import release_first  # noqa: E402
+
+
+def test_a_short_exclamation_is_its_own_sentence():
+    out, rest = split_sentences("Hello! One interesting fact is")
+    assert out == ["Hello!"]
+    assert rest == "One interesting fact is"
+
+
+def test_first_sentence_released_without_waiting_for_the_next_chunk():
+    assert release_first("I'm unable to access your email account.") == (
+        "I'm unable to access your email account.",
+        "",
+    )
+
+
+@pytest.mark.parametrize("tail", ["We met Dr.", "It costs 3.", "Use one, e.g."])
+def test_ambiguous_full_stops_are_not_released_early(tail):
+    assert release_first(tail) == ("", tail)
+
+
+def test_first_clause_is_released_after_four_words():
+    head, rest = release_first("A kilobyte is a unit of digital information, typically")
+    assert head == "A kilobyte is a unit of digital information,"
+    assert rest == "typically"
+
+
+def test_a_short_leading_clause_waits():
+    assert release_first("Sure, I")[0] == ""
+
+
+def test_a_number_with_a_comma_is_not_a_clause_break():
+    assert release_first("roughly 1,000 bytes in")[0] == ""
+
+
+def test_a_run_on_opener_is_cut_at_a_complete_word():
+    text = " ".join(f"w{i}" for i in range(20)) + " partia"
+    head, rest = release_first(text)
+    assert head.split() == [f"w{i}" for i in range(12)]
+    assert rest.endswith("partia")
+
+
+def test_only_the_first_chunk_of_a_turn_is_released_early(stub_synth):
+    async def _run():
+        era = _FakeEra()
+        s = SpeechOut(era)
+        s.feed("A kilobyte is a unit of digital information,")
+        s.feed(" roughly a thousand bytes, give or take")
+        s.end_turn()
+        assert await _drain(s, era)
+        # Next turn gets the fast path again.
+        s.feed("While I'm unable to open your email,")
+        await asyncio.sleep(0.05)
+        await s.stop()
+        assert stub_synth[0] == "A kilobyte is a unit of digital information,"
+        assert stub_synth[1] == "roughly a thousand bytes, give or take"
+        assert stub_synth[2] == "While I'm unable to open your email,"
+
+    asyncio.run(_run())
