@@ -124,6 +124,15 @@ class TestToolHandler:
         out = tool.scheduled_task({"action": "approve"}, tool.Authority(approves=YES))
         assert not out["success"] and isolated.calls == []
 
+    def test_skip_with_two_pending_asks_requires_a_task_name(self, isolated):
+        for name in ("check claude", "check mail"):
+            ts.fire(ts.create_task(name, "every 5 minutes", tool="agent_task", args={})["id"])
+
+        out = tool.scheduled_task({"action": "skip"})
+
+        assert not out["success"]
+        assert all(ts.get_task(name)["pending"] for name in ("check claude", "check mail"))
+
     def test_an_unheard_ask_is_not_what_a_bare_yes_answers(self, isolated, monkeypatch):
         """Era was busy, so the ask only reached the log: the user never heard it."""
         heard = _delete_task()
