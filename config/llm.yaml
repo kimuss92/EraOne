@@ -481,7 +481,16 @@ routing:
     tools: true
     max_tool_rounds: 4
     history_turns: 8
-    probe_gemini_every_s: 300
+    # 2026-10-09 (Karim): the self-loop is a BRIDGE back to Gemini, not a long
+    # stay — probe Gemini every minute. Was 300.
+    probe_gemini_every_s: 60
+    # Gemini failing while the internet works (1011 / 503): hand over to the
+    # backup brain after this many consecutive failed reconnects (~10 s) instead
+    # of all 6 (~150 s deaf). 0 = only after all retries. Reason "upstream".
+    upstream_after_failures: 2
+    # What Whisper may hear. Auto-detect misheard French/English as Turkish,
+    # Russian, Portuguese...; anything else is re-decoded in one of these.
+    languages: [en, fr]
 
   # ── Cascade voice mode (replaces the Gemini Live session) ─────────────────
   # mic -> Silero VAD -> Whisper-small int8 (CPU) -> CodeCraft (streamed, with
@@ -519,8 +528,11 @@ routing:
   # unless the user switches it on. Flip `enabled` to true, or set ERA_CLAUDE_VOICE=1.
   # `stay_s`..`max_stay_s` are the window lengths (each Gemini failure soon after
   # the last doubles the window, up to max_stay_s).
+  # ON since 2026-10-09 (Karim): the brain is OmniRoute era-gateway first (combo,
+  # survives one usage limit), the subscription CLI after it. Used only while
+  # Gemini is down or silent, or when the owner says "switch to Claude".
   claude_voice:
-    enabled: false
+    enabled: true
     env_override: ERA_CLAUDE_VOICE
     alias: era.cheap
     stt_threads: 2

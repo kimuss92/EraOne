@@ -392,6 +392,11 @@ def local_fallback_policy() -> dict[str, Any]:
             "history_turns": 8,
             # How often Gemini is re-probed while the local loop serves.
             "probe_gemini_every_s": 300,
+            # Consecutive Gemini-side failures before serving on the backup
+            # brain ("upstream"). 0 = only after every retry, as before.
+            "upstream_after_failures": 0,
+            # Languages Whisper may return; others are re-decoded. () = any.
+            "languages": (),
         },
     )
 

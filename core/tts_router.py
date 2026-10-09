@@ -35,17 +35,17 @@ async def synthesize(text: str) -> tuple[bytes, str]:
     return pcm, BACKEND_FISH
 
 
-async def stream(text: str):
+async def stream(text: str, lang: str = ""):
     """Yield PCM chunks for one sentence from the primary backend, as they arrive.
 
     An empty iterator means the backend produced nothing — the caller falls back
     to Gemini. Only Fish streams; Gemini's audio comes from the Live session, not
-    from here.
+    from here. `lang` selects a per-language Fish voice when one is configured.
     """
     text = (text or "").strip()
     if not text:
         return
-    async for chunk in FISH.stream(text):
+    async for chunk in FISH.stream(text, lang):
         yield chunk
 
 

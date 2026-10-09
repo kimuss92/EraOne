@@ -98,6 +98,21 @@ def is_hallucination(text: str) -> bool:
     return not norm or norm in _HALLUCINATIONS or not re.search(r"\w", norm)
 
 
+# A misheard French utterance usually comes back tagged as a neighbouring
+# Romance language; anything else falls to the first configured language.
+_ROMANCE = frozenset({"es", "pt", "it", "ro", "ca", "gl", "oc"})
+
+
+def _decode(rec, samples: np.ndarray) -> tuple[str, str]:
+    """(text, detected language) for one segment."""
+    stream = rec.create_stream()
+    stream.accept_waveform(SAMPLE_RATE, samples)
+    rec.decode_stream(stream)
+    result = stream.result
+    lang = str(getattr(result, "lang", "") or "").strip("<|>").lower()
+    return (result.text or "").strip(), lang
+
+
 def _threads() -> int:
     try:
         n = int(os.environ.get("ERA_LOCAL_STT_THREADS", "") or 0)
@@ -113,8 +128,12 @@ class LocalListener:
     the heavy Whisper call and belongs on a worker thread.
     """
 
-    def __init__(self, model_dir: Path = MODEL_DIR) -> None:
+    def __init__(self, model_dir: Path = MODEL_DIR, languages: tuple[str, ...] = ()) -> None:
         self._model_dir = model_dir
+        # Languages the owner actually speaks (config: routing.local_fallback.languages).
+        # Empty = trust Whisper's auto-detect. See _restrict().
+        self._languages = tuple(lang.lower() for lang in languages)
+        self._forced: dict[str, object] = {}  # language -> recognizer, built on demand
         self._lock = threading.Lock()
         self._vad = None
         self._rec = None
@@ -145,14 +164,21 @@ class LocalListener:
             cfg.sample_rate = SAMPLE_RATE
             cfg.num_threads = 1
             self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
-            self._rec = so.OfflineRecognizer.from_whisper(
-                encoder=str(p["encoder"]),
-                decoder=str(p["decoder"]),
-                tokens=str(p["tokens"]),
-                language="",  # auto-detect: the owner speaks French and English
-                task="transcribe",
-                num_threads=_threads(),
-            )
+            # Auto-detect first: the owner switches between French and English.
+            self._rec = self._make_recognizer("")
+
+    def _make_recognizer(self, language: str):
+        import sherpa_onnx as so
+
+        p = _paths(self._model_dir)
+        return so.OfflineRecognizer.from_whisper(
+            encoder=str(p["encoder"]),
+            decoder=str(p["decoder"]),
+            tokens=str(p["tokens"]),
+            language=language,
+            task="transcribe",
+            num_threads=_threads(),
+        )
 
     @property
     def loaded(self) -> bool:
@@ -216,13 +242,29 @@ class LocalListener:
         if audio_s < _MIN_SPEECH_S:
             return None
         started = time.perf_counter()
-        stream = self._rec.create_stream()
-        stream.accept_waveform(SAMPLE_RATE, samples)
-        self._rec.decode_stream(stream)
-        result = stream.result
-        text = (result.text or "").strip()
+        text, lang = _decode(self._rec, samples)
+        target = self._restrict(lang)
+        if target:
+            # Whisper-small heard French/English as Turkish, Russian, Portuguese...
+            # (2026-09/10 logs: "Резюм Музыка", "Hanıbar izi"). Decode again in
+            # the language the owner actually speaks.
+            text, _ = _decode(self._forced_recognizer(target), samples)
+            lang = target
         stt_ms = int((time.perf_counter() - started) * 1000)
         if is_hallucination(text):
             return None
-        lang = str(getattr(result, "lang", "") or "").strip("<|>").lower()
         return Utterance(text=text, lang=lang, audio_s=round(audio_s, 2), stt_ms=stt_ms)
+
+    def _restrict(self, lang: str) -> str:
+        """The allowed language to re-decode in, or "" when `lang` is acceptable."""
+        if not self._languages or not lang or lang in self._languages:
+            return ""
+        if lang in _ROMANCE and "fr" in self._languages:
+            return "fr"
+        return self._languages[0]
+
+    def _forced_recognizer(self, language: str):
+        rec = self._forced.get(language)
+        if rec is None:
+            rec = self._forced[language] = self._make_recognizer(language)
+        return rec

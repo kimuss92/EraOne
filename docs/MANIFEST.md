@@ -6,13 +6,13 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**319 source modules** · 116,450 lines · 192 test modules · 57 declared tools · 57 registered actions
+**320 source modules** · 116,790 lines · 193 test modules · 57 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
 | Subsystem | Go here when | Entry points |
 |---|---|---|
-| **Voice loop / live session** | hearing, speaking, reconnects, barge-in | `app/era_live/__init__.py`, `app/era_live/audio.py`, `app/era_live/audio_output.py`, `app/era_live/autopilot.py` _(+14 more)_ |
+| **Voice loop / live session** | hearing, speaking, reconnects, barge-in | `app/era_live/__init__.py`, `app/era_live/audio.py`, `app/era_live/audio_output.py`, `app/era_live/autopilot.py` _(+15 more)_ |
 | **Tool dispatch & declarations** | a tool is not called, called wrongly, or needs adding | `app/era_live/tool_dispatch.py`, `app/tool_declarations.py` |
 | **HUD (browser UI)** | anything the user SEES | `app/hud/__init__.py`, `app/hud/api.py`, `app/hud/browser.py`, `app/hud/bus_approval.py` _(+15 more)_ |
 | **Safety & confirmation** | gates, approvals, owner-only checks, abort | `core/confirmation.py`, `core/confirmation_preview.py`, `core/input_safety_gate.py`, `core/panic_stop.py` _(+3 more)_ |
@@ -108,16 +108,16 @@ Most-imported first. A change here has the widest blast radius.
 | `core.user_prefs` | 23 | Persistent user-granted preference exceptions and behavior rules. |
 | `app.era_live.tool_dispatch` | 22 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
 | `core.llm` | 21 | Provider-neutral LLM layer for Era One. |
+| `app.text_intents` | 20 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
 | `era_dispatch` | 20 | era_dispatch.py — Era One → Claude Code dispatcher. |
 | `actions.browser_control` | 19 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
-| `app.text_intents` | 19 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
 | `core.ai_provider` | 19 | Unified Gemini provider for Era One. |
 | `core.pending_confirmation` | 19 |  |
 | `core.cm_vault` | 18 | cm_vault.py — read/write bridge between Era's community-management lane and the Obsidian v |
+| `main` | 18 |  |
 | `actions.self_improve` | 17 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
 | `app.hud.events` | 17 | The HUD's single, truthful event stream and agent state machine. |
 | `core.self_healing_router` | 17 | Self-healing tool router for Era One. |
-| `main` | 17 |  |
 | `app.hud` | 16 | Localhost HUD layer: event bus, HTTP/WebSocket server glue, launcher helpers. |
 | `core.vault_bridge` | 16 | core/vault_bridge.py — the one safe door into the Obsidian vault for tools and the crew. |
 | `app.era_live` | 14 | EraLive behavioral mixins (extracted from main.py). |
@@ -132,23 +132,24 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `app/era_live/__init__.py` | 2 | EraLive behavioral mixins (extracted from main.py). |
-| `app/era_live/audio.py` | 1372 | Audio I/O loops for EraLive (extracted from main.py). |
+| `app/era_live/audio.py` | 1378 | Audio I/O loops for EraLive (extracted from main.py). |
 | `app/era_live/audio_output.py` | 292 | Self-healing speaker output for Era's Live voice. |
 | `app/era_live/autopilot.py` | 239 | Run the lane router's offline lanes before any Gemini request or local brain turn. |
 | `app/era_live/cascade.py` | 183 | Cascade voice mode — Era WITHOUT the Gemini Live session. |
-| `app/era_live/claude_voice.py` | 282 | Claude voice mode — Era answers through the Claude subscription CLI when Gemini Live is not answering. |
+| `app/era_live/claude_voice.py` | 286 | Claude voice mode — Era answers through the Claude subscription CLI when Gemini Live is not answering. |
 | `app/era_live/cm_flow.py` | 575 | Community-management flow mixin for EraLive (extracted from main.py). |
 | `app/era_live/dispatch.py` | 360 | Dispatch — being ANSWERED by a model other than the live voice session. |
-| `app/era_live/local_fallback.py` | 604 | Local fallback voice loop — Era keeps hearing and acting while Gemini is down. |
+| `app/era_live/local_fallback.py` | 652 | Local fallback voice loop — Era keeps hearing and acting while Gemini is down. |
 | `app/era_live/local_guards.py` | 70 | Security gates for the local fallback loop (app/era_live/local_fallback.py). |
 | `app/era_live/mic_mute.py` | 274 | Voice-controlled microphone mute for EraLive (see core/mic_mute.py for the model). |
 | `app/era_live/model_route.py` | 322 | Era's session-scoped model preference, and the routing decision it feeds. |
 | `app/era_live/panic.py` | 154 | Runtime half of "abort mission" for EraLive (model in core/panic_stop.py). |
 | `app/era_live/reconnect_mixin.py` | 700 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
 | `app/era_live/session_runtime.py` | 43 | Bound connection setup and release SDK transports on every reconnect. |
-| `app/era_live/speech_out.py` | 437 | Speech output — turns the model's text into audio, sentence by sentence. |
+| `app/era_live/speech_out.py` | 460 | Speech output — turns the model's text into audio, sentence by sentence. |
 | `app/era_live/tool_batch.py` | 281 | One-response-per-call execution of a model's tool-call batch. |
 | `app/era_live/tool_dispatch.py` | 3486 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
+| `app/era_live/tts_text.py` | 88 | What a TTS voice may say — the text rules for every synthesized sentence. |
 
 ### Tool dispatch & declarations
 
@@ -211,7 +212,7 @@ Every source module, its size, and what it is for.
 | `core/llm/provider.py` | 99 | The provider interfaces every adapter implements. |
 | `core/llm/quota_failover.py` | 526 | Gemini quota failover: exhausted key -> spare Gemini key -> CodeCraft -> Claude -> local. |
 | `core/llm/registry.py` | 494 | Alias registry — the one place that maps Era's internal model aliases to a provider and a concrete model id. |
-| `core/llm/router.py` | 462 | Which model serves this request, and why. |
+| `core/llm/router.py` | 467 | Which model serves this request, and why. |
 | `core/llm/shadow.py` | 260 | Shadow mode — what automatic routing WOULD have done, recorded but not acted on. |
 | `core/llm/spend.py` | 267 | Daily spend ledger for metered model calls. |
 | `core/llm/taskclass.py` | 159 | Deterministic task classification — which `routing.by_task` class is this? |
@@ -319,14 +320,14 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `core/audio_battery.py` | 239 | Battery telemetry for connected audio devices (Windows SetupAPI). |
-| `core/audio_devices.py` | 149 | Dynamic audio-device detection for Era — Star Glass routing. |
+| `core/audio_devices.py` | 160 | Dynamic audio-device detection for Era — Star Glass routing. |
 | `core/audio_endpoints.py` | 657 | Per-endpoint audio control for Era (Windows Core Audio via pycaw). |
 | `core/audio_pcm.py` | 160 | PCM/WAV helpers for Era's audio path. |
 | `core/audio_policy.py` | 417 |  |
-| `core/local_tts.py` | 143 | Local voice: Piper (French + English) via sherpa-onnx, fully offline. |
-| `core/tts_fish.py` | 361 | Fish Audio TTS client — Era's PRIMARY speech synthesis backend. |
+| `core/local_tts.py` | 145 | Local voice: Piper (French + English) via sherpa-onnx, fully offline. |
+| `core/tts_fish.py` | 402 | Fish Audio TTS client — Era's PRIMARY speech synthesis backend. |
 | `core/tts_router.py` | 64 | Speech-synthesis router — Fish Audio primary, Gemini fallback. |
-| `core/voice_output.py` | 573 | Where Era's SPOKEN VOICE plays - the single source of truth. |
+| `core/voice_output.py` | 607 | Where Era's SPOKEN VOICE plays - the single source of truth. |
 
 ### Community management (CM)
 

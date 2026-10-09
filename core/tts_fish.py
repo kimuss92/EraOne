@@ -23,8 +23,11 @@ and just burns latency on every utterance.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import time
+from pathlib import Path
 
 from app.audio_config import RECEIVE_SAMPLE_RATE
 from core.audio_pcm import FRAME_BYTES
@@ -89,6 +92,40 @@ def get_fish_config() -> dict:
         # PCM body, so "low" gets first audio to the speakers soonest.
         "latency": str(_resolve("latency", "FISH_AUDIO_LATENCY", "low")),
     }
+
+
+# ── Per-language voices (the floor for "Fish is Era's voice, Gemini her brain") ──
+# config/voice.json may carry {"fish_voices": {"fr": "<reference_id>", "ar": ...}}.
+# Each sentence is spoken by its language's voice; a language without an entry
+# uses the default reference_id above. No map = exactly the old behaviour. The
+# default voice (2026-10-09: the public "JARVIS" library voice) was cloned from
+# English-only audio, which is why its French sounded wrong.
+_VOICE_JSON = Path(__file__).resolve().parent.parent / "config" / "voice.json"
+_ARABIC = re.compile(r"[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]")
+_voice_map_cache: tuple[float, dict[str, str]] = (-1.0, {})
+
+
+def detect_lang(text: str) -> str:
+    """ "ar" for Arabic script (MSA and Darija alike), else "fr" or "en"."""
+    if _ARABIC.search(text or ""):
+        return "ar"
+    from core.local_tts import guess_lang
+
+    return guess_lang(text)
+
+
+def fish_voice_for(lang: str) -> str:
+    """The reference_id configured for `lang`, or "" (= use the default voice)."""
+    global _voice_map_cache
+    try:
+        mtime = _VOICE_JSON.stat().st_mtime
+        if mtime != _voice_map_cache[0]:
+            raw = json.loads(_VOICE_JSON.read_text(encoding="utf-8")).get("fish_voices") or {}
+            voices = {str(k).lower(): str(v).strip() for k, v in raw.items() if str(v).strip()}
+            _voice_map_cache = (mtime, voices)
+        return _voice_map_cache[1].get((lang or "").lower(), "")
+    except Exception:  # noqa: BLE001 - a bad voice map costs the map, never the voice
+        return ""
 
 
 def is_configured() -> bool:
@@ -166,7 +203,7 @@ class FishAudioClient:
         return True
 
     # ── Synthesis ────────────────────────────────────────────────────────────
-    async def stream(self, text: str):
+    async def stream(self, text: str, lang: str = ""):
         """Yield int16 mono PCM @ 24 kHz for `text` AS IT ARRIVES.
 
         This is the low-latency path: ``format=pcm`` is already Era's exact
@@ -197,8 +234,12 @@ class FishAudioClient:
             "sample_rate": RECEIVE_SAMPLE_RATE,
             "latency": cfg["latency"],
         }
-        if cfg["reference_id"]:
-            body["reference_id"] = cfg["reference_id"]
+        # `lang` (from detect_lang) picks that language's voice from
+        # config/voice.json "fish_voices"; otherwise the default voice.
+        reference_id = fish_voice_for(lang) if lang else ""
+        reference_id = reference_id or cfg["reference_id"]
+        if reference_id:
+            body["reference_id"] = reference_id
         headers = {
             "Authorization": f"Bearer {cfg['api_key']}",
             "Content-Type": "application/json",
@@ -259,14 +300,14 @@ class FishAudioClient:
         if produced:
             self.last_error = ""
 
-    async def synthesize(self, text: str) -> bytes:
+    async def synthesize(self, text: str, lang: str = "") -> bytes:
         """Buffered synthesis -> full int16 mono PCM @ 24 kHz. b"" on failure.
 
         Drains stream(); kept for the check/clone tools and the non-streaming
         router path. The LIVE speech worker uses stream() directly so playback
         starts on the first frame, not after the whole clip.
         """
-        chunks = [c async for c in self.stream(text)]
+        chunks = [c async for c in self.stream(text, lang)]
         return b"".join(chunks)
 
 

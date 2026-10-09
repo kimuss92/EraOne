@@ -130,10 +130,12 @@ async def synthesize_best(
     allow_fish=False is the user choosing the local voice (cascade mode).
     """
     try:
-        from core.tts_fish import FISH, is_configured
+        from core.tts_fish import FISH, detect_lang, is_configured
 
         if allow_fish and is_configured() and not FISH.in_cooldown():
-            pcm = await FISH.synthesize(text)
+            # Arabic needs detect_lang: the caller's `lang` (guess_lang) only
+            # knows French and English, and picks the Piper voice below.
+            pcm = await FISH.synthesize(text, detect_lang(text))
             if pcm:
                 return pcm, "fish"
     except Exception as e:

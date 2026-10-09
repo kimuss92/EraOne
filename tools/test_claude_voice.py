@@ -616,7 +616,7 @@ def test_the_watchdog_is_off_when_health_is_disabled(monkeypatch):
 def _patch_local_models(monkeypatch):
     monkeypatch.setattr(
         "core.local_stt.LocalListener",
-        lambda: SimpleNamespace(load=lambda: None, reset=lambda: None),
+        lambda **_k: SimpleNamespace(load=lambda: None, reset=lambda: None),
     )
     monkeypatch.setattr("core.local_tts.PIPER", SimpleNamespace(warm=lambda: None))
 
@@ -1062,9 +1062,21 @@ def test_a_brain_that_returns_nothing_is_still_answered(monkeypatch):
 # switch needs (verdicts -> enter_claude_voice -> the Claude brain -> hand back).
 
 
-def test_the_claude_voice_policy_exists_and_refuses_by_default(monkeypatch):
+def test_the_claude_voice_policy_exists_and_refuses_by_default(monkeypatch, tmp_path):
+    # The CODE default refuses. (config/llm.yaml turns it on since 2026-10-09 —
+    # Karim's decision — so this reads an empty config, not the real one.)
+    from pathlib import Path
+
+    from core.llm import registry
     from core.llm.router import claude_voice_policy
 
+    real = (Path(__file__).resolve().parent.parent / "config" / "llm.yaml").read_text("utf-8")
+    off = real.replace("  claude_voice:\n    enabled: true", "  claude_voice:\n    enabled: false")
+    assert off != real, "config/llm.yaml no longer has the claude_voice block this test edits"
+    cfg = tmp_path / "llm.yaml"
+    cfg.write_text(off, encoding="utf-8")
+    monkeypatch.setenv("ERA_LLM_CONFIG", str(cfg))
+    monkeypatch.setattr(registry, "_CACHE", None)
     monkeypatch.delenv("ERA_CLAUDE_VOICE", raising=False)
     pol = claude_voice_policy()
     assert pol["enabled"] is False, "voice must not reach a paid CLI unless the user says so"
@@ -1270,3 +1282,33 @@ def test_claude_is_the_brain_only_when_enabled_and_ready():
     assert asyncio.run(NotReady()._claude_brain_wanted("quota")) is False
     assert asyncio.run(Ready()._claude_brain_wanted("quota")) is True
     assert asyncio.run(Ready()._claude_brain_wanted("network")) is False
+
+
+# ── 2026-10-09: no verdict flood, and the "switch to Claude" call sites ─────
+
+
+def test_an_unavailable_rescue_clears_the_error_history(monkeypatch):
+    s = Stub()
+    s.claude_voice_ready = lambda: (False, "off")
+    for _ in range(3):
+        s.live_health.note_upstream_error()
+    ticks = []
+
+    async def fast_sleep(_):
+        ticks.append(1)
+        if len(ticks) > 3:
+            s._shutdown_requested = True
+
+    monkeypatch.setattr("app.era_live.claude_voice.asyncio.sleep", fast_sleep)
+    asyncio.run(s._live_health_watch())
+    # Without clear_errors() the same 'flaky' verdict re-fired every second
+    # (437 log lines on 2026-10-08).
+    assert s.live_health.verdict() is None
+
+
+def test_the_claude_order_is_intercepted_by_voice_and_by_text():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    assert "claude_voice_order(full_in)" in (root / "app/era_live/audio.py").read_text("utf-8")
+    assert "claude_voice_order(text)" in (root / "main.py").read_text("utf-8")

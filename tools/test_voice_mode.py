@@ -170,3 +170,15 @@ def test_deliberate_gemini_survives_a_later_fish_recovery_pattern(filed):
     assert _saved_mode(p) == MODE_GEMINI_AUDIO
     # Preference now equals active, so there is nothing for a recovery to undo.
     assert vm.VoiceModeConfig().is_gemini()
+
+
+def test_a_voice_switch_keeps_other_voice_settings(filed):
+    # config/voice.json also holds the per-language Fish voice map (2026-10-09).
+    import json
+
+    vm, p = filed
+    p.write_text(json.dumps({"mode": "gemini_audio", "fish_voices": {"fr": "abc"}}), "utf-8")
+    c = vm.VoiceModeConfig()
+    c.set_mode("fish")
+    saved = json.loads(p.read_text("utf-8"))
+    assert saved == {"mode": "fish_audio", "fish_voices": {"fr": "abc"}}

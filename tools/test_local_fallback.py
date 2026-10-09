@@ -93,7 +93,7 @@ def utter(stub, text):
 
 def test_not_ready_returns_false_and_never_runs(monkeypatch):
     stub = Stub()
-    monkeypatch.setattr(stub, "local_fallback_ready", lambda: (False, "models missing"))
+    monkeypatch.setattr(stub, "local_fallback_ready", lambda *_a: (False, "models missing"))
     ran = []
 
     async def fake_run(seconds, reason):
@@ -106,7 +106,7 @@ def test_not_ready_returns_false_and_never_runs(monkeypatch):
 
 def test_duration_is_capped_at_the_gemini_probe_interval(monkeypatch):
     stub = Stub()
-    monkeypatch.setattr(stub, "local_fallback_ready", lambda: (True, ""))
+    monkeypatch.setattr(stub, "local_fallback_ready", lambda *_a: (True, ""))
     monkeypatch.setattr(
         stub, "_local_policy", lambda: {"enabled": True, "probe_gemini_every_s": 300}
     )
@@ -122,7 +122,7 @@ def test_duration_is_capped_at_the_gemini_probe_interval(monkeypatch):
 
 def test_loop_failure_degrades_to_false(monkeypatch):
     stub = Stub()
-    monkeypatch.setattr(stub, "local_fallback_ready", lambda: (True, ""))
+    monkeypatch.setattr(stub, "local_fallback_ready", lambda *_a: (True, ""))
 
     async def boom(seconds, reason):
         raise OSError("no input device")
@@ -501,3 +501,95 @@ def test_plain_socket_close_is_not_offline():
 
     assert _offline(ConnectionClosedError("no close frame received or sent")) is False
     assert _offline(RuntimeError("1006 None. abnormal closure [internal]")) is False
+
+
+# ── Gemini-independence (2026-10-09): upstream handover, no Ollama needed ────
+import pytest  # noqa: E402
+
+from app.era_live import local_fallback as lf  # noqa: E402
+from app.era_live.local_fallback import handover_reason  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "offline, attempts, upstream_after, expected",
+    [
+        (True, 1, 2, "network"),  # internet down
+        (False, 1, 2, None),  # one blip: retry Gemini
+        (False, 2, 2, "upstream"),  # Gemini failing twice: backup brain
+        (False, 2, 0, None),  # feature off: old behaviour
+        (False, 6, 0, "upstream"),  # every retry spent
+    ],
+)
+def test_handover_reason(offline, attempts, upstream_after, expected):
+    got = handover_reason(
+        offline=offline, attempts=attempts, max_attempts=6, upstream_after=upstream_after
+    )
+    assert got == expected
+
+
+def test_upstream_uses_the_claude_brain_and_network_does_not():
+    assert "upstream" in lf._CLAUDE_BRAIN_REASONS and "network" not in lf._CLAUDE_BRAIN_REASONS
+    assert "upstream" in lf._ANNOUNCE
+
+
+def _ready_rig(monkeypatch, stub, claude_ok):
+    monkeypatch.setattr(stub, "_local_policy", lambda: {"enabled": True})
+    monkeypatch.setattr("core.local_stt.available", lambda *a: (True, ""))
+    monkeypatch.setattr("core.local_tts.available", lambda *a: (True, ""))
+    monkeypatch.setattr(
+        "core.llm.adapters.ollama_chat.ping", lambda *a: (False, "Ollama not reachable")
+    )
+    stub.claude_voice_ready = lambda: (claude_ok, "" if claude_ok else "off")
+
+
+def test_the_claude_brain_does_not_need_ollama(monkeypatch):
+    stub = Stub()
+    _ready_rig(monkeypatch, stub, claude_ok=True)
+    assert stub.local_fallback_ready("upstream") == (True, "")
+
+
+def test_the_ollama_brain_still_needs_ollama(monkeypatch):
+    stub = Stub()
+    _ready_rig(monkeypatch, stub, claude_ok=True)
+    assert stub.local_fallback_ready("network") == (False, "Ollama not reachable")
+    _ready_rig(monkeypatch, stub, claude_ok=False)
+    assert stub.local_fallback_ready("upstream") == (False, "Ollama not reachable")
+
+
+# ── Whisper restricted to the owner's languages ─────────────────────────────
+class _FakeRec:
+    def __init__(self, text, lang):
+        self.text, self.lang, self.decoded = text, lang, 0
+
+    def create_stream(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(accept_waveform=lambda *a: None, result=None)
+
+    def decode_stream(self, stream):
+        from types import SimpleNamespace
+
+        self.decoded += 1
+        stream.result = SimpleNamespace(text=self.text, lang=self.lang)
+
+
+def test_an_off_language_result_is_decoded_again_in_an_allowed_one():
+    import numpy as np
+
+    from core.local_stt import LocalListener
+
+    lis = LocalListener(languages=("en", "fr"))
+    lis._rec = _FakeRec("Hanıbar izi", "<|tr|>")
+    lis._forced["en"] = _FakeRec("Open the browser.", "<|en|>")
+    utt = lis.transcribe(np.zeros(16000 * 2, dtype=np.float32))
+    assert utt.text == "Open the browser." and utt.lang == "en"
+
+
+def test_language_restriction_rules():
+    from core.local_stt import LocalListener
+
+    lis = LocalListener(languages=("en", "fr"))
+    assert lis._restrict("tr") == "en"
+    assert lis._restrict("pt") == "fr"  # misheard French comes back as a Romance language
+    assert lis._restrict("fr") == "" and lis._restrict("") == ""
+    assert LocalListener()._restrict("tr") == ""  # no list: trust auto-detect

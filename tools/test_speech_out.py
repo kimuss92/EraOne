@@ -88,7 +88,7 @@ def stub_synth(monkeypatch):
     """Stub streaming synthesis: 100 bytes of PCM per sentence, and a call log."""
     calls = []
 
-    async def _fake(text):
+    async def _fake(text, lang=""):
         calls.append(text)
         yield b"\x00\x01" * 50
 
@@ -130,7 +130,7 @@ def test_turn_event_waits_for_the_last_sentence(monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _slow(text):
+    async def _slow(text, lang=""):
         if "second" in text:
             started.set()
             await release.wait()
@@ -177,7 +177,7 @@ def test_interrupt_orphans_in_flight_audio(monkeypatch):
     """
     release = asyncio.Event()
 
-    async def _slow(text):
+    async def _slow(text, lang=""):
         await release.wait()
         yield b"\x00\x01" * 50
 
@@ -220,7 +220,7 @@ def test_say_works_with_no_session(stub_synth):
 def test_failed_synthesis_does_not_stall_the_turn(monkeypatch):
     """A synthesis failure must still end the turn, or Era hangs in SPEAKING."""
 
-    async def _fail(text):
+    async def _fail(text, lang=""):
         return
         yield  # make this an async generator that produces nothing
 
@@ -248,7 +248,7 @@ class _FallbackEra(_FakeEra):
 
 
 def test_a_fish_failure_after_gemini_finished_still_gets_the_held_audio(monkeypatch):
-    async def _fail(text):
+    async def _fail(text, lang=""):
         return
         yield  # pragma: no cover - an empty stream is Fish's failure signal
 
@@ -348,3 +348,133 @@ def test_only_the_first_chunk_of_a_turn_is_released_early(stub_synth):
         assert stub_synth[2] == "While I'm unable to open your email,"
 
     asyncio.run(_run())
+
+
+# ── Only speech reaches the voice (2026-10-09: Fish read system notes aloud) ──
+from app.era_live.tts_text import open_note_at, sanitize_for_tts, strip_notes  # noqa: E402
+from app.text_intents import _say_exactly  # noqa: E402
+
+
+def test_a_say_exactly_wrapper_becomes_its_payload():
+    assert strip_notes(_say_exactly("System offline.")).strip() == "System offline."
+
+
+def test_the_cm_brand_question_note_becomes_its_payload():
+    note = (
+        "[System note: Ask the user aloud, exactly this and nothing "
+        'more: "Which brand is this for?" Do not guess the brand or '
+        "use any tool — just ask and wait for their reply.]"
+    )
+    assert strip_notes(note).strip() == "Which brand is this for?"
+
+
+def test_other_model_notes_are_dropped():
+    assert sanitize_for_tts("Done. [System note: the user was away.]") == "Done."
+    assert sanitize_for_tts(r"[User uploaded a file saved at C:\x\y.pdf]") == ""
+
+
+@pytest.mark.parametrize(
+    "raw, spoken",
+    [
+        (r"Saved to C:\Users\nesri\Desktop\report.pdf, sir.", "Saved to report.pdf, sir."),
+        ("See https://www.example.com/a/b?c=1 for more.", "See example.com for more."),
+        ("The file_controller tool is ready.", "The file controller tool is ready."),
+        ("**Done**, `sir`.", "Done, sir."),
+        ("## Summary", "Summary"),
+        ('Result {"ok": true} received.', "Result received."),
+        ("SYS: Voice switched to Fish.", "Voice switched to Fish."),
+        ("[FISH] request failed.", "request failed."),
+        ("C'est fait, monsieur. Très bien.", "C'est fait, monsieur. Très bien."),
+        ("تم يا سيدي.", "تم يا سيدي."),
+    ],
+)
+def test_sentences_are_cleaned_for_speech(raw, spoken):
+    assert sanitize_for_tts(raw) == spoken
+
+
+def test_markup_only_text_is_not_spoken():
+    assert sanitize_for_tts("**") == "" and sanitize_for_tts("[System note: x]") == ""
+
+
+def test_an_unclosed_note_is_found():
+    assert open_note_at("Done. [System note: the") == 6
+    assert open_note_at("Done. [a] fine") == -1
+
+
+def test_a_streamed_note_split_across_chunks_is_never_voiced(stub_synth):
+    async def _run():
+        era = _FakeEra()
+        s = SpeechOut(era)
+        s.feed("All set, sir. [System note: Say nothing.")
+        s.feed(" The user is away. Do not reply.] Anything else?")
+        s.end_turn()
+        assert await _drain(s, era)
+        await s.stop()
+        spoken = " ".join(stub_synth)
+        assert "System" not in spoken and "Do not reply" not in spoken
+        assert "All set, sir." in spoken and "Anything else?" in spoken
+
+    asyncio.run(_run())
+
+
+def test_say_unwraps_before_splitting(stub_synth):
+    async def _run():
+        era = _FakeEra()
+        s = SpeechOut(era)
+        s.say(_say_exactly("System offline. Back soon."))
+        assert await _drain(s, era)
+        await s.stop()
+        assert stub_synth == ["System offline.", "Back soon."]
+
+    asyncio.run(_run())
+
+
+def test_a_turn_ending_inside_a_note_drops_the_note(stub_synth):
+    async def _run():
+        era = _FakeEra()
+        s = SpeechOut(era)
+        s.feed("Right away, sir. [System note: cut off")
+        s.end_turn()
+        assert await _drain(s, era)
+        await s.stop()
+        assert stub_synth == ["Right away, sir."]
+
+    asyncio.run(_run())
+
+
+def _fake_engine_for_speak():
+    from types import SimpleNamespace
+
+    said, logs = [], []
+    eng = SimpleNamespace(
+        session=object(),  # a live session: skip the local-fallback branch
+        _loop=None,
+        speech_out=SimpleNamespace(say=said.append),
+        ui=SimpleNamespace(write_log=logs.append),
+        _tg_ack=lambda text: None,
+        _note_era_question=lambda text: None,
+        local_speak=lambda text: False,
+    )
+    return eng, said, logs
+
+
+def test_speak_hands_fish_the_payload_not_the_wrapper(monkeypatch):
+    import main
+    from core.voice_mode import MODE_FISH_AUDIO, VOICE_CFG
+
+    monkeypatch.setattr(VOICE_CFG, "mode", MODE_FISH_AUDIO, raising=False)
+    eng, said, _ = _fake_engine_for_speak()
+    main.EraLive.speak(eng, _say_exactly("System offline."))
+    assert said == ["System offline."]
+
+
+def test_speak_error_never_voices_the_raw_error_in_fish_mode(monkeypatch):
+    import main
+    from core.voice_mode import MODE_FISH_AUDIO, VOICE_CFG
+
+    monkeypatch.setattr(VOICE_CFG, "mode", MODE_FISH_AUDIO, raising=False)
+    eng, said, logs = _fake_engine_for_speak()
+    eng.speak = lambda text: said.append(text)
+    main.EraLive.speak_error(eng, "file_controller", r"[WinError 5] Access denied: C:\x\y.txt")
+    assert said == ["Sir, the file controller tool ran into a problem. The details are in the log."]
+    assert "WinError 5" in logs[0]  # the detail is kept, in the log

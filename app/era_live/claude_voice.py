@@ -278,4 +278,8 @@ class ClaudeVoiceMixin:
             )
             if self.enter_claude_voice(verdict.kind, verdict.detail):
                 return
-            self.live_health.reset()  # unavailable: don't re-judge the same silence
+            # Unavailable: don't re-judge the same silence. reset() keeps the
+            # upstream-error history on purpose, so a "flaky" verdict re-fired
+            # every second (437 lines on 2026-10-08); nothing can act on it now.
+            self.live_health.reset()
+            self.live_health.clear_errors()

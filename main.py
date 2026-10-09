@@ -222,10 +222,10 @@ _agent_task_queue.start()
 from app.era_live.audio import AudioIOMixin
 from app.era_live.autopilot import AutopilotMixin
 from app.era_live.cascade import CascadeMixin
-from app.era_live.claude_voice import ClaudeVoiceMixin
+from app.era_live.claude_voice import ClaudeVoiceMixin, claude_voice_order
 from app.era_live.cm_flow import CMFlowMixin
 from app.era_live.dispatch import DispatchMixin
-from app.era_live.local_fallback import LocalFallbackMixin
+from app.era_live.local_fallback import LocalFallbackMixin, handover_reason
 from app.era_live.mic_mute import MicMuteMixin
 from app.era_live.model_route import ModelRouteMixin
 from app.era_live.panic import PanicStopMixin
@@ -645,6 +645,18 @@ class EraLive(
         if voice_target is not None:
             self._apply_voice_switch(voice_target)
             self._tg_ack("Voice switch applied, sir.")
+            return
+
+        # === "switch to Claude" / "use your backup brain", TYPED ===
+        if claude_voice_order(text):
+            self._note_user_utterance(text)
+            self.ui.write_log(f"You: {text}")
+            entered = self.enter_claude_voice("claude_manual", text, manual=True)
+            self._tg_ack(
+                "Switching to my backup brain, sir."
+                if entered
+                else "My backup brain isn't available right now, sir."
+            )
             return
 
         # === Model routing override, TYPED ===
@@ -1238,9 +1250,11 @@ class EraLive(
             if loop and loop.is_running():
                 # Hop to the loop thread: the streamer's queue and worker task
                 # are not thread-safe.
-                loop.call_soon_threadsafe(self.speech_out.say, text)
+                # `spoken`, not `text`: a _say_exactly() wrapper is an instruction
+                # to Gemini, and Fish read it aloud word for word (2026-10-09).
+                loop.call_soon_threadsafe(self.speech_out.say, spoken)
             else:
-                self.speech_out.say(text)
+                self.speech_out.say(spoken)
             return
 
         if not self._loop or not self.session:
@@ -1249,7 +1263,14 @@ class EraLive(
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
-        self.ui.write_log(f"ERR: {tool_name} â€” {short}")
+        self.ui.write_log(f"ERR: {tool_name} — {short}")
+        if VOICE_CFG.uses_speech_out():
+            # Fish speaks text LITERALLY: a raw exception, path or WinError code
+            # would be read aloud. The details stay in the log line above.
+            name = tool_name.replace("_", " ")
+            self.speak(f"Sir, the {name} tool ran into a problem. The details are in the log.")
+            return
+        # Gemini reacts to this rather than reading it, so it gets the detail.
         self.speak(f"Sir, {tool_name} encountered an error. {short}")
 
     # ----- STANDBY / WAKE WORD METHODS -----
@@ -2147,9 +2168,17 @@ class EraLive(
                 # version waited for all 6 retries (~90 s of backoff), so a
                 # 30-second Wi-Fi outage never reached local mode (2026-09-23).
                 offline = self._offline_streak >= 2
-                if (offline or self._reconnect_attempts >= self._max_reconnect_attempts) and (
-                    await self.serve_locally_during_outage(60.0, "network")
-                ):
+                # Gemini failing while the internet works (1011 internal error,
+                # 503 unavailable): after a couple of failed reconnects, serve on
+                # the backup brain (OmniRoute era-gateway, not Google) instead of
+                # sitting deaf through every retry — that was ~150 s.
+                handover = handover_reason(
+                    offline=offline,
+                    attempts=self._reconnect_attempts,
+                    max_attempts=self._max_reconnect_attempts,
+                    upstream_after=int(self._local_policy().get("upstream_after_failures") or 0),
+                )
+                if handover and await self.serve_locally_during_outage(60.0, handover):
                     self.set_status("Reconnecting")
                     continue
 

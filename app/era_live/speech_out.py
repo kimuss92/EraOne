@@ -35,8 +35,10 @@ from __future__ import annotations
 import asyncio
 import re
 
+from app.era_live.tts_text import open_note_at, sanitize_for_tts, strip_notes
 from core import tts_router
 from core.audio_pcm import iter_pcm_frames
+from core.tts_fish import detect_lang
 
 # Sentence boundary: terminal punctuation followed by whitespace or end. Also
 # treat a newline as a boundary — list items and short lines rarely end in a
@@ -248,11 +250,18 @@ class SpeechOut:
             return
         if not self.start():
             return
-        self._buf += delta
+        # Model notes go BEFORE splitting (they carry their own full stops), and a
+        # note still streaming in is held back whole until its "]" arrives.
+        self._buf = strip_notes(self._buf + delta)
+        held = ""
+        cut = open_note_at(self._buf)
+        if cut >= 0:
+            self._buf, held = self._buf[:cut], self._buf[cut:]
         sentences, self._buf = split_sentences(self._buf)
         if not sentences and not self._first_out:
             head, self._buf = release_first(self._buf)
             sentences = [head] if head else []
+        self._buf += held
         if sentences:
             self._first_out = True
         for s in sentences:
@@ -277,6 +286,10 @@ class SpeechOut:
         """
         if not self.start():
             return
+        # A "[" still open when the turn ends was a note cut short: never voice it.
+        cut = open_note_at(self._buf)
+        if cut >= 0:
+            self._buf = self._buf[:cut]
         sentences, self._buf = split_sentences(self._buf, final=True)
         for s in sentences:
             self._pending.put_nowait((self._generation, self._turn_no, s))
@@ -302,7 +315,7 @@ class SpeechOut:
         if not self.start():
             print("[TTS] no running loop — dropping local utterance")
             return
-        sentences, _ = split_sentences(text, final=True)
+        sentences, _ = split_sentences(strip_notes(text), final=True)
         for s in sentences:
             self._pending.put_nowait((self._generation, self._turn_no, s))
         self._pending.put_nowait((self._generation, self._turn_no, _END_OF_TURN))
@@ -384,6 +397,16 @@ class SpeechOut:
                         event.set()
                     continue
 
+                # Only speech reaches the voice: no notes, paths, tags or markup
+                # (app/era_live/tts_text.py). A sentence that cleans to nothing is
+                # skipped — it is not a synthesis failure, so no fallback.
+                item = sanitize_for_tts(item)
+                if not item:
+                    continue
+                # Logged so a leak is visible in eraone.log; spoken text was
+                # otherwise never recorded anywhere.
+                print(f"[TTS] say: {item[:160]}")
+
                 await self._await_backlog()
                 if generation != self._generation:
                     continue
@@ -394,7 +417,7 @@ class SpeechOut:
                 # reply). This is the latency fix — see core/tts_fish.stream().
                 produced = False
                 event = getattr(self.era, "_turn_done_event", None)
-                async for chunk in tts_router.stream(item):
+                async for chunk in tts_router.stream(item, detect_lang(item)):
                     if generation != self._generation:
                         break
                     q = self._queue()

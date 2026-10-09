@@ -109,7 +109,7 @@ def test_router_uses_fish_in_fish_mode(monkeypatch):
 def test_router_signals_fallback_when_fish_fails(monkeypatch):
     VOICE_CFG.mode = MODE_FISH_AUDIO
 
-    async def _fail(text):
+    async def _fail(text, lang=""):
         return b""
 
     monkeypatch.setattr(tts_router.FISH, "synthesize", _fail)
@@ -263,7 +263,7 @@ def test_stream_short_circuits_during_cooldown(monkeypatch):
 def test_synthesize_drains_the_stream(monkeypatch):
     """The buffered wrapper (used by the clone/check tools) concatenates stream()."""
 
-    async def _fake_stream(text):
+    async def _fake_stream(text, lang=""):
         yield b"AB"
         yield b"CD"
 
@@ -272,7 +272,7 @@ def test_synthesize_drains_the_stream(monkeypatch):
 
 
 def test_router_stream_passes_through(monkeypatch):
-    async def _fake_stream(text):
+    async def _fake_stream(text, lang=""):
         yield b"one"
         yield b"two"
 
@@ -367,7 +367,7 @@ def test_prewarm_synthesizes_once_when_cold_and_skips_when_warm(monkeypatch):
     client = tts_fish.FishAudioClient()
     said = []
 
-    async def _fake_stream(text):
+    async def _fake_stream(text, lang=""):
         said.append(text)
         client._last_use = __import__("time").monotonic()
         yield b"\x00\x00"
@@ -382,3 +382,68 @@ def test_prewarm_synthesizes_once_when_cold_and_skips_when_warm(monkeypatch):
 def test_prewarm_does_nothing_without_a_key():
     client = tts_fish.FishAudioClient()
     assert asyncio.run(client.prewarm()) is False
+
+
+# ── Per-language Fish voices: config/voice.json "fish_voices" ─────────────────
+@pytest.mark.parametrize(
+    "text, lang",
+    [
+        ("Good evening, sir.", "en"),
+        ("Bonsoir monsieur, c'est prêt.", "fr"),
+        ("مساء الخير سيدي.", "ar"),
+        ("عسلامة سيدي، الرابور حاضر.", "ar"),
+    ],
+)
+def test_detect_lang(text, lang):
+    assert tts_fish.detect_lang(text) == lang
+
+
+@pytest.fixture
+def voice_map(tmp_path, monkeypatch):
+    import json
+
+    p = tmp_path / "voice.json"
+    monkeypatch.setattr(tts_fish, "_VOICE_JSON", p)
+    monkeypatch.setattr(tts_fish, "_voice_map_cache", (-1.0, {}))
+
+    def write(mapping):
+        p.write_text(json.dumps({"mode": "fish_audio", "fish_voices": mapping}), "utf-8")
+
+    return write
+
+
+def test_a_mapped_language_gets_its_own_voice(voice_map):
+    voice_map({"fr": "FRVOICE", "ar": "ARVOICE"})
+    assert tts_fish.fish_voice_for("fr") == "FRVOICE"
+    assert tts_fish.fish_voice_for("ar") == "ARVOICE"
+    assert tts_fish.fish_voice_for("en") == ""  # unmapped -> the default voice
+
+
+def test_no_voice_file_means_the_default_voice(tmp_path, monkeypatch):
+    monkeypatch.setattr(tts_fish, "_VOICE_JSON", tmp_path / "missing.json")
+    monkeypatch.setattr(tts_fish, "_voice_map_cache", (-1.0, {}))
+    assert tts_fish.fish_voice_for("fr") == ""
+
+
+class _BodySession:
+    """Captures the JSON body Fish would receive."""
+
+    closed = False
+
+    def __init__(self):
+        self.bodies = []
+
+    def post(self, url, json=None, **k):
+        self.bodies.append(json)
+        return _FakeResp(b"\x00\x01" * 4)
+
+
+def test_the_request_uses_the_sentence_language_voice(voice_map, monkeypatch):
+    voice_map({"fr": "FRVOICE"})
+    monkeypatch.setenv("FISH_AUDIO_API_KEY", "k")
+    monkeypatch.setenv("FISH_AUDIO_REFERENCE_ID", "DEFAULTVOICE")
+    client = tts_fish.FishAudioClient()
+    client._session = sess = _BodySession()
+    asyncio.run(client.synthesize("Bonsoir monsieur.", "fr"))
+    asyncio.run(client.synthesize("Good evening, sir.", "en"))
+    assert [b["reference_id"] for b in sess.bodies] == ["FRVOICE", "DEFAULTVOICE"]

@@ -136,10 +136,17 @@ class VoiceModeConfig:
         # fallback, which must never reach the file.
         try:
             VOICE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            VOICE_CONFIG_PATH.write_text(
-                json.dumps({"mode": self.preferred}, indent=2),
-                encoding="utf-8",
-            )
+            # Read-modify-write: the file also holds other voice settings (e.g.
+            # "fish_voices", the per-language Fish voice map). A switch must
+            # never erase them.
+            try:
+                data = json.loads(VOICE_CONFIG_PATH.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    data = {}
+            except Exception:
+                data = {}
+            data["mode"] = self.preferred
+            VOICE_CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception as e:
             print(f"[VOICE] Could not persist voice mode: {e}")
 

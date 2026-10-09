@@ -8,6 +8,54 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-09 (evening) · Fish speaks only speech; Era keeps working when Gemini drops
+Plan: `~/.claude/plans/what-you-suggest-to-hidden-kahn.md`. Backups: `.backups/20261009-step1`, `-step2`, `-voicemap`.
+
+**Step 1: Fish read system and log phrases.**
+- **Root cause:** `main.py speak()` computed `spoken = _unwrap_say_exactly(text)` but handed Fish the raw `text`, so every `[System note: Say aloud exactly this …]` wrapper was read aloud. Affected: standby, reconnect, "Working on it", Gmail alerts, CM reports. Fixed.
+- **New `app/era_live/tts_text.py`**, the single home for speech-text rules:
+  - `strip_notes`, run before sentence splitting. A note has its own full stops, so splitting first would cut it in half. It handles the standard wrapper and the hand-written CM "Ask the user aloud, exactly this" note.
+  - `open_note_at`: a streamed `[…` is held back until its `]` arrives.
+  - `sanitize_for_tts`, run per sentence: removes notes, paths (kept as the file name), URLs (kept as the domain), JSON, markdown, emoji and leading `[TAG]`/`SYS:` prefixes; turns snake_case into words. French and Arabic pass through untouched.
+- **Applied** in `SpeechOut._run`, which covers `say()` and Gemini transcripts alike, and in the local loop (`_local_turn`, `_local_say`).
+- `speak_error` in Fish mode says "Sir, the … tool ran into a problem"; the raw error stays in the log.
+- A prompt rule was added to `core/prompt.txt` §2 (SPOKEN WORDS ONLY).
+- Every voiced sentence is now logged as `[TTS] say: …`; spoken text was never recorded before.
+
+**Step 2: Era without Gemini Live.** Most of it reuses the existing local loop.
+- **New outage reason `upstream`:** Gemini failing while the internet works.
+  - The run loop hands over after **2** failed reconnects (`handover_reason()`, `routing.local_fallback.upstream_after_failures: 2`), instead of after all 6 (~150 s deaf).
+  - The brain is Claude voice, i.e. OmniRoute `era-gateway` first and the subscription CLI as backup.
+  - A real `network` loss still uses Ollama.
+- **`routing.claude_voice.enabled: true`.** Silent-Gemini rescue ("heard you, no answer for 25 s") now acts.
+- `local_fallback_ready` requires Ollama **only** when Ollama is the brain.
+- **Verdict flood fixed:** when the rescue is unavailable, `clear_errors()` runs too (it was 437 lines on 10-08).
+- **Whisper restricted to `[en, fr]`.** An off-language detection is re-decoded in French (for Romance tags) or English. This removes the Turkish/Russian garbage.
+- `probe_gemini_every_s` 300 → **60**: the local loop is a bridge back to Gemini.
+- **"Switch to Claude" / "use your backup brain"** works again, spoken and typed. Its call site was lost in merge 6f0c327.
+- Bug found on the way: `router._flag_block` drops keys without defaults, so the new config keys got defaults in `local_fallback_policy()`.
+
+**Multilingual Fish voice (research and groundwork, no voice changed).**
+- The current voice (`reference_id` → public library voice "SUPER AI ASSITANT - JARVIS") was cloned from **English-only** audio: `languages: ['en']`. That is why its French sounds wrong.
+- The s2.1 model itself supports 83 languages, and language comes from the text automatically.
+- In a library scan of 599 voices, only 5 male voices cover 2+ of en/fr/ar, all of them character voices. **No ready-made butler voice speaks all three.**
+- **Samples for Karim:** `runtime/voice_samples/` holds 5 voices × {en, fr, MSA ar, Tunisian Darija}.
+- **Groundwork:** `config/voice.json` may carry `"fish_voices": {"fr": "<id>", "ar": "<id>"}`. Each sentence's language is detected (`tts_fish.detect_lang`: Arabic script → ar), and Fish uses that language's voice, or the default voice when none is set. Both the Fish path and the local loop use it.
+- `VoiceModeConfig._write` now preserves extra keys, so a voice switch never erases the map.
+- The real "same voice in every language" path is a custom clone recorded with en+fr+ar speech. `create_voice_model()` in `core/tts_fish.py` already exists for that.
+
+**Tests:**
+- Step 1: 14 tts_text cases, 5 SpeechOut/speak tests. All 5 behaviour tests FAIL on the pre-fix code.
+- Step 2: 11 tests, including the handover table, no-Ollama readiness, STT re-decode and the flood fix (3/3 load-bearing).
+- Voice map: 8 tests.
+- Test doubles updated for the new optional `lang` / `reason` / `languages` arguments.
+- `test_the_claude_voice_policy_exists_and_refuses_by_default` now checks the CODE default against a copy of the real config with Claude voice off.
+
+**Open:**
+- Live checks (TODO 37b, 39).
+- Karim picks voices from the samples, or records a trilingual clone.
+- Brain fallback inside the loop: if the network is truly down but was classified `upstream`, the Claude brain fails and Era says "my backup brain isn't responding". She does not switch to Ollama mid-run.
+
 ### 2026-10-09 · The four P0s from the audit, plus Karim's three decisions
 Source: `docs/AUDIT_2026-10-09.md` §5b. Backups: `.backups/20261009-p0fix/` (now git-ignored).
 

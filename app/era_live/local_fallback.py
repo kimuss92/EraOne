@@ -34,6 +34,7 @@ import sounddevice as sd
 
 from app.audio_config import CHANNELS, CHUNK_SIZE, RECEIVE_SAMPLE_RATE, SEND_SAMPLE_RATE
 from app.era_live.local_guards import owner_voice, user_approved
+from app.era_live.tts_text import sanitize_for_tts
 from core.mic_mute import is_mic_off_order
 
 _STOP = re.compile(
@@ -50,6 +51,8 @@ _ANNOUNCE = {
     "auth": "My cloud key was rejected, sir. I'm running on my local backup brain.",
     "config": "My cloud session is refusing to start, sir. I'm on my local backup brain.",
     "network": "The internet connection is down, sir. I'm running on my local backup brain.",
+    # Gemini itself failing (1011 / 503) while the internet works.
+    "upstream": "My main voice connection dropped, sir. I'm still here on my backup brain.",
     # Claude voice mode (app/era_live/claude_voice.py). Without these two the
     # fallback line above would announce "the internet connection is down".
     "claude": "My cloud voice stopped answering, sir. I'm using my Claude backup brain.",
@@ -57,9 +60,29 @@ _ANNOUNCE = {
 }
 # Outage reasons for which Claude (when enabled and ready) is the brain instead of
 # Ollama. "network" is deliberately absent: Claude needs the network too.
-_CLAUDE_BRAIN_REASONS = ("claude", "claude_manual", "quota", "auth", "config")
+# "upstream" (Gemini failing, internet fine) is present: the brain is OmniRoute
+# era-gateway first, which does not depend on Google at all.
+_CLAUDE_BRAIN_REASONS = ("claude", "claude_manual", "quota", "auth", "config", "upstream")
 _BACK = "Cloud connection restored, sir."
 _PLAY_SLICE = RECEIVE_SAMPLE_RATE // 10 * 2  # 100 ms of int16 mono
+
+
+def handover_reason(
+    *, offline: bool, attempts: int, max_attempts: int, upstream_after: int
+) -> str | None:
+    """Should the run loop serve locally after a failed reconnect, and why?
+
+    "network"  — the internet is down (two "no internet" failures in a row).
+    "upstream" — Gemini itself is failing (1011 / 503) while the internet works:
+                 after `upstream_after` failed reconnects, not after all of them
+                 (that was ~150 s of deafness). The brain is then OmniRoute.
+    None       — keep retrying Gemini.
+    """
+    if offline:
+        return "network"
+    if (upstream_after > 0 and attempts >= upstream_after) or attempts >= max_attempts:
+        return "upstream"
+    return None
 
 
 class LocalFallbackMixin:
@@ -72,16 +95,33 @@ class LocalFallbackMixin:
         except Exception:
             return {"enabled": False}
 
-    def local_fallback_ready(self) -> tuple[bool, str]:
+    def local_fallback_ready(self, reason: str = "") -> tuple[bool, str]:
         if not self._local_policy().get("enabled"):
             return False, "local fallback disabled (routing.local_fallback / ERA_LOCAL_FALLBACK)"
         from core import local_stt, local_tts
-        from core.llm.adapters.ollama_chat import ping
 
-        for ok, why in (local_stt.available(), local_tts.available(), ping()):
+        checks = [local_stt.available(), local_tts.available()]
+        # Ollama is needed only when it will be the brain. Requiring it always
+        # kept the loop from starting with the Claude/OmniRoute brain whenever
+        # Ollama happened to be down ("Ollama not reachable" x4 in the logs).
+        if not self._claude_serves(reason):
+            from core.llm.adapters.ollama_chat import ping
+
+            checks.append(ping())
+        for ok, why in checks:
             if not ok:
                 return False, why
         return True, ""
+
+    def _claude_serves(self, reason: str) -> bool:
+        """Sync twin of _claude_brain_wanted, for the readiness check."""
+        ready = getattr(self, "claude_voice_ready", None)
+        if reason not in _CLAUDE_BRAIN_REASONS or ready is None:
+            return False
+        try:
+            return bool(ready()[0])
+        except Exception:
+            return False
 
     def local_mode_active(self) -> bool:
         return bool(getattr(self, "_local_mode_active", False))
@@ -110,7 +150,7 @@ class LocalFallbackMixin:
     # ── entry point from the run loop ───────────────────────────────────────
     async def serve_locally_during_outage(self, seconds: float, reason: str) -> bool:
         """Serve locally for up to `seconds`. False = could not; caller waits as before."""
-        ok, why = await asyncio.to_thread(self.local_fallback_ready)
+        ok, why = await asyncio.to_thread(self.local_fallback_ready, reason)
         if not ok:
             print(f"[LOCAL] Fallback unavailable: {why}")
             return False
@@ -135,7 +175,8 @@ class LocalFallbackMixin:
         from core.local_tts import PIPER
 
         if getattr(self, "_local_listener", None) is None:
-            self._local_listener = LocalListener()
+            langs = self._local_policy().get("languages") or ()
+            self._local_listener = LocalListener(languages=tuple(str(x) for x in langs))
         # Cascade mode (app/era_live/cascade.py) swaps in its CodeCraft brain;
         # the Ollama one is kept aside for the next real outage.
         if reason == "cascade":
@@ -376,7 +417,11 @@ class LocalFallbackMixin:
         async def produce() -> None:
             nonlocal produced, failed
             try:
-                async for sentence in self._local_brain.respond(text, self._local_execute_tool):
+                async for raw in self._local_brain.respond(text, self._local_execute_tool):
+                    # Same speech-only rules as the Fish path (tts_text.py).
+                    sentence = sanitize_for_tts(raw)
+                    if not sentence:
+                        continue
                     produced = True
                     pcm, _backend = await synthesize_best(
                         sentence, guess_lang(sentence), allow_fish=fish
@@ -526,6 +571,9 @@ class LocalFallbackMixin:
     async def _local_say(self, text: str) -> None:
         from core.local_tts import guess_lang, synthesize_best
 
+        text = sanitize_for_tts(text)
+        if not text:
+            return
         pcm, _ = await synthesize_best(text, guess_lang(text), allow_fish=self._local_fish_ok())
         await self._local_play(pcm)
 

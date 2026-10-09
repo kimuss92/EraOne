@@ -14,6 +14,7 @@ from google.genai import types
 
 from app.audio_config import CHANNELS, CHUNK_SIZE, RECEIVE_SAMPLE_RATE, SEND_SAMPLE_RATE
 from app.era_live.audio_output import ResilientOutputStream
+from app.era_live.claude_voice import claude_voice_order
 from app.hud.events import hud
 from app.notify import _tg_notify
 from app.text_intents import (
@@ -786,6 +787,11 @@ class AudioIOMixin:
                                     self, "_mic_muted", False
                                 ):
                                     self.mute_microphone("voice")
+                                # "switch to Claude" / "use your backup brain":
+                                # deterministic, never left to the model. The
+                                # call site was lost in merge 6f0c327.
+                                if claude_voice_order(full_in):
+                                    self.enter_claude_voice("claude_manual", full_in, manual=True)
                                 # ── Contextual resume / drop (Phase 2) ──
                                 # Only when a thought is stashed, so a bare
                                 # "continue" with nothing pending stays a normal
