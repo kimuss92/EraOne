@@ -513,6 +513,84 @@ class TestIndexStatus:
             time.sleep(0.5)
             idx.close()
 
+    def test_close_during_build_waits_for_the_worker(self, tmp_path, monkeypatch):
+        """close() must not close the shared connection under a live build.
+
+        The connection is check_same_thread=False, so conn.close() from the
+        test thread while _build_worker is mid-execute is a native access
+        violation, not an exception — it once took the whole pytest process
+        down. close() has to wait for the build instead of racing it.
+        """
+        import threading
+
+        import actions.file_indexer as fi
+
+        gate = threading.Event()
+        entered = threading.Event()
+        real_flush = fi.FileIndex._flush_batch
+
+        def slow_flush(self, conn, batch):
+            if not entered.is_set():
+                entered.set()
+                gate.wait(timeout=10)
+            real_flush(self, conn, batch)
+
+        monkeypatch.setattr(fi.FileIndex, "_flush_batch", slow_flush)
+        (tmp_path / "a.txt").write_text("a")
+        idx = fi.FileIndex(db_path=tmp_path / "index.db")
+        idx.rebuild(roots=[tmp_path], wait=False)
+        assert entered.wait(timeout=10), "build never reached a flush"
+
+        closer = threading.Thread(target=idx.close)
+        closer.start()
+        closer.join(timeout=0.3)
+        assert closer.is_alive(), "close() returned while the build was mid-flush"
+
+        gate.set()
+        closer.join(timeout=10)
+        assert not closer.is_alive(), "close() hung on the in-flight build"
+        # Everything closed: the database file is deletable (no handle left).
+        (tmp_path / "index.db").unlink()
+
+    def test_a_late_build_cannot_reopen_the_database(self, tmp_path, monkeypatch):
+        """A worker that starts late must not re-open the DB after close().
+
+        _get_conn() lazily re-creates self._conn, so a build still starting
+        when close() ran used to open a fresh handle nobody ever closed — the
+        file stayed locked and temp-dir cleanup died with WinError 32.
+        """
+        import threading
+
+        import actions.file_indexer as fi
+
+        gate = threading.Event()
+        started = threading.Event()
+        real_connect = fi.sqlite3.connect
+
+        def gated_connect(*a, **k):
+            conn = real_connect(*a, **k)
+            if threading.current_thread() is not threading.main_thread():
+                started.set()
+                gate.wait(timeout=10)
+            return conn
+
+        monkeypatch.setattr(fi.sqlite3, "connect", gated_connect)
+        (tmp_path / "a.txt").write_text("a")
+        idx = fi.FileIndex(db_path=tmp_path / "index.db")
+        idx.rebuild(roots=[tmp_path], wait=False)
+        assert started.wait(timeout=10), "build worker never reached connect"
+
+        closer = threading.Thread(target=idx.close)
+        closer.start()
+        gate.set()  # let the worker proceed — close() is already committed
+        closer.join(timeout=10)
+        assert not closer.is_alive()
+        idx._build_thread.join(timeout=10)
+
+        db = tmp_path / "index.db"
+        if db.exists():
+            db.unlink()  # PermissionError if a connection survived close()
+
 
 class TestParentHintFiltering:
     """Tests for parent_hint scoping in search results."""

@@ -56,6 +56,7 @@ class FileIndex:
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
         self._building = False
+        self._closed = False
         self._build_thread: threading.Thread | None = None
         self._observer = None  # watchdog.Observer, lazy init
         self._watcher_started = False
@@ -67,6 +68,12 @@ class FileIndex:
     # ── Connection management ────────────────────────────────────────────────
 
     def _get_conn(self) -> sqlite3.Connection:
+        if self._closed:
+            # Never re-open after close(): a build that starts late used to
+            # create a fresh connection here that nobody ever closed, leaving
+            # the database file locked (WinError 32 on the owner's cleanup).
+            # Raising instead lets the worker take its failure path.
+            raise RuntimeError("FileIndex is closed")
         if self._conn is None:
             self._conn = sqlite3.connect(
                 str(self._db_path),
@@ -135,6 +142,18 @@ class FileIndex:
                 self._observer.stop()
             except Exception:
                 pass
+        self._closed = True
+        # The build worker shares this connection (check_same_thread=False), so
+        # closing it mid-execute is a native access violation, not a Python
+        # exception — it once crashed the whole pytest process. Wait for any
+        # in-flight build first; only if it refuses to finish do we prefer a
+        # leaked handle (the OS reclaims it) over a guaranteed crash.
+        t = self._build_thread
+        if t is not None and t is not threading.current_thread() and t.is_alive():
+            t.join(timeout=30.0)
+            if t.is_alive():
+                log("FileIndex", "close(): build still running; leaving the connection open")
+                return
         if self._conn:
             try:
                 self._conn.close()
