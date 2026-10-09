@@ -50,10 +50,16 @@ def _local(tool: str, args: dict, rule: str) -> Decision:
 
 def _absolute_path(raw: str) -> bool:
     # No relative names, wildcard searches, URL paths, or command fragments.
+    # Accept Unix-style absolute paths (starting with /) cross-platform since
+    # users may use Linux-style paths in commands regardless of host OS.
     return (
         bool(raw)
         and not any(c in raw for c in "\n\r\x00*?<>|")
-        and (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute())
+        and (
+            Path(raw).is_absolute()
+            or PureWindowsPath(raw).is_absolute()
+            or raw.startswith("/")
+        )
     )
 
 
