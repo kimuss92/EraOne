@@ -43,6 +43,7 @@ Plan: `~/.claude/plans/what-you-suggest-to-hidden-kahn.md`. Backups: `.backups/2
 - **Groundwork:** `config/voice.json` may carry `"fish_voices": {"fr": "<id>", "ar": "<id>"}`. Each sentence's language is detected (`tts_fish.detect_lang`: Arabic script → ar), and Fish uses that language's voice, or the default voice when none is set. Both the Fish path and the local loop use it.
 - `VoiceModeConfig._write` now preserves extra keys, so a voice switch never erases the map.
 - The real "same voice in every language" path is a custom clone recorded with en+fr+ar speech. `create_voice_model()` in `core/tts_fish.py` already exists for that.
+- **Decision (Karim, 2026-10-10): Fish stays English-only, with one voice: the current JARVIS `reference_id`.** `fish_voices` stays empty. The map is kept as an inert floor for a future multilingual clone. For French or Arabic, Gemini's own voice is the one to use.
 
 **Tests:**
 - Step 1: 14 tts_text cases, 5 SpeechOut/speak tests. All 5 behaviour tests FAIL on the pre-fix code.
