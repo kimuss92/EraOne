@@ -128,6 +128,7 @@ class TestAnalyzeImageOnceGuards(unittest.TestCase):
             self.assertEqual(generate.call_count, 2)
 
     def test_gemini_request_disables_thinking_and_caps_output(self):
+        from actions import screen_processor
         from actions.screen_processor import _VISION_MAX_OUTPUT_TOKENS, analyze_image_once
 
         with (
@@ -140,7 +141,10 @@ class TestAnalyzeImageOnceGuards(unittest.TestCase):
             analyze_image_once(b"img", "image/jpeg", "Q?")
             config = generate.call_args.kwargs["config"]
             self.assertEqual(config.max_output_tokens, _VISION_MAX_OUTPUT_TOKENS)
-            self.assertEqual(config.thinking_config.thinking_budget, 0)
+            if screen_processor._VISION_TEXT_MODEL.startswith("gemini-3"):
+                self.assertEqual(config.thinking_config.thinking_level.value.lower(), "low")
+            else:
+                self.assertEqual(config.thinking_config.thinking_budget, 0)
             self.assertIsNotNone(config.http_options.timeout)
 
     def test_structured_callers_get_no_brief_prefix(self):
