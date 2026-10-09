@@ -20,6 +20,8 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
+from core.win_subprocess import NO_WINDOW
+
 ROOT = Path(__file__).resolve().parent.parent
 JOBS = ROOT / "runtime" / "development"
 _lock = threading.RLock()
@@ -553,7 +555,7 @@ def _run_verifier(command, stage, env, job):
     observer.start()
     try:
         return subprocess.run(
-            command, cwd=stage, env=env, capture_output=True, text=True, timeout=600
+            command, cwd=stage, env=env, capture_output=True, text=True, timeout=600, creationflags=NO_WINDOW
         )
     finally:
         stop.set()

@@ -10,6 +10,7 @@ Key capabilities:
   • Single registry singleton across the whole Era One process
 """
 
+
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +44,7 @@ from actions.browser_driver_health import (
 )
 from actions.page_refs import hold_if_sensitive
 from core.utils import get_os, log
+from core.win_subprocess import NO_WINDOW
 
 _OS = get_os()  # "windows" | "darwin" | "linux"
 
@@ -973,7 +975,7 @@ class _BrowserSession:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-            )
+            creationflags=NO_WINDOW)
             log(
                 "Browser",
                 f"Auto-started {self.browser_name} with remote debugging on 9222.",

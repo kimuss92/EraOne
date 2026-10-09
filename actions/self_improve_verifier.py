@@ -29,6 +29,7 @@ Invariants:
     another verification.
 """
 
+
 from __future__ import annotations
 
 import ast
@@ -44,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.utils import log
+from core.win_subprocess import NO_WINDOW
 
 _GUARD_ENV = "ERA_SELF_IMPROVE_VERIFYING"
 _IMPORT_TIMEOUT_S = 30
@@ -83,7 +85,7 @@ def _run(args: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProces
             env=env,
             encoding="utf-8",
             errors="replace",
-        )
+        creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args, 124, "", "timed out")
     except (OSError, subprocess.SubprocessError) as e:

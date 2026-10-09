@@ -1,3 +1,4 @@
+
 # computer_control.py
 import io
 import json
@@ -17,6 +18,7 @@ from core.utils import (
     get_os,
     log,
 )
+from core.win_subprocess import NO_WINDOW
 from core.window_awareness import format_context as window_context
 from core.window_awareness import get_active_window
 
@@ -287,7 +289,8 @@ def _focus_window(title: str) -> str:
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 timeout=5,
-            )
+            creationflags=NO_WINDOW,
+        )
             time.sleep(0.3)
             return f"Focused window: {title}"
         except Exception as e:

@@ -22,6 +22,7 @@ Caution model (every rule is load-bearing):
      handles that. We report "restart needed", we do not restart ourselves.
 """
 
+
 from __future__ import annotations
 
 import difflib
@@ -37,6 +38,7 @@ from actions.self_improve_targets import find_target_files
 from core import lint_feedback
 from core.lint_feedback import Finding
 from core.utils import log
+from core.win_subprocess import NO_WINDOW
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKUP_ROOT = REPO_ROOT / "runtime" / "self_improve" / "backups"
@@ -337,7 +339,8 @@ def _verify(target: Path) -> tuple[list[str], list[Finding]]:
                 cwd=str(REPO_ROOT),
                 encoding="utf-8",
                 errors="replace",
-            )
+            creationflags=NO_WINDOW,
+        )
             if proc.returncode != 0:
                 tail = (proc.stdout or "").strip().splitlines()[-15:]
                 failures.append(f"tests ({label}): " + " | ".join(tail)[:500])

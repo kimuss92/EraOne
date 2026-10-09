@@ -31,6 +31,7 @@ USAGE FROM ERA (main.py)
       speak(res["result"] if res["ok"] else "That failed: " + res.get("error",""))
 """
 
+
 import contextlib
 import json
 import os
@@ -45,6 +46,7 @@ import yaml  # pip install pyyaml
 
 from core import cm_learning, cm_vault
 from core.logger import log_event, setup_logger
+from core.win_subprocess import NO_WINDOW
 
 BRANDS_FILE = Path(__file__).with_name("brands.yaml")
 # Absolute: ads runs execute in the brand's project_dir, where a relative
@@ -1742,7 +1744,8 @@ def _run_on_routes(routes, run_cmd, run_input, project_dir, timeout, brand_key):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-        )
+        creationflags=NO_WINDOW,
+    )
         used_dir = config_dir
         if j + 1 < len(routes) and _is_route_failure(proc):
             log_event(

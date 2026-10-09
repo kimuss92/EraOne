@@ -56,6 +56,7 @@ Environment overrides (optional):
   ERA_RELAUNCH_GRACE  Seconds Era gets to exit after asking for a relaunch (25).
 """
 
+
 from __future__ import annotations
 
 import argparse
@@ -71,6 +72,8 @@ from collections import deque
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from core.win_subprocess import NO_WINDOW
 
 # --- Where things live -------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
@@ -179,7 +182,8 @@ def kill_tree(proc: subprocess.Popen) -> None:
             ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
             capture_output=True,
             check=False,
-        )
+        creationflags=NO_WINDOW,
+    )
     else:
         proc.kill()
     try:
@@ -485,7 +489,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         try:
             # stdio inherited: when run in a console you see Era's output live.
-            proc = subprocess.Popen([PYTHON, str(MAIN_PY)], cwd=str(BASE_DIR), env=env)
+            proc = subprocess.Popen([PYTHON, str(MAIN_PY)], cwd=str(BASE_DIR), env=env, creationflags=NO_WINDOW)
         except OSError as e:
             write_halt(f"Failed to launch Era: {e}")
             return 1

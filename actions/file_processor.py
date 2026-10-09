@@ -36,6 +36,7 @@ from google.genai import types as gtypes
 from actions.text_edit import edit_text_file
 from core.ai_provider import is_quota_error, quota_message
 from core.utils import get_api_key
+from core.win_subprocess import NO_WINDOW
 
 
 class _GeminiModel:
@@ -652,8 +653,8 @@ def _process_code(path: Path, action: str, params: dict, speak=None) -> str:
         if ext == "py":
             try:
                 result = subprocess.run(
-                    ["python", str(path)], capture_output=True, text=True, timeout=30
-                )
+                    ["python", str(path)], capture_output=True, text=True, timeout=30,
+                creationflags=NO_WINDOW)
                 out = result.stdout or result.stderr
                 return f"Output:\n{out[:2000]}" if out else "No output."
             except subprocess.TimeoutExpired:
@@ -794,7 +795,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
 
     def _ffmpeg_available() -> bool:
         try:
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3)
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=3, creationflags=NO_WINDOW)
             return True
         except Exception:
             return False
@@ -815,7 +816,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
                 capture_output=True,
                 text=True,
                 timeout=10,
-            )
+            creationflags=NO_WINDOW)
             data = json.loads(result.stdout)
             fmt = data.get("format", {})
             duration = float(fmt.get("duration", 0))
@@ -839,7 +840,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
                 ["ffmpeg", "-i", str(path), "-q:a", "0", "-map", "a", str(out), "-y"],
                 capture_output=True,
                 timeout=300,
-            )
+            creationflags=NO_WINDOW)
             return f"Audio extracted. Saved: {out.name}"
         except Exception as e:
             return f"Extract audio failed: {e}"
@@ -855,7 +856,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             if end:
                 cmd += ["-to", str(end)]
             cmd += ["-c", "copy", str(out), "-y"]
-            subprocess.run(cmd, capture_output=True, timeout=600)
+            subprocess.run(cmd, capture_output=True, timeout=600, creationflags=NO_WINDOW)
             return f"Trimmed video saved: {out.name}"
         except Exception as e:
             return f"Trim failed: {e}"
@@ -870,7 +871,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
                 ["ffmpeg", "-i", str(path), "-ss", timestamp, "-vframes", "1", str(out), "-y"],
                 capture_output=True,
                 timeout=30,
-            )
+            creationflags=NO_WINDOW)
             return f"Frame extracted at {timestamp}. Saved: {out.name}"
         except Exception as e:
             return f"Extract frame failed: {e}"
@@ -899,7 +900,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
                 ],
                 capture_output=True,
                 timeout=1800,
-            )
+            creationflags=NO_WINDOW)
             before = file_size_str(path)
             after = file_size_str(out)
             return f"Compressed: {before} → {after}. Saved: {out.name}"
@@ -917,7 +918,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
                 ["ffmpeg", "-i", str(path), "-q:a", "0", "-map", "a", str(tmp_audio), "-y"],
                 capture_output=True,
                 timeout=300,
-            )
+            creationflags=NO_WINDOW)
             result = _process_audio(tmp_audio, "transcribe", params, speak)
             return result
         except Exception as e:
@@ -933,8 +934,8 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
         out = _output_path(path, "converted", f".{fmt}")
         try:
             subprocess.run(
-                ["ffmpeg", "-i", str(path), str(out), "-y"], capture_output=True, timeout=1800
-            )
+                ["ffmpeg", "-i", str(path), str(out), "-y"], capture_output=True, timeout=1800,
+            creationflags=NO_WINDOW)
             return f"Converted to {fmt.upper()}. Saved: {out.name}"
         except Exception as e:
             return f"Convert failed: {e}"

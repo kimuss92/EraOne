@@ -1,9 +1,11 @@
+
 # actions/send_message.py
 import os
 import subprocess
 import time
 
 from core.utils import get_os
+from core.win_subprocess import NO_WINDOW
 
 try:
     import pyautogui
@@ -95,7 +97,8 @@ def _open_app(app_name: str) -> bool:
                         launcher,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                    )
+                    creationflags=NO_WINDOW,
+                )
                     launched = True
                     break
                 except FileNotFoundError:

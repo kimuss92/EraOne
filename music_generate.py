@@ -42,6 +42,7 @@ Exit code 0 on success (path on stdout, or JSON with --json);
 non-zero on failure (reason on stderr, or JSON {"ok": false, ...} with --json).
 """
 
+
 from __future__ import annotations
 
 import argparse
@@ -52,6 +53,8 @@ import subprocess
 import sys
 import wave
 from pathlib import Path
+
+from core.win_subprocess import NO_WINDOW
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -187,7 +190,7 @@ def _transcode_if_needed(wav_path: Path, final_path: Path) -> Path:
         capture_output=True,
         text=True,
         timeout=120,
-    )
+    creationflags=NO_WINDOW)
     if result.returncode != 0:
         raise MusicGenerationError(
             f"ffmpeg transcode to {final_path.suffix} failed: "

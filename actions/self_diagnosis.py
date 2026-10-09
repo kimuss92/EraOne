@@ -24,6 +24,7 @@ WHY THE ANALYSIS IS FENCED IN (2026-09-16)
       location we actually extracted, and flagged as corrected in the report.
 """
 
+
 from __future__ import annotations
 
 import json
@@ -36,6 +37,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from core.utils import log
+from core.win_subprocess import NO_WINDOW
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 REPORT_DIR = _REPO_ROOT / "runtime" / "diagnosis"
@@ -233,7 +235,7 @@ def phase_doctor() -> tuple[str, list[str]]:
             errors="replace",
             # Otherwise the child prints in cp1252 and every em-dash arrives as "�".
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        )
+        creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return f"TIMED OUT after {_DOCTOR_TIMEOUT_S}s", []
     except Exception as e:

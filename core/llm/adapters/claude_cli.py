@@ -55,6 +55,7 @@ from core.llm.types import (
     StreamEvent,
     Usage,
 )
+from core.win_subprocess import NO_WINDOW
 
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 
@@ -319,6 +320,7 @@ class ClaudeCliProvider:
                 # whole engine down.
                 encoding="utf-8",
                 errors="replace",
+                            creationflags=NO_WINDOW,
             )
         except FileNotFoundError as e:
             raise LlmError(

@@ -48,6 +48,7 @@ import subprocess
 import time
 
 from core.utils import is_windows, log
+from core.win_subprocess import NO_WINDOW
 
 try:  # Windows-only; the module still imports (and no-ops) elsewhere.
     import winreg
@@ -777,7 +778,7 @@ def msi_set_scenario(scenario) -> str:
     launched_here = False
     if not wins:
         try:
-            subprocess.Popen(["explorer.exe", _MSI_CENTER_AUMID])
+            subprocess.Popen(["explorer.exe", _MSI_CENTER_AUMID], creationflags=NO_WINDOW)
         except Exception as e:
             return f"Could not launch MSI Center: {e}"
         launched_here = True
@@ -994,7 +995,7 @@ def pc_boost() -> str:
     launched_here = False
     if not wins:
         try:
-            subprocess.Popen(["cmd", "/c", "start", "", _PC_MANAGER_URI])
+            subprocess.Popen(["cmd", "/c", "start", "", _PC_MANAGER_URI], creationflags=NO_WINDOW)
         except Exception as e:
             return f"Could not launch Microsoft PC Manager: {e}"
         launched_here = True

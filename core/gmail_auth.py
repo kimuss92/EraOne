@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from core.utils import get_config_dir, log
+from core.win_subprocess import NO_WINDOW
 
 # Read + send. Deliberately NOT gmail.modify: Era never needs to mutate the
 # mailbox, and a token that cannot delete mail is worth far less to an attacker.
@@ -115,6 +116,7 @@ def _harden_permissions(path: Path) -> None:
             capture_output=True,
             timeout=15,
             check=False,
+            creationflags=NO_WINDOW,
         )
     except Exception:
         pass

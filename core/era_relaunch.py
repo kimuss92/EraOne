@@ -172,7 +172,7 @@ def spawn_supervisor(wait_pid: int) -> bool:
         return False
     flags = 0
     if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     try:
         subprocess.Popen(
             [sys.executable, str(SUPERVISOR_PY), "--wait-pid", str(wait_pid)],
