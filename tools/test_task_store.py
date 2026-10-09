@@ -28,7 +28,9 @@ def test_recovery_requeues_never_started_tasks_but_never_replays_running_tasks(t
     store.create_task("running", "might have side effects", 2, 11.0)
     store.update_task("running", "running", updated_at=12.0)
     store.create_task("approval", "approval was pending", 2, 13.0)
-    store.update_task("approval", "awaiting_approval", updated_at=14.0, confirmation_id="old-confirmation")
+    store.update_task(
+        "approval", "awaiting_approval", updated_at=14.0, confirmation_id="old-confirmation"
+    )
 
     recovered = store.recover_after_restart()
 

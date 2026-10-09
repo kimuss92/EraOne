@@ -39,7 +39,9 @@ def _strip_fences(code: str) -> str:
     return code.strip() + "\n"
 
 
-def _generate_via_claude_cli(target: Path, original: str, instruction: str, *, allow_fallback: bool = True) -> str:
+def _generate_via_claude_cli(
+    target: Path, original: str, instruction: str, *, allow_fallback: bool = True
+) -> str:
     """Generate updated code using the tool-less Claude Code CLI.
 
     Mirrors _build_command in core/llm/adapters/claude_cli.py:

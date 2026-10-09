@@ -316,8 +316,12 @@ def route(text: str, *, model: str = DEFAULT_FAST_MODEL) -> RouteDecision:
             # pipeline. General questions ABOUT marketing remain conversation.
             import re
 
-            if re.match(r"^(?:prepare|create|produce|publish|schedule|build|plan|write)\b", text, re.I) and re.search(
-                r"\b(?:content plan|content week|campaigns?|captions?|carousels?|reels?|posts?|week)\b", text, re.I
+            if re.match(
+                r"^(?:prepare|create|produce|publish|schedule|build|plan|write)\b", text, re.I
+            ) and re.search(
+                r"\b(?:content plan|content week|campaigns?|captions?|carousels?|reels?|posts?|week)\b",
+                text,
+                re.I,
             ):
                 decision.category = "cm"
                 decision.reason = "rules: explicit CM production order"

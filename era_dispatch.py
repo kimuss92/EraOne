@@ -31,7 +31,6 @@ USAGE FROM ERA (main.py)
       speak(res["result"] if res["ok"] else "That failed: " + res.get("error",""))
 """
 
-
 import contextlib
 import json
 import os
@@ -1744,8 +1743,8 @@ def _run_on_routes(routes, run_cmd, run_input, project_dir, timeout, brand_key):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-        creationflags=NO_WINDOW,
-    )
+            creationflags=NO_WINDOW,
+        )
         used_dir = config_dir
         if j + 1 < len(routes) and _is_route_failure(proc):
             log_event(

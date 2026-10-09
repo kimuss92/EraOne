@@ -23,12 +23,27 @@ async def plan(text: str) -> claude_headless.Reply:
         return claude_headless.Reply(False, reason="the coding budget is exhausted")
     # --tools restricts availability; --allowedTools merely suppresses prompts.
     # Disable MCP discovery so a configured external tool cannot enter this lane.
-    cmd = ["claude", "-p", "--output-format", "json", "--model",
-           os.getenv("ERA_AUTOPILOT_CODING_MODEL", entry.model),
-           "--permission-mode", "plan", "--tools", "Read,Grep,Glob",
-           "--allowedTools", "Read,Grep,Glob", "--strict-mcp-config",
-           "--mcp-config", '{"mcpServers":{}}', "--max-turns", "8",
-           "--max-budget-usd", "1.0"]
+    cmd = [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--model",
+        os.getenv("ERA_AUTOPILOT_CODING_MODEL", entry.model),
+        "--permission-mode",
+        "plan",
+        "--tools",
+        "Read,Grep,Glob",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--max-turns",
+        "8",
+        "--max-budget-usd",
+        "1.0",
+    ]
     prompt = (
         "Investigate this Era One coding request in the current repository. "
         "Read source only. Do not edit files, execute code, invoke other agents, "
@@ -45,8 +60,11 @@ async def plan(text: str) -> claude_headless.Reply:
     communication = None
     try:
         process = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(claude_headless.REPO_ROOT), env=env,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            *cmd,
+            cwd=str(claude_headless.REPO_ROOT),
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         communication = asyncio.create_task(process.communicate(prompt.encode("utf-8")))
@@ -56,7 +74,9 @@ async def plan(text: str) -> claude_headless.Reply:
         )
         if process.returncode != 0:
             return claude_headless.Reply(False, reason="Claude Code exited unsuccessfully")
-        reply = claude_headless._parse(stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"))
+        reply = claude_headless._parse(
+            stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
+        )
         if reply.ok:
             ledger.record(reply.cost_usd, alias="era.deep")
         return reply

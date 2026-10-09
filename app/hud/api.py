@@ -207,7 +207,9 @@ class HudApi:
             elif body.get("action") == "retry":
                 result = await asyncio.to_thread(development.retry, body.get("id"))
             elif body.get("action") == "inspect":
-                result = await asyncio.to_thread(development.inspect_request, body.get("request", ""))
+                result = await asyncio.to_thread(
+                    development.inspect_request, body.get("request", "")
+                )
             elif body.get("action") == "reject":
                 result = await asyncio.to_thread(development.reject, body.get("id"))
             else:

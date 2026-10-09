@@ -55,11 +55,7 @@ def _absolute_path(raw: str) -> bool:
     return (
         bool(raw)
         and not any(c in raw for c in "\n\r\x00*?<>|")
-        and (
-            Path(raw).is_absolute()
-            or PureWindowsPath(raw).is_absolute()
-            or raw.startswith("/")
-        )
+        and (Path(raw).is_absolute() or PureWindowsPath(raw).is_absolute() or raw.startswith("/"))
     )
 
 

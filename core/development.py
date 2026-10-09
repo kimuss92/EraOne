@@ -282,7 +282,9 @@ def _generate(request: str, paths: list[str]) -> dict:
     ledger.record(response.usage.est_cost_usd, alias="era.reason")
     result = json.loads(response.text)
     if not isinstance(result, dict):
-        raise LlmError("invalid_response", "Claude did not return a plan object", provider="claude_cli")
+        raise LlmError(
+            "invalid_response", "Claude did not return a plan object", provider="claude_cli"
+        )
     return result
 
 
@@ -555,7 +557,13 @@ def _run_verifier(command, stage, env, job):
     observer.start()
     try:
         return subprocess.run(
-            command, cwd=stage, env=env, capture_output=True, text=True, timeout=600, creationflags=NO_WINDOW
+            command,
+            cwd=stage,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            creationflags=NO_WINDOW,
         )
     finally:
         stop.set()

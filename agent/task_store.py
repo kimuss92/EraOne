@@ -26,7 +26,9 @@ class TaskStore:
         self.path = Path(path) if path is not None else default_task_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.path, timeout=10, check_same_thread=False, isolation_level=None)
+        self._conn = sqlite3.connect(
+            self.path, timeout=10, check_same_thread=False, isolation_level=None
+        )
         if os.name != "nt":
             try:
                 self.path.chmod(0o600)
@@ -120,7 +122,9 @@ class TaskStore:
             self._ensure_open()
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                row = self._conn.execute("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                row = self._conn.execute(
+                    "SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()
                 if row is None:
                     raise KeyError(f"Unknown task id: {task_id}")
                 self._conn.execute(
@@ -143,7 +147,9 @@ class TaskStore:
                         task_id,
                     ),
                 )
-                event_seq = self._append_event(task_id, status, ts, message or result or error or status, error_type)
+                event_seq = self._append_event(
+                    task_id, status, ts, message or result or error or status, error_type
+                )
                 self._conn.execute("COMMIT")
                 return event_seq
             except Exception:

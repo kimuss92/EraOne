@@ -240,7 +240,12 @@ def _launch_spotify_desktop() -> bool:
     for exe_path in possible_paths:
         try:
             if exe_path and os.path.exists(exe_path):
-                subprocess.Popen([exe_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                subprocess.Popen(
+                    [exe_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=NO_WINDOW,
+                )
                 launch_attempted = True
                 break
         except Exception:
@@ -274,8 +279,11 @@ def _open_spotify_uri(uri: str) -> bool:
         pass
     try:
         subprocess.Popen(
-            ["cmd", "/c", "start", "", uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=NO_WINDOW)
+            ["cmd", "/c", "start", "", uri],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=NO_WINDOW,
+        )
         return True
     except Exception:
         pass

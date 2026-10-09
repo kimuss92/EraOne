@@ -1,4 +1,3 @@
-
 import json
 import shutil
 import subprocess
@@ -168,8 +167,8 @@ def _schedule_windows(target_dt: datetime, task_name: str, script_path: Path, me
         ["schtasks", "/Create", "/TN", task_name, "/XML", str(xml_path), "/F"],
         capture_output=True,
         text=True,
-    creationflags=NO_WINDOW,
-)
+        creationflags=NO_WINDOW,
+    )
 
     try:
         xml_path.unlink(missing_ok=True)

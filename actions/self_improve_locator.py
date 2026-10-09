@@ -130,7 +130,12 @@ def rank_in_area(description: str, modules: list[dict], area: dict | None) -> li
     # Known HUD concepts map to its concrete endpoints; broad button requests
     # still abstain because they do not name one of these responsibilities.
     if "hud" in tokens:
-        for term, symbol in {"interface": "api", "preferences": "settings", "health": "status", "stream": "events"}.items():
+        for term, symbol in {
+            "interface": "api",
+            "preferences": "settings",
+            "health": "status",
+            "stream": "events",
+        }.items():
             if term in tokens:
                 tokens.add(symbol)
     ranked = []

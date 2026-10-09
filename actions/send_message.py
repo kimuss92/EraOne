@@ -1,4 +1,3 @@
-
 # actions/send_message.py
 import os
 import subprocess
@@ -97,8 +96,8 @@ def _open_app(app_name: str) -> bool:
                         launcher,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                    creationflags=NO_WINDOW,
-                )
+                        creationflags=NO_WINDOW,
+                    )
                     launched = True
                     break
                 except FileNotFoundError:

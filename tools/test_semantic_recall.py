@@ -365,9 +365,7 @@ def test_measured_recall_beats_the_lexical_baseline(enabled):
         f"{LEXICAL_TOP1} — semantic recall has stopped contributing. Misses: {misses}"
     )
     assert top1 >= MEASURED_TOP1, f"top-1 recall fell to {top1}/12 from {MEASURED_TOP1}: {misses}"
-    assert top3 >= MEASURED_TOP3, (
-        f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}: {misses}"
-    )
+    assert top3 >= MEASURED_TOP3, f"top-3 recall fell to {top3}/12 from {MEASURED_TOP3}: {misses}"
 
 
 @requires_model

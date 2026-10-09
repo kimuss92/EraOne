@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 # Force Qt to use standard scaling pass-throughs before the window hooks launch
 os.environ["QT_SCALE_FACTOR"] = "1"

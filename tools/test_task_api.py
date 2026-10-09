@@ -18,9 +18,7 @@ def test_hud_task_endpoints_serve_persisted_status_and_ordered_events(tmp_path, 
 
     tasks_response = asyncio.run(api.tasks(SimpleNamespace(query={"limit": "10"})))
     events_response = asyncio.run(api.task_events(SimpleNamespace(query={"limit": "10"})))
-    task_response = asyncio.run(
-        api.task(SimpleNamespace(match_info={"task_id": "persisted"}))
-    )
+    task_response = asyncio.run(api.task(SimpleNamespace(match_info={"task_id": "persisted"})))
 
     assert json.loads(tasks_response.text)["tasks"][0]["status"] == "completed"
     assert [event["status"] for event in json.loads(events_response.text)["events"]] == [

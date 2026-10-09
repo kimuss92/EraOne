@@ -1,4 +1,3 @@
-
 # actions/computer_settings.py
 import json
 import os
@@ -364,7 +363,8 @@ var a=(IAudioEndpointVolume2)o;float v;a.GetMasterVolumeLevelScalar(out v);retur
             capture_output=True,
             text=True,
             timeout=10,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
         if res.returncode == 0:
             out = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else ""
             if out.isdigit():
@@ -495,7 +495,8 @@ Write-Output "OK"
             capture_output=True,
             text=True,
             timeout=15,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
         out = (res.stdout or "").strip()
         if res.returncode == 0 and out.splitlines() and out.splitlines()[-1] == "OK":
             return True
@@ -816,7 +817,8 @@ def brightness_up():
                 "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, [math]::Min(100, (Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness + 10))",
             ],
             capture_output=True,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
 
 
 def brightness_down():
@@ -835,7 +837,8 @@ def brightness_down():
                 "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, [math]::Max(0, (Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightness).CurrentBrightness - 10))",
             ],
             capture_output=True,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
 
 
 def close_app():
@@ -1489,7 +1492,8 @@ def _run_power_command(flag: str) -> subprocess.CompletedProcess | None:
         capture_output=True,
         text=True,
         timeout=10,
-    creationflags=NO_WINDOW)
+        creationflags=NO_WINDOW,
+    )
 
 
 def restart_computer() -> str:
@@ -1528,11 +1532,8 @@ def abort_shutdown() -> str:
         return "Nothing to cancel."
     try:
         res = subprocess.run(
-            ["shutdown", "/a"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        creationflags=NO_WINDOW)
+            ["shutdown", "/a"], capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW
+        )
     except Exception as e:
         return f"Could not cancel: {e}"
     if res.returncode == 0:

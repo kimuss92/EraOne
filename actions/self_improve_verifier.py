@@ -29,7 +29,6 @@ Invariants:
     another verification.
 """
 
-
 from __future__ import annotations
 
 import ast
@@ -85,7 +84,8 @@ def _run(args: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProces
             env=env,
             encoding="utf-8",
             errors="replace",
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args, 124, "", "timed out")
     except (OSError, subprocess.SubprocessError) as e:

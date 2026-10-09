@@ -24,7 +24,6 @@ vision-based risk escalation; duplicating it on this path would have made the
 dispatch table cosmetic.
 """
 
-
 from __future__ import annotations
 
 import errno
@@ -429,8 +428,8 @@ def _op_open_path(path: object) -> str:
             shell=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-        creationflags=NO_WINDOW,
-    )
+            creationflags=NO_WINDOW,
+        )
     return f"Opened {target.name}."
 
 

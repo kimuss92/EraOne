@@ -7,7 +7,6 @@ No subprocess.Popen / OS URL opens — videos always play in the same tab
 Era One already has open, just like a real user would navigate it.
 """
 
-
 from __future__ import annotations
 
 import json

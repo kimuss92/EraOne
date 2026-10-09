@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -307,8 +306,8 @@ def _run_file(path: Path, args: list, timeout: int) -> str:
             timeout=timeout,
             cwd=str(path.parent),
             env=env,
-        creationflags=NO_WINDOW,
-    )
+            creationflags=NO_WINDOW,
+        )
         output = result.stdout.strip()
         error = result.stderr.strip()
         parts = []

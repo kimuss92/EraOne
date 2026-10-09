@@ -37,7 +37,7 @@ def test_agent_task_planning_timeout_is_reported_without_hanging(monkeypatch):
     import time
 
     monkeypatch.setattr(ex, "PLAN_TIMEOUT_SECONDS", 0.01, raising=False)
-    monkeypatch.setattr(ex, "create_plan", lambda goal: (time.sleep(0.2) or {"steps": []}))
+    monkeypatch.setattr(ex, "create_plan", lambda goal: time.sleep(0.2) or {"steps": []})
 
     started = time.monotonic()
     result = asyncio.run(ex.AgentExecutor().execute("brief"))
@@ -320,7 +320,7 @@ def test_agent_task_replanning_timeout_is_reported_without_hanging(monkeypatch, 
     monkeypatch.setattr(ex, "PLAN_TIMEOUT_SECONDS", 0.01, raising=False)
     monkeypatch.setattr(ex, "_call_tool_result", lambda *a: ToolResult.fail("Search unavailable."))
     monkeypatch.setattr(ex, "analyze_error", lambda *a, **k: {"decision": "replan"})
-    monkeypatch.setattr(ex, "replan", lambda *args: (time.sleep(0.2) or plan))
+    monkeypatch.setattr(ex, "replan", lambda *args: time.sleep(0.2) or plan)
 
     started = time.monotonic()
     result = asyncio.run(ex.AgentExecutor().execute("brief"))

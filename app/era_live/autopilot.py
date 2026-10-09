@@ -41,8 +41,13 @@ class AutopilotMixin:
             self._autopilot_pending = None
             return Decision(LOCAL, "User cancelled pending plan", rule="cancel")
         if low in {"yes", "confirm", "oui", "confirme"}:
-            return Decision(LOCAL, "User approved the stored plan", tool=tool,
-                            args={**args, "confirmed": True, "confirmation_id": cid}, rule="confirm")
+            return Decision(
+                LOCAL,
+                "User approved the stored plan",
+                tool=tool,
+                args={**args, "confirmed": True, "confirmation_id": cid},
+                rule="confirm",
+            )
         return None
 
     def _try_autopilot_text(self, text: str) -> bool:
@@ -58,7 +63,10 @@ class AutopilotMixin:
         if decision.lane == MAIN:
             return False
         gate = self.safety_gate.validate_input(
-            transcript=text, confidence=None, state_snapshot=self._text_state_snapshot(), typed=True,
+            transcript=text,
+            confidence=None,
+            state_snapshot=self._text_state_snapshot(),
+            typed=True,
         )
         if gate.action == "BLOCK_SILENTLY":
             self.safety_gate.record_blocked(text)
@@ -110,14 +118,20 @@ class AutopilotMixin:
                 day, count = getattr(self, "_autopilot_coding_count", (today, 0))
                 count = count if day == today else 0
                 cap = int(env_float("ERA_AUTOPILOT_CODING_MAX_PER_DAY", 10, minimum=1, maximum=100))
-                if count >= cap or time.monotonic() < getattr(self, "_autopilot_coding_retry_at", 0):
-                    await self._autopilot_fallback(text, "The coding lane is cooling down or capped.")
+                if count >= cap or time.monotonic() < getattr(
+                    self, "_autopilot_coding_retry_at", 0
+                ):
+                    await self._autopilot_fallback(
+                        text, "The coding lane is cooling down or capped."
+                    )
                     return
                 self._autopilot_coding_count = (today, count + 1)
                 if not decision.tool:
                     from core.autopilot_coding import plan
 
-                    self._autopilot_reply("Claude Code is investigating. Repository files will not be changed by this investigation.")
+                    self._autopilot_reply(
+                        "Claude Code is investigating. Repository files will not be changed by this investigation."
+                    )
                     reply = await plan(text)
                     if not reply.ok:
                         self._autopilot_coding_retry_at = time.monotonic() + 60
@@ -125,14 +139,23 @@ class AutopilotMixin:
                     else:
                         self._autopilot_reply(reply.text)
                     return
-            fc = types.FunctionCall(name=decision.tool, args=dict(decision.args), id=f"autopilot-{uuid.uuid4().hex}")
+            fc = types.FunctionCall(
+                name=decision.tool, args=dict(decision.args), id=f"autopilot-{uuid.uuid4().hex}"
+            )
             result = await asyncio.wait_for(self._execute_tool_result(fc), timeout=30)
             if result.error_type == "ConfirmationRequired" and result.confirmation_id:
-                self._autopilot_pending = (result.confirmation_id, decision.tool, dict(decision.args))
+                self._autopilot_pending = (
+                    result.confirmation_id,
+                    decision.tool,
+                    dict(decision.args),
+                )
                 preview = result.data.get("confirmation_preview") or (
                     f"Action: {decision.tool}; parameters: {decision.args}"
                 )
-                self._autopilot_reply((preview + "\n" if preview else "") + "Reply yes to approve this stored action, or no to cancel.")
+                self._autopilot_reply(
+                    (preview + "\n" if preview else "")
+                    + "Reply yes to approve this stored action, or no to cancel."
+                )
             else:
                 if decision.rule == "confirm":
                     self._autopilot_pending = None
@@ -142,36 +165,64 @@ class AutopilotMixin:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log_event(main_logger, "autopilot.failed", "ERROR", lane=decision.lane, error_type=type(exc).__name__)
+            log_event(
+                main_logger,
+                "autopilot.failed",
+                "ERROR",
+                lane=decision.lane,
+                error_type=type(exc).__name__,
+            )
             if decision.lane == SPECIALIST and not decision.tool:
                 self._autopilot_coding_retry_at = time.monotonic() + 60
                 await self._autopilot_fallback(text, "The coding specialist failed.")
             else:
-                self._autopilot_reply("The local action failed. Check era.log before retrying; it was not replayed through a model.")
+                self._autopilot_reply(
+                    "The local action failed. Check era.log before retrying; it was not replayed through a model."
+                )
         finally:
             LOCAL_EXECUTION.reset(token)
             tasks.pop(lane_key, None)
-            log_event(main_logger, "autopilot.completed", "INFO", lane=decision.lane, rule=decision.rule,
-                      duration_ms=int((time.monotonic() - started) * 1000))
+            log_event(
+                main_logger,
+                "autopilot.completed",
+                "INFO",
+                lane=decision.lane,
+                rule=decision.rule,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
 
     async def _autopilot_fallback(self, text: str, reason: str) -> None:
-        self._autopilot_reply(f"{reason} No coding change was applied. Trying Gemini for analysis only.")
+        self._autopilot_reply(
+            f"{reason} No coding change was applied. Trying Gemini for analysis only."
+        )
         session = getattr(self, "session", None)
         if session is None:
-            self._autopilot_reply("Gemini is also unavailable. Retry later or configure Claude Code.")
+            self._autopilot_reply(
+                "Gemini is also unavailable. Retry later or configure Claude Code."
+            )
             return
         if getattr(self, "_last_user_text", text) != text:
-            self._autopilot_reply("The conversation has moved on. Request the coding analysis again when ready.")
+            self._autopilot_reply(
+                "The conversation has moved on. Request the coding analysis again when ready."
+            )
             return
         try:
             self._autopilot_analysis_only = True
-            await asyncio.wait_for(session.send_realtime_input(text=(
-                "The coding specialist is unavailable. Give analysis and a proposed plan only. "
-                "Do not call tools, modify files, or claim execution. User request:\n" + text
-            )), timeout=10)
+            await asyncio.wait_for(
+                session.send_realtime_input(
+                    text=(
+                        "The coding specialist is unavailable. Give analysis and a proposed plan only. "
+                        "Do not call tools, modify files, or claim execution. User request:\n"
+                        + text
+                    )
+                ),
+                timeout=10,
+            )
             hud.request_sent("autopilot_fallback")
         except Exception:
-            self._autopilot_reply("Gemini could not accept the request. No coding change was applied.")
+            self._autopilot_reply(
+                "Gemini could not accept the request. No coding change was applied."
+            )
 
     def cancel_autopilot(self) -> None:
         # Called on the engine loop by panic/shutdown; subprocess cancellation
@@ -179,7 +230,9 @@ class AutopilotMixin:
         loop = getattr(self, "_loop", None)
         if loop is None or loop.is_closed():
             return
+
         def cancel():
             for task in tuple(getattr(self, "_autopilot_tasks", {}).values()):
                 task.cancel()
+
         loop.call_soon_threadsafe(cancel)

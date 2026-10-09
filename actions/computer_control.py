@@ -1,4 +1,3 @@
-
 # computer_control.py
 import io
 import json
@@ -289,8 +288,8 @@ def _focus_window(title: str) -> str:
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 timeout=5,
-            creationflags=NO_WINDOW,
-        )
+                creationflags=NO_WINDOW,
+            )
             time.sleep(0.3)
             return f"Focused window: {title}"
         except Exception as e:

@@ -231,7 +231,9 @@ def save_memory(memory: dict) -> None:
         if MEMORY_PATH.exists():
             status = validate_json_file(MEMORY_PATH)
             if status["status"] == "CORRUPTED_NO_BACKUP":
-                raise OSError("Memory is corrupted and no valid backup exists; preserved the original file instead of replacing it with empty facts")
+                raise OSError(
+                    "Memory is corrupted and no valid backup exists; preserved the original file instead of replacing it with empty facts"
+                )
         safe_write_json(MEMORY_PATH, memory)
     # Audit the overall save (per-category summary)
     for cat, items in memory.items():

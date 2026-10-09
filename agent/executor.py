@@ -73,6 +73,7 @@ async def _run_in_daemon_thread(fn: Callable, *args):
     threading.Thread(target=run, daemon=True, name="AgentPlanner").start()
     return await future
 
+
 # Shared with EraLive so confirmations created on either path are mutually
 # resolvable (previously two independent stores caused confirm RuntimeErrors).
 _pending_store = get_shared_store()
@@ -1031,9 +1032,7 @@ class AgentExecutor:
             replan_attempts += 1
             try:
                 plan = await asyncio.wait_for(
-                    _run_in_daemon_thread(
-                        replan, goal, completed_steps, failed_step, failed_error
-                    ),
+                    _run_in_daemon_thread(replan, goal, completed_steps, failed_step, failed_error),
                     timeout=PLAN_TIMEOUT_SECONDS,
                 )
             except TimeoutError:

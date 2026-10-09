@@ -56,7 +56,6 @@ Environment overrides (optional):
   ERA_RELAUNCH_GRACE  Seconds Era gets to exit after asking for a relaunch (25).
 """
 
-
 from __future__ import annotations
 
 import argparse
@@ -182,8 +181,8 @@ def kill_tree(proc: subprocess.Popen) -> None:
             ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
             capture_output=True,
             check=False,
-        creationflags=NO_WINDOW,
-    )
+            creationflags=NO_WINDOW,
+        )
     else:
         proc.kill()
     try:
@@ -489,7 +488,9 @@ def main(argv: list[str] | None = None) -> int:
         }
         try:
             # stdio inherited: when run in a console you see Era's output live.
-            proc = subprocess.Popen([PYTHON, str(MAIN_PY)], cwd=str(BASE_DIR), env=env, creationflags=NO_WINDOW)
+            proc = subprocess.Popen(
+                [PYTHON, str(MAIN_PY)], cwd=str(BASE_DIR), env=env, creationflags=NO_WINDOW
+            )
         except OSError as e:
             write_halt(f"Failed to launch Era: {e}")
             return 1

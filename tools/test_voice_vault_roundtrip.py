@@ -425,7 +425,9 @@ class TestCrewByVoice:
             delay=0.06,
         )
         res = era.call("crew", action="ask", task="a slow multi-bot job")
-        assert res.success and era.spoken == [td._say_exactly("Working on it, sir.")]  # 5 turns, ONE ack
+        assert res.success and era.spoken == [
+            td._say_exactly("Working on it, sir.")
+        ]  # 5 turns, ONE ack
 
     def test_a_fast_crew_call_is_silent(self, era, monkeypatch):
         monkeypatch.setattr(crew_runtime, "ACK_AFTER_S", 0.5)

@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -285,7 +284,8 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
             capture_output=True,
             text=True,
             shell=False,  # Explicitly set shell=False for clarity and security,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
         if result.returncode != 0:
             to_install.append(dep)
         else:
@@ -305,7 +305,8 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
             timeout=120,
             cwd=str(project_dir),
             shell=False,  # Explicitly set shell=False for clarity and security,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
         if result.returncode == 0:
             return f"Installed: {', '.join(to_install)}"
         return f"Install warning (non-fatal): {result.stderr[:200]}"
@@ -341,7 +342,8 @@ def _open_vscode(project_dir: Path) -> bool:
                 shell=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-            creationflags=NO_WINDOW)
+                creationflags=NO_WINDOW,
+            )
             time.sleep(1.5)
             print(f"[DevAgent] 💻 VSCode opened: {project_dir}")
             return True
@@ -366,7 +368,8 @@ def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
             timeout=timeout,
             cwd=str(project_dir),
             shell=False,  # Explicitly set shell=False for clarity and security,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
 
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
@@ -406,7 +409,8 @@ def _try_auto_install(error_output: str, project_dir: Path) -> bool:
             timeout=60,
             cwd=str(project_dir),
             shell=False,  # Explicitly set shell=False for clarity and security,
-        creationflags=NO_WINDOW)
+            creationflags=NO_WINDOW,
+        )
         return result.returncode == 0
     except Exception:
         return False

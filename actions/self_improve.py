@@ -22,7 +22,6 @@ Caution model (every rule is load-bearing):
      handles that. We report "restart needed", we do not restart ourselves.
 """
 
-
 from __future__ import annotations
 
 import difflib
@@ -339,8 +338,8 @@ def _verify(target: Path) -> tuple[list[str], list[Finding]]:
                 cwd=str(REPO_ROOT),
                 encoding="utf-8",
                 errors="replace",
-            creationflags=NO_WINDOW,
-        )
+                creationflags=NO_WINDOW,
+            )
             if proc.returncode != 0:
                 tail = (proc.stdout or "").strip().splitlines()[-15:]
                 failures.append(f"tests ({label}): " + " | ".join(tail)[:500])
@@ -672,6 +671,7 @@ def self_improve(
 
     if action == "locate":
         from actions.self_improve_locator import locate
+
         return locate(description or file_path)
 
     if action == "find":
