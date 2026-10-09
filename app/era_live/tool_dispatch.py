@@ -107,6 +107,7 @@ from core.pending_confirmation import (
 from core.process_awareness import format_running_apps
 from core.safety_guard import classify_action
 from core.self_healing_router import divert_era_reboot, record_tool_result, route_tool_call
+from core.tool_recovery import TurnRecovery
 from core.tool_result import ToolResult
 from core.tts_fish import is_configured as is_fish_configured
 from core.verification import verify_tool_result
@@ -499,6 +500,69 @@ class ToolDispatchMixin:
 
         task.add_done_callback(_done)
         return task
+
+    # ── Tool recovery: arm on failure, flush at turn boundary (board item 19) ──
+    @property
+    def _recovery(self) -> TurnRecovery:
+        """Lazily create the turn's failure store.
+
+        The store is safe to call at any time, in any order, any number of times.
+        Nothing here may raise — it sits in the tool funnel and in the audio
+        receive loop; instrumentation that can throw takes the voice with it.
+        """
+        # Tests pass the store as `self.tool_recovery`; production uses `_tool_recovery`.
+        # An explicitly set None (e.g., `h.tool_recovery = None`) means "no store:
+        # announce immediately" — the property returns None in that case.
+        if hasattr(self, "tool_recovery"):
+            return self.tool_recovery  # may be None explicitly
+        store = getattr(self, "_tool_recovery", None)
+        if store is None:
+            store = self._tool_recovery = TurnRecovery()
+        return store
+
+    def _note_tool_failure(
+        self, tool: str, args: dict | None, error_type: str, message: str
+    ) -> None:
+        """Arm a notice instead of speaking one.
+
+        Deferring the announcement gives a workaround (retry, re-route, model
+        trying another tool) room to cancel it before the user hears anything.
+        """
+        action = str((args or {}).get("action") or "")
+        store = self._recovery
+        if store is None:
+            self.speak_error(tool, message)
+        else:
+            store.note_failure(tool, action, error_type, message)
+
+    def _note_tool_success(self, tool: str, args: dict | None) -> None:
+        """The workaround worked: drop every armed notice for this tool+action.
+
+        Every one, not the last: a tool retried twice before succeeding armed
+        two notices, and announcing either would report a failure the user has
+        no reason to hear about.
+        """
+        action = str((args or {}).get("action") or "")
+        store = self._recovery
+        if store is not None:
+            store.note_success(tool, action)
+
+    def _flush_failure_notices(self) -> None:
+        """Drain the turn. Speaks any unrecovered failures; stale ones are dropped.
+
+        Called at BOTH turn boundaries — the cloud turn in AudioIOMixin._receive_audio
+        and the local-brain turn in LocalFallbackMixin._local_turn. A missed flush
+        must never surface a failure in a later, unrelated conversation.
+        """
+        store = self._recovery
+        if store is None:
+            return
+        notices = store.take()
+        for n in notices:
+            try:
+                self.speak_error(n.tool, n.message)
+            except Exception:
+                pass  # spoken or not, the store is drained
 
     def _realtime_input_config(self) -> types.RealtimeInputConfig | None:
         """Turn-endpointing config for the Live session (Phase 3 turn-taking).
@@ -935,7 +999,9 @@ class ToolDispatchMixin:
                 "ActionError",
                 "ConfirmationFailed",
             ):
-                self.speak_error(name, result.error)
+                self._note_tool_failure(name, fc_args_to_dict(fc), error_type, result.error)
+        elif result.success:
+            self._note_tool_success(name, fc_args_to_dict(fc))
 
         print(f"[era] [OUT] {name} -> {result.short_message(80)}")
         # Task trace (core/task_trace.py, 25/09/2026): the whole procedure of
@@ -1065,12 +1131,16 @@ class ToolDispatchMixin:
                 result.data.get(PREVIEW_KEY), str
             )
             if confirmation:
+                announced = False
                 try:
-                    result.data[ANNOUNCED_KEY] = bool(
-                        self._announce_pending_plan(result.data[PREVIEW_KEY])
-                    )
+                    announced = bool(self._announce_pending_plan(result.data[PREVIEW_KEY]))
                 except Exception as e:  # noqa: BLE001
                     print(f"[era] [CREW] could not announce the crew plan: {e}")
+                result.data[ANNOUNCED_KEY] = announced
+                # If we couldn't announce (no session, standby, or announcement failed),
+                # queue the preview for delivery on reconnect/resume.
+                if not announced:
+                    self._deliver_or_queue_cm_report(result.data[PREVIEW_KEY], verbatim=True)
 
             try:
                 hud.tool_finished(hud_call, "crew", hud_args, result, routed_to="crew")

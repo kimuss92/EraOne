@@ -19,6 +19,9 @@ confirmation-required crew result is announced rather than read as an outcome.
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -192,6 +195,58 @@ def test_a_crashing_crew_still_reports_a_failure(monkeypatch):
     _run_worker(era)
 
     assert era.delivered and "couldn't finish" in era.delivered[0]
+
+
+@pytest.mark.parametrize("raises", [False, True])
+@pytest.mark.parametrize("delivery", ["connected", "disconnected", "standby"])
+def test_undelivered_crew_approval_uses_reconnect_safe_report(monkeypatch, raises, delivery):
+    from app.era_live.cm_flow import CMFlowMixin
+    from app.hud.events import HudBus
+    from app.text_intents import _say_exactly
+    from core.confirmation_preview import ANNOUNCED_KEY
+
+    bus = HudBus()
+    monkeypatch.setattr(td, "hud", bus)
+    monkeypatch.setattr("core.task_trace.trace", lambda *a, **k: None)
+    preview = "Replace the intro paragraph of the brief. Should I proceed?"
+    result = ToolResult.fail(
+        message=preview,
+        error_type="ConfirmationRequired",
+        data={PREVIEW_KEY: preview},
+    )
+    monkeypatch.setattr("crew.runtime.run_tool", lambda params: result)
+    era = _Era()
+    spoken = []
+    era._loop = object()
+    era.session = None if delivery == "disconnected" else object()
+    era._standby_active = delivery == "standby"
+    era._pending_cm_announcement = None
+    era.ui = SimpleNamespace(write_log=lambda text: None)
+    era.speak = spoken.append
+    era._deliver_or_queue_cm_report = CMFlowMixin._deliver_or_queue_cm_report.__get__(era)
+
+    def unavailable(text):
+        if raises:
+            raise RuntimeError("announcement unavailable")
+        return False
+
+    era._announce_pending_plan = unavailable
+    args = {"action": "ask", "task": "revise the brief"}
+    call_id = bus.tool_started("approval-fallback", "crew", args)
+    era._start_background_crew_ask(_FC(), call_id, args)
+    _run_worker(era)
+
+    if delivery == "connected":
+        assert spoken == [_say_exactly(preview)]
+        assert era._pending_cm_announcement is None
+    else:
+        assert spoken == []
+        assert era._pending_cm_announcement == preview
+    assert result.data[ANNOUNCED_KEY] is False
+    assert bus.activity()["tools"][-1]["status"] == "awaiting"
+    events = bus.recent_events(20)
+    assert any(e["type"] == "tool.progress" for e in events)
+    assert not any(e["type"] in ("tool.completed", "tool.failed") for e in events)
 
 
 # ── _deliver_crew_outcome phrasing ───────────────────────────────────────────

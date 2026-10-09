@@ -47,7 +47,63 @@ VOICE_REENUM_MIN_INTERVAL_S = 60.0
 VOICE_REENUM_IDLE_GRACE_S = 3600.0
 
 
+# Latency marks: safe from bare test hosts, lazily creating the tracker.
+def _latency_mark(host, name: str, *args) -> None:
+    """Safe one-shot mark on the host's turn-latency tracker.
+
+    Module-level on purpose: tests borrow methods like `_play_audio` onto
+    bare objects that have no `AudioIOMixin` base, so an `_latency_mark(self, ...)`
+    attribute call would AttributeError inside those borrowed bodies. The
+    tracker sits in the audio receive loop: instrumentation that can throw
+    is instrumentation that takes the voice down with it. Created lazily so
+    hosts that never set `turn_latency` are unaffected rather than broken.
+    """
+    tl = getattr(host, "turn_latency", None)
+    if tl is None:
+        from core.turn_latency import TurnLatency
+
+        tl = host.turn_latency = TurnLatency()
+    try:
+        getattr(tl, name)(*args)
+    except Exception:
+        pass
+
+
 class AudioIOMixin:
+    def _log_turn_latency(self) -> None:
+        """Emit this turn's latency breakdown as one log line, then always reset.
+
+        Board item 22 ("measure first"): a "she responds too late" complaint is
+        only actionable once it is split into endpointing wait, model think
+        time and playback. The RESET is the load-bearing half — a turn that
+        logs nothing (typed input, session wake, the off switch) must still
+        clear its marks, or the next turn reports a latency spanning both.
+        """
+        from core.turn_latency import enabled
+        from core.vad import get_endpointing_config
+
+        try:
+            tl = getattr(self, "turn_latency", None)
+            if tl is None:
+                return  # no marks were ever taken: there is no turn to report
+            silence_ms = None
+            try:
+                cfg = get_endpointing_config()
+                if cfg.get("enabled"):
+                    silence_ms = int(cfg.get("silence_ms") or 0) or None
+            except Exception:
+                silence_ms = None  # no config is not a guess: report none
+            summary = tl.summary(silence_ms=silence_ms)
+            if enabled() and summary is not None:
+                log_event(main_logger, "turn.latency", "INFO", **summary)
+        except Exception as e:  # noqa: BLE001 — diagnostics are never load-bearing
+            print(f"[era] [WARN] turn latency log skipped: {e}")
+        finally:
+            try:
+                self.turn_latency.reset()
+            except Exception:
+                pass
+
     def _log_audio_drop(self, reason: str) -> None:
         """Print an audio-drop notice at most once every 5s per reason. Without
         this, a muted or mic-off state floods the console with one line per audio
@@ -178,6 +234,7 @@ class AudioIOMixin:
                 return
         self._barge_in_requested = True
         hud.barge_in(source)
+        _latency_mark(self, "note_interrupted")  # this turn's numbers describe the cut
         dropped = self._flush_audio_in_queue()
         if self._turn_done_event is not None:
             # Let _play_audio settle cleanly out of the (now empty) turn.
@@ -520,6 +577,7 @@ class AudioIOMixin:
                         # heard anything — core/live_turn_state.py explains why
                         # that distinction is the whole recovery decision.
                         self.live_turn.note_audio_received(len(response.data))
+                        _latency_mark(self, "note_model_output")  # first answer byte
                         if hasattr(self, "live_health"):
                             self.live_health.note_reply()  # it answered: not "mute"
                         if self._turn_done_event and self._turn_done_event.is_set():
@@ -562,6 +620,7 @@ class AudioIOMixin:
                             # Recorded so the reconnect never "finishes" a turn
                             # they chose to stop.
                             self.live_turn.note_interrupted()
+                            _latency_mark(self, "note_interrupted")  # excluded from averages
                             self._barge_in_requested = True
                             hud.barge_in("model")
                             self._flush_audio_in_queue()
@@ -572,6 +631,7 @@ class AudioIOMixin:
                                 out_buf.append(txt)
                                 self._live_turn_text = " ".join(out_buf)  # for barge-in resume
                                 self.live_turn.note_text(txt)
+                                _latency_mark(self, "note_model_output")  # first answer token
                                 if hasattr(self, "live_health"):
                                     self.live_health.note_reply()  # a spoken transcript is an answer
                                 hud.response_delta(txt)
@@ -604,6 +664,7 @@ class AudioIOMixin:
                                 if hasattr(self, "live_health"):
                                     self.live_health.note_heard()  # Gemini can hear: not "deaf"
                                 self._user_spoke_since_drop = True
+                                _latency_mark(self, "note_user_delta")
                                 if not in_buf:
                                     # When the user STARTED saying it: a gate asking
                                     # "said after the task parked?" must not see a
@@ -635,6 +696,7 @@ class AudioIOMixin:
                             and in_buf
                         ):
                             hud.user_speech_finished(" ".join(in_buf))
+                            _latency_mark(self, "note_user_finished")
 
                         # ── The model finished the ANSWER ──
                         # Distinct from turn_complete, which also fires when the
@@ -845,6 +907,15 @@ class AudioIOMixin:
                             # so a later drop cannot inherit this turn's verdict.
                             self.live_turn.note_turn_complete()
                             self.live_turn.reset()
+                            # One latency line per turn — and the reset inside
+                            # keeps the NEXT turn's numbers honest.
+                            _latency_mark(self, "note_turn_complete")
+                            self._log_turn_latency()
+                            # Flush any deferred tool failure notices (board item 19)
+                            try:
+                                self._flush_failure_notices()
+                            except Exception:
+                                pass
                             # The fallback window for this turn is over; release the
                             # held Gemini audio so it can never play late.
                             self._clear_cloud_audio_buffer()
@@ -1249,6 +1320,9 @@ class AudioIOMixin:
                     self.live_turn.note_audio_played(len(chunk))
                 except Exception:
                     pass
+                # First byte the user actually HEARD — the latency headline is
+                # measured to this point, not to the bytes Gemini sent.
+                _latency_mark(self, "note_audio_played")
         except Exception as e:
             print(f"[era] [ERROR] Play: {e}")
             raise

@@ -429,6 +429,11 @@ class LocalFallbackMixin:
                     )
             except Exception as e:  # never let bookkeeping break a spoken turn
                 print(f"[LOCAL] claude_turn_result failed: {type(e).__name__}: {e}")
+        # Flush any deferred tool failure notices (board item 19)
+        try:
+            self._flush_failure_notices()
+        except Exception:
+            pass
         return spoken
 
     def _local_cancel_turn(self) -> None:

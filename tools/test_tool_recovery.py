@@ -285,6 +285,7 @@ class _Funnel:
             "_note_tool_failure",
             "_note_tool_success",
             "_flush_failure_notices",
+            "_crew_ask_should_background",
         ):
             setattr(self, name, getattr(M, name).__get__(self))
 
