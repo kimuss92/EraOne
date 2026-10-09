@@ -191,12 +191,15 @@ def target_refusal(rel: str) -> str:
     if p is None:
         return err
     rel = _rel(p)
+    # Apply the top-level directory allowlist before per-file safety labels:
+    # app/ and root dispatchers are never self-healable, regardless of whether
+    # they also participate in a safety gate.
+    if not rel.startswith(HEALABLE_DIRS):
+        return f"{rel} is outside the modules I may heal on my own ({', '.join(HEALABLE_DIRS)})"
     if rel in SAFETY_CRITICAL or rel in REFUSED:
         return f"{rel} is safety-critical — only the user or Claude Code may change it"
     if Path(rel).name.startswith(("test_", "conftest")) or rel.startswith(("tools/", "tests/")):
         return f"{rel} is a test — tests are the judge, never the patient"
-    if not rel.startswith(HEALABLE_DIRS):
-        return f"{rel} is outside the modules I may heal on my own ({', '.join(HEALABLE_DIRS)})"
     try:
         if _GATE_IMPORT.search(p.read_text(encoding="utf-8-sig", errors="replace")):
             return f"{rel} takes part in a safety gate — escalated, not patched"
