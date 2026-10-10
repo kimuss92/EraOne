@@ -290,7 +290,7 @@ def test_language_guess():
     assert local_tts.guess_lang("Done, sir.") == "en"
 
 
-def test_piper_output_is_resampled_to_the_player_rate():
+def test_local_voice_output_is_resampled_to_the_player_rate():
     one_second = np.zeros(22050, dtype=np.float32)
     pcm = local_tts.to_pcm16(one_second, 22050)
     assert len(pcm) == local_tts.RECEIVE_SAMPLE_RATE * 2  # int16 mono, 1 s
@@ -299,8 +299,16 @@ def test_piper_output_is_resampled_to_the_player_rate():
 def test_missing_models_are_reported_not_raised(tmp_path):
     ok, why = local_stt.available(tmp_path)
     assert ok is False and "missing" in why
-    ok, why = local_tts.available(tmp_path)
-    assert ok is False and "missing" in why
+
+
+def test_no_local_voice_is_reported_not_raised(monkeypatch):
+    # Piper was removed 2026-10-10: the local loop can speak only via Kokoro or Fish.
+    monkeypatch.setattr("core.tts_kokoro.available", lambda: (False, "Kokoro files missing"))
+    monkeypatch.setattr("core.tts_fish.is_configured", lambda: False)
+    ok, why = local_tts.available()
+    assert ok is False and "Kokoro files missing" in why and "Fish" in why
+    monkeypatch.setattr("core.tts_fish.is_configured", lambda: True)
+    assert local_tts.available() == (True, "")
 
 
 # ── security review fixes (2026-09-23) ──────────────────────────────────────

@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS
   The cascade voice mode (app/era_live/cascade.py) replaces the Gemini Live
-  session with  mic -> local STT -> THIS -> Fish/Piper -> speaker. There is no
+  session with  mic -> local STT -> THIS -> Fish/Kokoro -> speaker. There is no
   long-lived session to drop: every turn is one short streamed HTTP request, so
   a failure costs that turn, never the conversation.
 

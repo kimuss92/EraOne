@@ -1,8 +1,9 @@
-"""Speech-synthesis router — Fish Audio primary, Gemini fallback.
+"""Speech-synthesis router — Fish or Kokoro, with Gemini as the fallback.
 
-Era has exactly two ways to produce speech:
+Era has three ways to produce speech:
 
-    fish_audio     Fish Audio cloud TTS (PRIMARY).  -> core/tts_fish.py
+    fish_audio     Fish Audio cloud TTS.                 -> core/tts_fish.py
+    kokoro_audio   Kokoro George on the local GPU.       -> core/tts_kokoro.py
     gemini_audio   Gemini's own Live audio (FALLBACK). Not synthesized here at
                    all — Gemini already produced it inside the Live session, so
                    "falling back to Gemini" means letting that held audio
@@ -44,6 +45,23 @@ async def stream(text: str, lang: str = ""):
     """
     text = (text or "").strip()
     if not text:
+        return
+    from core.voice_mode import VOICE_CFG
+
+    if VOICE_CFG.is_gemini():
+        # Fallen back mid-turn (or switched): Gemini's own audio is speaking now.
+        # The sentences still queued must stay silent, or a Kokoro fallback
+        # would hand them to Fish and two voices would talk at once.
+        return
+    if VOICE_CFG.is_kokoro():
+        from core.tts_kokoro import KOKORO
+
+        if not KOKORO.ready:  # never make a sentence wait ~10 s for the load
+            KOKORO.warm_in_background()
+            KOKORO.last_error = "Kokoro is still loading"
+            return
+        async for chunk in KOKORO.stream(text, lang):
+            yield chunk
         return
     async for chunk in FISH.stream(text, lang):
         yield chunk

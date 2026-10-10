@@ -85,7 +85,10 @@ aliases:
   # ── Voice / realtime ──────────────────────────────────────────────────────
   era.voice:
     provider: gemini
-    model: models/gemini-3.1-flash-live-preview
+    # 2026-10-10 (Karim): gemini-3.8-live, Google's current Live model; same price
+    # row as 3.1, and it knows AI Studio's voice library (e.g. "Arlo", which 3.1
+    # refused). Roll back: models/gemini-3.1-flash-live-preview (legacy preview).
+    model: models/gemini-3.8-live
     role: The brain. Hearing, speaking, intent, and tool selection in one
       bidirectional session. The ONLY alias that can serve the voice loop.
     capabilities:
@@ -485,9 +488,11 @@ routing:
     # stay — probe Gemini every minute. Was 300.
     probe_gemini_every_s: 60
     # Gemini failing while the internet works (1011 / 503): hand over to the
-    # backup brain after this many consecutive failed reconnects (~10 s) instead
-    # of all 6 (~150 s deaf). 0 = only after all retries. Reason "upstream".
-    upstream_after_failures: 2
+    # backup brain after this many consecutive failed reconnects. 0 = only after
+    # ALL retries. Reason "upstream".
+    # 2026-10-10 (Karim): Gemini is the better voice, so the backup takes over
+    # only when Gemini has failed totally: 0 (was 2, ~10 s).
+    upstream_after_failures: 0
     # What Whisper may hear. Auto-detect misheard French/English as Turkish,
     # Russian, Portuguese...; anything else is re-decoded in one of these.
     languages: [en, fr]
@@ -546,6 +551,11 @@ routing:
     manual_stay_s: 3600
     healthy_after_s: 600
     max_stay_s: 1800
+    # When a CONNECTED Gemini counts as failed (core/live_health.py). 2026-10-10
+    # (Karim): give Gemini time, rescue only on a real failure. Were 12 / 25 / 3.
+    deaf_after_s: 30.0 # the user spoke, Gemini transcribed nothing
+    mute_after_s: 60.0 # Gemini heard the user, never answered
+    flaky_errors: 6 # upstream errors within 10 minutes
 
   # ── Crew (crew/router.py, crew/hermes_transport.py) ───────────────────────
   # Era does NOT choose a provider for a crew turn. It classifies the TASK on five axes

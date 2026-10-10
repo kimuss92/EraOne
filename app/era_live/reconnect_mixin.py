@@ -8,7 +8,6 @@ import socket
 import sys
 import time
 
-from app.era_constants import _RESUME_ACK
 from app.reconnect import reconnect_acknowledgment_text
 from app.text_intents import build_disconnect_resume_note
 from core.era_state import EraState
@@ -83,6 +82,11 @@ class ReconnectMixin:
         self._standby_active = False
         self._reconnect_attempts = 0
         self._last_interaction_timestamp = time.time()
+        # A wake opens the conversation window (core/attention.py): the user's
+        # next words need no name.
+        listening = getattr(self, "_listening_state", None)
+        if listening is not None:
+            listening().note_activity()
         self._stop_wake_word_listener()
         # Discard any stale audio (e.g. a delayed pre-standby turn) so the
         # first thing the user hears on wake is the resume ack, not an echo.
@@ -127,18 +131,12 @@ class ReconnectMixin:
         )
         if should_speak:
             try:
-                # Matches the user's recorded standby_resume_style preference
-                # (memory/long_term.json) — deliberately distinct from the
-                # silent-reconnect-on-network-blip path (see
-                # docs/superpowers/specs/2026-06-28-reconnect-backoff-design.md
-                # point 4), which stays silent on purpose.
-                # Pinned like the standby notice: speak() feeds the live session as if
-                # the user had said this, so an unwrapped ack gets paraphrased and no
-                # longer matches what Telegram reported.
-                self.speak(
-                    "[System note: Say aloud exactly this and nothing more, then stop: "
-                    f'"{_RESUME_ACK}" '
-                    "Do not add any other words, do not ask a question, do not use any tool.]"
+                # Her own brief words (Karim, 2026-10-10), not the pinned
+                # "Era One online." line: one short sentence, never the wake word.
+                # The silent-reconnect-on-network-blip path stays silent on purpose.
+                self.speak_brief(
+                    "You have just woken up from standby and are listening again.",
+                    fallback="I'm here, sir.",
                 )
                 for _ in range(30):
                     if self._is_speaking:

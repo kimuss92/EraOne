@@ -294,3 +294,59 @@ def test_fade_ms_config_default_and_env(monkeypatch):
     assert get_barge_in_fade_ms() == 20  # bad value → safe default
     monkeypatch.setenv("ERA_BARGE_IN_FADE_MS", "-5")
     assert get_barge_in_fade_ms() == 0  # clamped to a hard stop, never negative
+
+
+# ── 2026-10-10: on open PC speakers Era interrupted HERSELF six times in 2 min ──
+def _buf(level: float) -> bytes:
+    """One 64 ms mic buffer (1024 samples) at RMS `level` (square wave = exact RMS)."""
+    a = int(level * 32768)
+    return np.tile(np.array([a, -a], dtype="<i2"), 512).tobytes()
+
+
+def _armed_with_echo(echo_levels, **kw):
+    """A detector whose onset grace has just measured Era's echo on the mic."""
+    import time
+
+    det = _detector(onset_grace_ms=300, min_speech_ms=150, **kw)
+    det.note_speaking(True)
+    for lv in echo_levels:  # inside the grace window: the echo seed
+        det.feed(_buf(lv))
+    det._onset_ts = time.time() - 1.0  # grace over
+    return det
+
+
+def _speaker_echo(n):
+    """Era's voice through laptop speakers: syllables 0.06-0.16, with pauses."""
+    rng = np.random.default_rng(7)
+    pattern = [0.08, 0.12, 0.16, 0.10, 0.06, 0.02, 0.09, 0.14, 0.11, 0.03]
+    return [max(0.0, pattern[i % 10] * rng.uniform(0.85, 1.15)) for i in range(n)]
+
+
+def test_her_own_echo_on_pc_speakers_never_interrupts_her():
+    det = _armed_with_echo(_speaker_echo(5))
+    fired = [det.feed(_buf(lv)) for lv in _speaker_echo(64)]  # ~4 s of her talking
+    assert not any(fired), "Era must not cut herself off on her own echo"
+
+
+def test_the_user_speaking_over_her_echo_still_interrupts_fast():
+    det = _armed_with_echo(_speaker_echo(5))
+    for lv in _speaker_echo(20):
+        assert det.feed(_buf(lv)) is False
+    fired_at = next(i for i in range(10) if det.feed(_buf(0.45)))  # clearly louder
+    assert fired_at <= 3, "about 0.2 s of real speech is enough"
+
+
+def test_on_a_headset_normal_speech_interrupts_as_before():
+    det = _armed_with_echo([0.005] * 5)  # glasses/headset: almost no echo
+    fired_at = next(i for i in range(10) if det.feed(_buf(0.08)))
+    assert fired_at <= 3
+
+
+def test_echo_factor_zero_restores_the_fixed_floor():
+    det = _armed_with_echo(_speaker_echo(5), echo_factor=0)
+    assert any(det.feed(_buf(lv)) for lv in _speaker_echo(64)), "old behaviour: fires on echo"
+
+
+def test_echo_factor_is_configurable(monkeypatch):
+    monkeypatch.setattr("core.utils.load_config", lambda: {"barge_in": {"echo_factor": 3}})
+    assert get_barge_in_config()["echo_factor"] == 3.0

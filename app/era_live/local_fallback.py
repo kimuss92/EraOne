@@ -9,7 +9,7 @@ NOW: those same waits are spent here, serving locally:
     mic (16 kHz) -> Silero VAD -> Whisper-small (FR/EN)       core/local_stt.py
                  -> input safety gate -> LocalBrain (Ollama)  core/local_brain.py
                     (CodeCraft in cascade mode — app/era_live/cascade.py)
-                 -> Fish, or Piper when offline                core/local_tts.py
+                 -> Fish, or Kokoro George (local GPU)        core/local_tts.py
                  -> speaker (Era's voice device)
 
 Tool calls go through self._execute_tool — the exact gate Gemini's use — so
@@ -172,7 +172,6 @@ class LocalFallbackMixin:
     async def _local_prepare(self, reason: str = "") -> None:
         from core.local_brain import LocalBrain
         from core.local_stt import LocalListener
-        from core.local_tts import PIPER
 
         if getattr(self, "_local_listener", None) is None:
             langs = self._local_policy().get("languages") or ()
@@ -194,7 +193,9 @@ class LocalFallbackMixin:
                 max_tool_rounds=int(pol.get("max_tool_rounds") or 4),
             )
         await asyncio.to_thread(self._local_listener.load)
-        await asyncio.to_thread(PIPER.warm)
+        from core.tts_kokoro import KOKORO
+
+        KOKORO.warm_in_background()  # normally already warm since startup (core/voice_mode)
 
     async def _claude_brain_wanted(self, reason: str) -> bool:
         """Claude (subscription CLI) is the brain for every reason it can help with,
@@ -361,6 +362,12 @@ class LocalFallbackMixin:
         if self._local_turn_task is not None and not self._local_turn_task.done():
             print(f"[LOCAL] Busy — ignored while thinking: {text}")
             return
+        # Attention window (core/attention.py), on the transcript here since the
+        # local ear already decoded it. Safety orders above always pass.
+        if not self._local_addressed(text):
+            print(f"[LOCAL] Not addressed to Era — ignored: {text!r}")
+            self._attention_event("ignored", text)
+            return
 
         decision = self.safety_gate.validate_input(
             transcript=text,
@@ -390,6 +397,20 @@ class LocalFallbackMixin:
         self._note_user_utterance(text, said_at)
         self._last_interaction_timestamp = time.time()
         self._local_turn_task = asyncio.create_task(self._local_turn(text, lang))
+
+    def _local_addressed(self, text: str) -> bool:
+        """Inside the conversation window, or a confirmation waiting, or the
+        utterance starts with Era's name: it is for Era. Fail-open."""
+        try:
+            from core.attention import addressed_to_era
+
+            state = self._listening_state()
+            if state.window_open() or self._attention_keep_open() or addressed_to_era(text):
+                state.note_activity()
+                return True
+            return False
+        except Exception:
+            return True
 
     # ── a turn: brain -> voice, pipelined ───────────────────────────────────
     async def _local_turn(self, text: str, lang: str = "") -> str:
@@ -501,7 +522,11 @@ class LocalFallbackMixin:
     async def _local_play(self, pcm: bytes) -> None:
         """Play 24 kHz int16 PCM on Era's voice device, 100 ms at a time so a
         barge-in or stop takes effect within a slice."""
-        if not pcm:
+        if not pcm:  # Fish AND Kokoro failed: the reply is text only - say so once
+            from core.local_tts import voice_unavailable_notice
+
+            if notice := voice_unavailable_notice():
+                self.ui.write_log(notice)
             return
         device = None
         try:
@@ -560,6 +585,14 @@ class LocalFallbackMixin:
             self._local_speaking = False
             if det is not None:
                 det.note_speaking(False)
+            # She just answered: the conversation window restarts now
+            # (core/attention.py). Missing here, it expired mid-conversation.
+            listening = getattr(self, "_listening_state", None)
+            if listening is not None:
+                try:
+                    listening().note_activity()
+                except Exception:
+                    pass
             # Drop her own voice: frames captured while she spoke (an awaited
             # "Yes, sir." holds up the frame loop) would otherwise be
             # transcribed afterwards as if the user had said them.
@@ -644,7 +677,7 @@ class LocalFallbackMixin:
         return True
 
     def local_speak(self, text: str) -> bool:
-        """speak() while local: literal speech through Fish/Piper. True if taken."""
+        """speak() while local: literal speech through Fish/Kokoro. True if taken."""
         if not self.local_mode_active() or not self._loop:
             return False
         asyncio.run_coroutine_threadsafe(self._local_say(text), self._loop)

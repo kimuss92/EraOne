@@ -18,6 +18,7 @@ from app.era_live.claude_voice import claude_voice_order
 from app.hud.events import hud
 from app.notify import _tg_notify
 from app.text_intents import (
+    _clean_stream_chunk,
     _clean_transcript,
     _model_intent,
     _theme_intent_mode,
@@ -30,13 +31,27 @@ from app.text_intents import (
 from core.logger import log_crash, log_event, main_logger
 from core.mic_mute import is_mic_off_order
 from core.vad import fade_out_pcm
-from core.voice_mode import MODE_GEMINI_AUDIO, VOICE_CFG
+from core.voice_mode import MODE_GEMINI_AUDIO, MODE_KOKORO_AUDIO, VOICE_CFG
 
 # Cap on held Gemini audio per turn (~43ms per chunk at 24kHz => ~40s of speech).
 CLOUD_AUDIO_BUFFER_MAX_CHUNKS = 900
 
 # How long to stay on the Gemini fallback before retrying the primary backend.
 TTS_PRIMARY_RETRY_S = 300.0
+
+
+def _backend_ready(mode: str) -> bool:
+    """Can the voice we would restore TO speak right now?"""
+    if mode == MODE_KOKORO_AUDIO:
+        from core.tts_kokoro import KOKORO
+
+        if not KOKORO.ready:
+            KOKORO.warm_in_background()
+        return KOKORO.ready
+    from core.tts_fish import FISH, is_configured
+
+    return is_configured() and not FISH.in_cooldown()
+
 
 # Re-enumeration reconnect for a pinned voice device that connected AFTER Era
 # started (invisible to PortAudio's frozen device list). How often to check while
@@ -193,6 +208,15 @@ class AudioIOMixin:
                 f"and replayed {len(buffered)} buffered chunk(s). "
                 f"Retrying {previous} in {int(TTS_PRIMARY_RETRY_S)}s."
             )
+            log_event(
+                main_logger,
+                "voice.fallback",
+                "WARNING",
+                from_backend=previous,
+                to_backend=MODE_GEMINI_AUDIO,
+                reason=reason or "unknown",
+                replayed_chunks=len(buffered),
+            )
             try:
                 self.ui.write_log("SYS: Primary voice unavailable - using my Gemini voice.")
             except Exception:
@@ -224,9 +248,7 @@ class AudioIOMixin:
                 self._tts_primary_retry_at = 0.0
                 self._tts_primary_mode = ""
                 return
-            from core.tts_fish import FISH, is_configured
-
-            if not is_configured() or FISH.in_cooldown():
+            if not _backend_ready(target):  # check the voice we return TO, not Fish
                 self._tts_primary_retry_at = time.time() + TTS_PRIMARY_RETRY_S
                 return
             VOICE_CFG.set_mode(target, persist=False)
@@ -329,9 +351,108 @@ class AudioIOMixin:
             except Exception as gate_err:  # fail closed, never kill the session
                 self._log_audio_drop(f"speaker gate unavailable: {gate_err}")
                 continue
+            # ── Attention gate: only speech meant for Era (core/attention.py) ──
+            # After the voiceprint check: past the conversation window, an
+            # utterance must start with her name; a phone call or room chat is
+            # replaced by silence. Fail-open by design.
+            gate = self._attention_gate()
+            keep_open = self._attention_keep_open()
             for frame in frames:
-                blob = types.Blob(data=frame, mime_type=msg["mime_type"])
-                await self.session.send_realtime_input(audio=blob)
+                for out in gate.feed(frame, keep_open=keep_open):
+                    self._note_sent_voice(out)
+                    blob = types.Blob(data=out, mime_type=msg["mime_type"])
+                    await self.session.send_realtime_input(audio=blob)
+
+    def _note_sent_voice(self, frame: bytes) -> None:
+        """Evidence for core/live_health.py that the user spoke into a listening
+        session: ONLY audio actually sent counts, so it is measured after the voice
+        and attention gates. Measured on the raw mic (before 2026-10-10), speech the
+        gates silenced made a healthy Gemini look mute and triggered the Claude
+        rescue ("heard the user, no answer for 25s")."""
+        if not hasattr(self, "live_health") or len(frame) < 2:
+            return
+        try:
+            pcm = np.frombuffer(frame[: len(frame) // 2 * 2], dtype="<i2").astype(np.float32)
+            self.live_health.note_voice(
+                float(np.sqrt(np.mean(np.square(pcm)))) / 32768.0,
+                (len(pcm)) / SEND_SAMPLE_RATE,
+            )
+        except Exception:
+            pass
+
+    # ── Listening rules (core/attention.py): echo hold + attention window ──
+    def _listening_state(self):
+        state = getattr(self, "_listening", None)
+        if state is None:
+            from core.attention import ListeningState
+
+            state = self._listening = ListeningState()
+        return state
+
+    def _attention_gate(self):
+        gate = getattr(self, "_attention", None)
+        if gate is None:
+            from core.attention import AttentionGate, _names
+
+            factory = None
+            model = getattr(self, "_vosk_model", None)
+            if model is not None:
+                try:
+                    import json as _json
+
+                    import vosk
+
+                    from app.wake import WAKE_CFG
+
+                    vocab = list(_json.loads(WAKE_CFG.grammar))
+                    vocab += [n for n in sorted(_names()) if n not in vocab]
+                    grammar = _json.dumps(vocab)
+
+                    def factory():
+                        rec = vosk.KaldiRecognizer(model, 16000, grammar)
+                        rec.SetWords(True)  # per-word confidence for the name
+                        return rec
+
+                except Exception as e:  # no Vosk: the gate passes everything
+                    print(f"[ATTENTION] name check unavailable ({type(e).__name__}); fail-open")
+            gate = self._attention = AttentionGate(
+                self._listening_state(), factory, on_event=self._attention_event
+            )
+        return gate
+
+    def _attention_keep_open(self) -> bool:
+        """Era stays listening while a confirmation waits for the user's answer,
+        and while she is busy with his request: thinking, running a tool or
+        replying locally. The window counts from when she is DONE (live
+        2026-10-10: a slow reply let it expire before she even answered)."""
+        try:
+            store = getattr(self, "_pending_store", None)
+            if store is not None and store.peek() is not None:
+                return True
+            snap = self.session_manager.get_state_snapshot()
+            if str(snap.get("current_state", "")).upper().endswith("PROCESSING"):
+                return True
+            task = getattr(self, "_local_turn_task", None)
+            if task is not None and not task.done():
+                return True
+            return bool(getattr(self, "_local_speaking", False))
+        except Exception:
+            return True  # unsure: listen (fail-open, like the gate)
+
+    def _attention_event(self, kind: str, heard: str) -> None:
+        print(f"[ATTENTION] {kind}: {heard!r}")
+        try:
+            log_event(main_logger, f"attention.{kind}", "INFO", heard=heard[:80])
+        except Exception:
+            pass
+        if kind == "ignored" and not getattr(self, "_attention_hint_shown", False):
+            self._attention_hint_shown = True  # once per quiet spell, not per phrase
+            try:
+                self.ui.write_log("SYS: Not addressed to me - start with my name to talk to me.")
+            except Exception:
+                pass
+        elif kind == "accepted":
+            self._attention_hint_shown = False
 
     def _speaker_gate(self):
         """Lazily built so EraLive.__init__ stays untouched (same as tool_batch)."""
@@ -462,19 +583,15 @@ class AudioIOMixin:
                 return
             # -----------------------------------------------------
 
+            # Echo hold: Era's last words are still leaving the speakers (device
+            # buffer, Bluetooth, room reverb) right after she stops; Gemini used to
+            # hear them and answer herself. See core/attention.py.
+            if self._listening_state().echo_hold_active():
+                return
+
             # Normal operation: send audio to Gemini only if not muted
             if not self.ui.muted and self._browser_mic_active:
                 data = indata.tobytes()
-                # Evidence for core/live_health.py that the user spoke into a session
-                # that is supposed to be listening (only audio actually sent counts).
-                if hasattr(self, "live_health"):
-                    try:
-                        self.live_health.note_voice(
-                            float(np.sqrt(np.mean(np.square(indata, dtype=np.float32)))) / 32768.0,
-                            frames / SEND_SAMPLE_RATE,
-                        )
-                    except Exception:
-                        pass
                 try:
                     # Thread-safe try-push without exploding if the loop lags
                     loop.call_soon_threadsafe(
@@ -676,7 +793,18 @@ class AudioIOMixin:
                                     and not self._cm_handoff_active()
                                     and not self._barge_in_requested
                                 ):
-                                    self.speech_out.feed(txt)
+                                    # The UN-stripped chunk: its edge spaces are
+                                    # the word breaks (see _clean_stream_chunk).
+                                    self.speech_out.feed(
+                                        _clean_stream_chunk(sc.output_transcription.text)
+                                    )
+                            elif (
+                                VOICE_CFG.synthesizes_from_transcript()
+                                and not self._cm_handoff_active()
+                                and not self._barge_in_requested
+                            ):
+                                # A whitespace-only chunk is still a word break.
+                                self.speech_out.feed(" ")
 
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)

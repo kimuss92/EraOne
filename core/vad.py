@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import collections
 import threading
 import time
 
@@ -223,8 +224,12 @@ class BargeInDetector:
       plus an `onset_grace_ms` settle window after Era starts, because the first
       moments of playback are the most echo-prone and the AGC is still adapting.
 
-    On open laptop speakers, raise `amplitude_threshold` (or disable) if Era cuts
-    herself off; a headset or OS echo cancellation removes the problem outright.
+    4. adaptive echo floor (2026-10-10) — on open PC speakers her echo passes the
+       fixed floor and webrtcvad (it IS speech), and she interrupted herself six
+       times in two minutes. So the detector measures her own echo on the mic (the
+       loud end of the last ~2 s, seeded during the onset grace) and a frame must
+       be `echo_factor` x louder than that to count. On a headset or glasses the
+       echo is tiny and the fixed floor still rules, so cut-in feels the same.
 
     Thread-safety: `feed()` runs on the sounddevice callback thread while
     `note_speaking()` / `reset()` run on the event-loop thread. All shared state
@@ -241,6 +246,7 @@ class BargeInDetector:
         amplitude_threshold: float = 0.05,
         min_speech_ms: int = 150,
         onset_grace_ms: int = 300,
+        echo_factor: float = 2.0,
         sample_rate: int = 16000,
     ) -> None:
         # Validate at the boundary: clamp to ranges the rest of the class assumes,
@@ -250,6 +256,9 @@ class BargeInDetector:
         self.amplitude_threshold = max(0.0, min(1.0, float(amplitude_threshold)))
         self.min_speech_ms = max(self._VAD_FRAME_MS, int(min_speech_ms))
         self.onset_grace_ms = max(0, int(onset_grace_ms))
+        self.echo_factor = max(0.0, min(10.0, float(echo_factor)))  # 0 = off
+        self._echo: collections.deque[float] = collections.deque(maxlen=32)  # ~2 s
+        self._burst: list[float] = []  # loud frames awaiting a verdict: user or echo?
         self._sample_rate = (
             int(sample_rate) if sample_rate in (8000, 16000, 32000, 48000) else 16000
         )
@@ -277,6 +286,8 @@ class BargeInDetector:
             self._active = bool(speaking)
             self._onset_ts = time.time() if speaking else 0.0
             self._voiced_ms = 0.0
+            self._echo.clear()  # each turn measures its own echo (device may change)
+            self._burst = []
 
     def reset(self) -> None:
         """Disarm and clear accumulated credit (turn ended, or fired)."""
@@ -308,6 +319,19 @@ class BargeInDetector:
                 return 0  # invalid frame → treat as silence, never raise
         return n
 
+    def _decay(self) -> None:
+        self._voiced_ms = max(0.0, self._voiced_ms - self._VAD_FRAME_MS)
+        if self._voiced_ms <= 0.0 and self._burst:
+            self._echo.extend(self._burst)  # never became an interruption: her echo
+            self._burst.clear()
+
+    def _echo_floor(self) -> float:
+        """echo_factor x the loud end (90th percentile) of her recent echo."""
+        if self.echo_factor <= 0 or not self._echo:
+            return 0.0
+        ordered = sorted(self._echo)
+        return self.echo_factor * ordered[int(0.9 * (len(ordered) - 1))]
+
     def feed(self, buffer_bytes: bytes) -> bool:
         """Feed one mic buffer captured while Era speaks. True == interrupt now.
 
@@ -319,19 +343,30 @@ class BargeInDetector:
         with self._lock:
             if not self._active:
                 return False
+            level = _frame_rms(buffer_bytes)
             if (time.time() - self._onset_ts) * 1000.0 < self.onset_grace_ms:
+                self._echo.append(level)  # her own voice, settling: the echo seed
                 return False
-            if _frame_rms(buffer_bytes) < self.amplitude_threshold:
-                # Quiet frame — decay so only *continuous* speech accumulates.
-                self._voiced_ms = max(0.0, self._voiced_ms - self._VAD_FRAME_MS)
+            floor = max(self.amplitude_threshold, self._echo_floor())
+            if level < floor:
+                # Quiet frame: her echo. Decay credit so only *continuous* speech
+                # accumulates; a burst that died out was her loud syllable, so its
+                # frames now join the echo history (a delayed verdict: counted
+                # straight away, the user's own first frames would lift the floor
+                # against him before he had spoken 150 ms).
+                self._echo.append(level)
+                self._decay()
                 return False
             voiced = self._count_voiced(buffer_bytes)
             if voiced <= 0:
-                self._voiced_ms = max(0.0, self._voiced_ms - self._VAD_FRAME_MS)
+                self._echo.append(level)
+                self._decay()
                 return False
+            self._burst.append(level)
             self._voiced_ms += voiced * self._VAD_FRAME_MS
             if self._voiced_ms >= self.min_speech_ms:
                 self._active = False  # one-shot; re-arms on the next note_speaking(True)
+                self._burst.clear()
                 return True
             return False
 
@@ -390,6 +425,7 @@ def get_barge_in_config() -> dict:
         ),
         "min_speech_ms": _as_num(_get("min_speech_ms", "ERA_BARGE_IN_MIN_MS", 150), 150, int),
         "onset_grace_ms": _as_num(_get("onset_grace_ms", "ERA_BARGE_IN_GRACE_MS", 300), 300, int),
+        "echo_factor": _as_num(_get("echo_factor", "ERA_BARGE_IN_ECHO", 2.0), 2.0, float),
     }
 
 

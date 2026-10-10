@@ -6,7 +6,7 @@ WHY
 
       mic -> Silero VAD -> Whisper-small int8 (CPU)       core/local_stt.py
           -> CodeCraft, streamed, with Era's gated tools   core/llm/adapters/openai_compat.py
-          -> Fish (cloned voice), or Piper (local, CPU)     core/local_tts.py
+          -> Fish (cloned voice), or Kokoro (local GPU)     core/local_tts.py
           -> speaker
 
   Each turn is one short HTTP request, so a failure costs a turn, never the
@@ -36,10 +36,10 @@ _VOICE_ORDER = re.compile(
     r"^\W*(?:era[,\s]+)?(?:please\s+)?(?:switch|change|go|use|turn)\s+"
     r"(?:back\s+)?(?:to\s+|on\s+)?(?:your\s+|my\s+|the\s+)?"
     r"(?P<which>fish(?:\s+audio)?|cloned?|own|primary|"
-    r"premium|natural|default|normal|local|offline|piper|kokoro)?"
+    r"premium|natural|default|normal|local|offline|kokoro)?"
     r"\s*voice\W*$|"
     r"^\W*(?:era[,\s]+)?(?:please\s+)?(?:switch|change|go|use)\s+(?:back\s+)?(?:to\s+)?"
-    r"(?P<bare>fish(?:\s+audio)?|piper|kokoro)\W*$",
+    r"(?P<bare>fish(?:\s+audio)?|kokoro)\W*$",
     re.IGNORECASE,
 )
 _FISH_WORDS = {"fish", "fish audio", "clone", "cloned", "own", "primary", ""}

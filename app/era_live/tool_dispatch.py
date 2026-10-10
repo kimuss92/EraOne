@@ -111,7 +111,13 @@ from core.tool_recovery import TurnRecovery
 from core.tool_result import ToolResult
 from core.tts_fish import is_configured as is_fish_configured
 from core.verification import verify_tool_result
-from core.voice_mode import MODE_FISH_AUDIO, VOICE_CFG
+from core.voice_mode import (
+    MODE_FISH_AUDIO,
+    MODE_KOKORO_AUDIO,
+    MODE_LABELS,
+    VOICE_CFG,
+    gemini_voice_name,
+)
 from core.window_awareness import format_context as format_window_context
 from memory.memory_audit import audit_event
 from memory.memory_manager import (
@@ -935,9 +941,9 @@ class ToolDispatchMixin:
             realtime_input_config=realtime_input_config,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Algenib"  # Algenib #Rasalgethi #Enceladus #Leda #Algieba #Despina
-                    )
+                    # config/voice.json "gemini_voice" (default Algenib); the 30
+                    # choices are core/voice_mode.GEMINI_VOICES. Applies per connect.
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice_name())
                 )
             ),
         )
@@ -1189,7 +1195,7 @@ class ToolDispatchMixin:
             print(f"[era] [CREW] could not deliver the crew outcome: {e}")
 
     def _handle_set_voice(self, args: dict) -> str:
-        """Switch Era's voice between Fish Audio (primary) and Gemini (fallback).
+        """Switch Era's voice between Fish Audio, Kokoro (local GPU) and Gemini.
 
         Never needs a reconnect: both modes run an AUDIO session, so the change
         is live on the very next sentence, mid-conversation.
@@ -1199,7 +1205,7 @@ class ToolDispatchMixin:
         if resolved is None:
             return (
                 f"I don't know a voice called '{requested}'. Ask the user whether they "
-                "mean my Fish voice or my Gemini voice."
+                "mean my Fish, Kokoro or Gemini voice."
             )
 
         wants_fish = resolved == MODE_FISH_AUDIO
@@ -1209,17 +1215,26 @@ class ToolDispatchMixin:
                 "I can't switch to my Fish voice — no Fish Audio API key is configured. "
                 "Tell the user that, and that I'm staying on my Gemini voice."
             )
+        if resolved == MODE_KOKORO_AUDIO:
+            from core.tts_kokoro import KOKORO
 
-        already_active = (wants_fish and VOICE_CFG.is_fish()) or (
-            not wants_fish and VOICE_CFG.is_gemini()
-        )
-        if already_active:
+            if not KOKORO.ready:
+                ok, why = KOKORO.available()
+                if not ok:
+                    return f"My Kokoro voice is not installed ({why}). Tell the user."
+                self._kokoro_ready_for_switch("kokoro")  # switches by itself once loaded
+                return (
+                    "My Kokoro voice is loading (about ten seconds); I'll switch to it "
+                    "automatically as soon as it is ready. Tell the user, briefly."
+                )
+
+        label = MODE_LABELS[resolved]
+        if VOICE_CFG.mode == resolved:
             # Already speaking in this voice, but possibly only via a transient
             # fallback. Cancel any pending auto-restore and, when this isn't yet
             # the saved preference, commit it so a relaunch keeps it.
             self._tts_primary_retry_at = 0.0
             self._tts_primary_mode = ""
-            label = "Fish" if wants_fish else "Gemini"
             if VOICE_CFG.preferred != resolved:
                 VOICE_CFG.set_mode(resolved)
                 self.ui.write_log(f"SYS: Voice preference saved: {label}.")
@@ -1242,7 +1257,7 @@ class ToolDispatchMixin:
         # the recovery timer could yank the voice back on its own schedule.
         self._tts_primary_retry_at = 0.0
 
-        label = "Fish" if applied == MODE_FISH_AUDIO else "Gemini"
+        label = MODE_LABELS.get(applied, applied)
         print(f"[VOICE] Switching to {applied}")
         self.ui.write_log(f"SYS: Voice switched to {label}.")
         return (

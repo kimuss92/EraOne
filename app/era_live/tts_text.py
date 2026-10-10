@@ -51,6 +51,17 @@ _BULLET = re.compile(r"^\s*(?:[-•]|\d+[.)])\s+")
 _EMOJI = re.compile("[\U0001f000-\U0001faff☀-➿️‍]")
 _SPACES = re.compile(r"\s+")
 _HAS_WORD = re.compile(r"\w", re.UNICODE)
+# The prompt's "TIER 1 organic noise: say NOTHING" sometimes comes back as the
+# model NARRATING its silence; live 2026-10-09 it spoke "Organic noise detected."
+# and "Say nothing. Silence maintained." aloud. A sentence that is only that is
+# dropped; real speech that merely mentions noise is untouched.
+_SILENCE_NARRATION = re.compile(
+    r"^\W*(?:(?:organic|background|ambient)\s+noise(?:\s+(?:detected|ignored))?|"
+    r"silence(?:\s+maintained)?|(?:i\s+)?say\s+nothing|no\s+response(?:\s+needed)?|"
+    r"staying\s+silent|ignoring(?:\s+(?:that|it|noise))?|noise\s+ignored|"
+    r"not\s+addressed\s+to\s+me|\(?\s*silence\s*\)?)\W*$",
+    re.IGNORECASE,
+)
 
 
 def strip_notes(text: str) -> str:
@@ -84,4 +95,6 @@ def sanitize_for_tts(sentence: str) -> str:
     t = _MARKUP.sub("", t)
     t = _EMOJI.sub("", t)
     t = _SPACES.sub(" ", t).strip()
+    if _SILENCE_NARRATION.match(t):
+        return ""
     return t if _HAS_WORD.search(t) else ""

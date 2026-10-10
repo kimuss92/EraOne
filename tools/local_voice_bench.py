@@ -7,10 +7,11 @@ Per utterance it measures the stages the user actually waits on:
 
     STT   speech end -> text          (Silero VAD + Whisper-small)   target <500 ms
     LLM   text -> first sentence      (era.local via Ollama)          target <1 s
-    TTS   sentence -> first audio     (Piper)                         target <500 ms
+    TTS   sentence -> first audio     (Kokoro George, GPU)            target <500 ms
     TOTAL user stops speaking -> Era starts speaking                  target <2 s
 
-Input audio is generated with Piper and fed through the same VAD + Whisper
+Input audio is generated with Kokoro (English only; Piper, which also spoke
+French, was removed 2026-10-10) and fed through the same VAD + Whisper
 path the mic uses, so STT is measured on real speech. Tool calls go to a fake
 executor: the benchmark never touches the machine. Needs Ollama running and
 the models in models/local_voice/.
@@ -28,9 +29,7 @@ import numpy as np
 
 UTTERANCES = [
     ("en", "What time is it in Tokyo?"),
-    ("fr", "Bonjour Era, comment vas-tu aujourd'hui ?"),
     ("en", "Pause the music."),
-    ("fr", "Mets le volume à trente pour cent."),
     ("en", "Open notepad please."),
     ("en", "Tell me a short fact about Tunisia."),
 ]
@@ -42,13 +41,11 @@ async def _fake_tool(name, args):
 
 
 def _speech(lang: str, text: str) -> np.ndarray:
-    """Piper speech at 16 kHz float32, padded with silence so VAD sees an end."""
-    from core.local_tts import PIPER
+    """Kokoro speech at 16 kHz float32, padded with silence so VAD sees an end."""
+    from core.tts_kokoro import KOKORO, SAMPLE_RATE
 
-    engine = PIPER._engine(lang)
-    audio = engine.generate(text, sid=0, speed=1.0)
-    samples = np.array(audio.samples, dtype=np.float32)
-    n = int(len(samples) * 16000 / audio.sample_rate)
+    samples = np.frombuffer(KOKORO.synthesize(text), dtype=np.int16).astype(np.float32) / 32768
+    n = int(len(samples) * 16000 / SAMPLE_RATE)
     resampled = np.interp(
         np.linspace(0, 1, n, endpoint=False),
         np.linspace(0, 1, len(samples), endpoint=False),
@@ -62,12 +59,12 @@ async def bench(threads: int) -> int:
     os.environ["ERA_LOCAL_STT_THREADS"] = str(threads)
     from core.local_brain import LocalBrain
     from core.local_stt import LocalListener
-    from core.local_tts import PIPER, guess_lang
+    from core.tts_kokoro import KOKORO
 
     t = time.perf_counter()
     listener = LocalListener()
     listener.load()
-    PIPER.warm()
+    KOKORO.warm()
     print(f"models loaded in {int((time.perf_counter() - t) * 1000)} ms (stt threads={threads})")
 
     brain = LocalBrain()
@@ -101,7 +98,7 @@ async def bench(threads: int) -> int:
         llm = llm or (time.perf_counter() - t1) * 1000
 
         t2 = time.perf_counter()
-        PIPER.synthesize(first_sentence or "Done, sir.", guess_lang(first_sentence))
+        KOKORO.synthesize(first_sentence or "Done, sir.")
         tts = (time.perf_counter() - t2) * 1000
 
         total = stt + llm + tts

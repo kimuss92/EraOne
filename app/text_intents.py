@@ -326,19 +326,21 @@ _VOICE_SWITCH_INTENT = re.compile(
     r"^\s*(?:era[,\s]+)?(?:please\s+)?"
     r"(?:switch|change|go|use|turn)\s+(?:to\s+|back\s+to\s+|on\s+)?"
     r"(?:your\s+|the\s+)?"
-    r"(?P<which>fish(?:\s+audio)?|primary|cloned?|my\s+own|"
-    r"normal|cloud|gemini|usual|regular|default|fallback)"
-    r"(?:\s+voice)?\s*[.!]?\s*$",
+    r"(?:(?P<which>fish(?:\s+audio)?|primary|cloned?|my\s+own|kokoro|george|"
+    r"normal|cloud|gemini|usual|regular|default|fallback)(?:\s+voice)?"
+    # "local"/"offline" only WITH "voice": bare, they could mean the local brain.
+    r"|(?P<local>local|offline)\s+voice)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 
-# Words that mean the PRIMARY (Fish) voice; everything else the pattern
-# matches means the Gemini fallback voice.
+# Words that mean the Fish voice / the Kokoro (local GPU) voice; everything else
+# the pattern matches means Gemini's own voice.
 _FISH_VOICE_WORDS = {"fish", "fish audio", "primary", "clone", "cloned", "my own"}
+_KOKORO_VOICE_WORDS = {"kokoro", "george"}
 
 
 def _voice_switch_intent(text: str) -> str | None:
-    """Return 'fish' or 'gemini' when the text is a standalone voice-switch order.
+    """Return 'fish', 'kokoro' or 'gemini' for a standalone voice-switch order.
 
     Exists so the switch works with NO Gemini session: during a quota outage the
     mic is dead (it lives inside the session TaskGroup), so the spoken tool call
@@ -347,7 +349,11 @@ def _voice_switch_intent(text: str) -> str | None:
     m = _VOICE_SWITCH_INTENT.match(text or "")
     if not m:
         return None
+    if m.group("local"):
+        return "kokoro"
     which = " ".join(m.group("which").lower().split())
+    if which in _KOKORO_VOICE_WORDS:
+        return "kokoro"
     return "fish" if which in _FISH_VOICE_WORDS else "gemini"
 
 
@@ -557,6 +563,16 @@ _CTRL_RE = re.compile(r"<ctrl\d+>", re.IGNORECASE)
 
 
 def _clean_transcript(text: str) -> str:
-    text = _CTRL_RE.sub("", text)
-    text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
-    return text.strip()
+    return _clean_stream_chunk(text).strip()
+
+
+def _clean_stream_chunk(text: str) -> str:
+    """_clean_transcript WITHOUT the strip, for a streamed chunk fed to the voice.
+
+    Gemini streams its transcript as pieces like "Kokoro" + " is active." +
+    " What is" + " the next": the word break sits at the piece's EDGE. Stripping
+    each piece glued them into "Kokorois active.What isthe next" (seen live
+    2026-10-10): words merged, and "active.What" never split into sentences.
+    """
+    text = _CTRL_RE.sub("", text or "")
+    return re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)

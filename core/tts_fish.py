@@ -42,6 +42,12 @@ DEFAULT_ENDPOINT = "https://api.fish.audio/v1/tts"
 # s1 / s2-pro / s2.1-pro / s2.1-pro-free / drama-3-preview is accepted.
 DEFAULT_MODEL = "s2.1-pro-free"
 SYNTH_TIMEOUT_S = 45.0
+# A hung Fish used to cost up to SYNTH_TIMEOUT_S of silence before the fallback
+# spoke. Connecting, and every read (first audio byte included), is now bounded by
+# this. Measured 2026-10-10 (21 cold requests): first audio p50 748 / max 1,099 ms,
+# largest gap between chunks max 1,163 ms. 2 s tripped on 1 of ~32 live requests,
+# and a trip flips Era's voice to Gemini, so 3 s. Override: fish_audio.stall_timeout_s.
+STALL_TIMEOUT_S = 3.0
 
 # Cooldowns after a failure, so a dead key does not cost a network round trip on
 # every single sentence. Auth/billing problems will not fix themselves in 30s.
@@ -91,7 +97,20 @@ def get_fish_config() -> dict:
         # per docs.fish.audio. Era speaks sentence-by-sentence over a streamed
         # PCM body, so "low" gets first audio to the speakers soonest.
         "latency": str(_resolve("latency", "FISH_AUDIO_LATENCY", "low")),
+        "stall_timeout_s": _positive_float(
+            _resolve("stall_timeout_s", "FISH_AUDIO_STALL_TIMEOUT_S", STALL_TIMEOUT_S),
+            STALL_TIMEOUT_S,
+        ),
     }
+
+
+def _positive_float(value, default: float) -> float:
+    """A bad config value falls back to the default instead of breaking Fish."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if v > 0 else default
 
 
 # ── Per-language voices (the floor for "Fish is Era's voice, Gemini her brain") ──
@@ -248,6 +267,12 @@ class FishAudioClient:
 
         carry = b""
         produced = False
+        stall = cfg["stall_timeout_s"]
+        # connect covers DNS + TCP + TLS; sock_read covers the first audio byte and
+        # every gap after it. total stays as the ceiling for a long sentence.
+        timeout = aiohttp.ClientTimeout(
+            total=SYNTH_TIMEOUT_S, connect=stall, sock_connect=stall, sock_read=stall
+        )
         self._last_use = time.monotonic()
         for attempt in range(1 + CONNECT_RETRIES):
             try:
@@ -255,7 +280,7 @@ class FishAudioClient:
                     cfg["endpoint"],
                     json=body,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=SYNTH_TIMEOUT_S, sock_connect=10),
+                    timeout=timeout,
                 ) as r:
                     if r.status != 200:
                         detail = (await r.text())[:200]
@@ -281,7 +306,7 @@ class FishAudioClient:
                         yield carry + bytes(1)  # pad a stray final byte to a whole sample
                 break
             except TimeoutError:
-                self._cool(COOLDOWN_TRANSIENT_S, f"timed out after {SYNTH_TIMEOUT_S}s")
+                self._cool(COOLDOWN_TRANSIENT_S, f"stalled (no audio within {stall:g}s)")
                 return
             except aiohttp.ClientConnectorError as e:
                 # DNS miss or refused connect: nothing was sent or played yet, so one
@@ -299,6 +324,9 @@ class FishAudioClient:
 
         if produced:
             self.last_error = ""
+        else:  # HTTP 200 with no audio (malformed). The caller still falls back,
+            # but there is no cooldown: one odd sentence is not an outage.
+            self.last_error = "empty response (HTTP 200, no audio)"
 
     async def synthesize(self, text: str, lang: str = "") -> bytes:
         """Buffered synthesis -> full int16 mono PCM @ 24 kHz. b"" on failure.

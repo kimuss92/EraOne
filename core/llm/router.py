@@ -403,7 +403,7 @@ def local_fallback_policy() -> dict[str, Any]:
 
 def cascade_policy() -> dict[str, Any]:
     """`routing.cascade` — the cascade voice mode that REPLACES the Gemini Live
-    session (mic -> local STT -> CodeCraft -> Fish/Piper). Only taken when
+    session (mic -> local STT -> CodeCraft -> Fish/Kokoro). Only taken when
     CodeCraft is actually configured. See app/era_live/cascade.py.
 
     Defaults refuse, so a missing block keeps Era on Gemini Live.
@@ -451,6 +451,12 @@ def claude_voice_policy() -> dict[str, Any]:
             "manual_stay_s": 3600,
             "healthy_after_s": 600,
             "max_stay_s": 1800,
+            # core/live_health.py verdict thresholds (its own defaults). How long
+            # Gemini may stay deaf / mute, and how many upstream errors in 10 min
+            # make it "flaky", before the Claude rescue may take over.
+            "deaf_after_s": 12.0,
+            "mute_after_s": 25.0,
+            "flaky_errors": 3,
         },
     )
 

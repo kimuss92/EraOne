@@ -10,7 +10,7 @@ WHAT HAPPENS
   3. The run loop calls `serve_claude_voice()` before every Gemini connect. While
      the window is open it runs the SAME local loop as the offline fallback
      (app/era_live/local_fallback.py): mic -> Silero VAD -> Whisper -> brain ->
-     Fish/Piper, with the owner-voice gate, wake word, abort, mic-mute, barge-in
+     Fish/Kokoro, with the owner-voice gate, wake word, abort, mic-mute, barge-in
      and the tool gate all unchanged. Only the brain differs: `claude -p`
      (core/llm/adapters/claude_voice.py) — subscription, no API key, no GPU.
   4. The window ends, the loop reconnects Gemini, and `live_health` judges it

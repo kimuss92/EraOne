@@ -277,6 +277,9 @@ def test_router_stream_passes_through(monkeypatch):
         yield b"two"
 
     monkeypatch.setattr(tts_router.FISH, "stream", _fake_stream)
+    # Fish mode: in Gemini mode the router is silent by design (2026-10-10), so
+    # a fallback's leftover sentences never reach a second voice.
+    monkeypatch.setattr(VOICE_CFG, "mode", MODE_FISH_AUDIO, raising=False)
 
     async def _collect():
         return [c async for c in tts_router.stream("hello")]

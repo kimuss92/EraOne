@@ -927,11 +927,11 @@
     "name": "voice_lock"
   },
   {
-    "description": "Switches era's OWN speaking voice between her Fish Audio voice (her primary, cloned voice) and her Gemini voice (the automatic fallback). Call this ONLY when the user explicitly asks to change her voice (e.g. 'switch to your fish voice', 'use your gemini voice', 'go back to your normal voice'). The switch is INSTANT — same session, no pause, no reconnect — so just confirm it is done. Do NOT call this on your own initiative; era falls back to the Gemini voice automatically if Fish Audio fails.",
+    "description": "Switches era's OWN speaking voice between her Fish Audio voice (cloud, cloned), her Kokoro voice (George, local on the GPU, the fastest) and her Gemini voice (the automatic fallback). Call this ONLY when the user explicitly asks to change her voice (e.g. 'switch to your fish voice', 'use your kokoro voice', 'use your local voice', 'use your gemini voice', 'go back to your normal voice'). The switch is INSTANT — same session, no pause, no reconnect — except the first switch to Kokoro, which loads it for about ten seconds and then switches by itself. Do NOT call this on your own initiative; era falls back to the Gemini voice automatically if Fish or Kokoro fails.",
     "input_schema": {
       "properties": {
         "voice": {
-          "description": "Which voice to use: 'fish' (primary, cloned) or 'gemini' (fallback). Accepts 'primary'/'clone' and 'normal'/'cloud'/'fallback' as synonyms.",
+          "description": "Which voice to use: 'fish' (cloud, cloned), 'kokoro' (local George, fastest) or 'gemini' (fallback). Accepts 'primary'/'clone', 'local'/'offline'/'george' and 'normal'/'cloud'/'fallback' as synonyms.",
           "type": "string"
         }
       },

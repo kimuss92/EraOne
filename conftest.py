@@ -262,6 +262,21 @@ def _block_live_self_improve_repair(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_voice_json(monkeypatch, tmp_path):
+    """No test may write the user's real config/voice.json (the saved voice).
+
+    2026-10-10: a full run left it on "kokoro_audio". The writing test stubbed
+    VoiceModeConfig._write, but on a config object an earlier test had swapped,
+    so the real one saved. Redirecting the path itself catches every object.
+    Tests that need their own file still patch VOICE_CONFIG_PATH after this.
+    """
+    from core import voice_mode
+
+    monkeypatch.setattr(voice_mode, "VOICE_CONFIG_PATH", tmp_path / "voice.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_vision_provider_health():
     """core.vision_resilience benches a provider after it fails; that is process-wide
     state, so one test's simulated Ollama/Gemini failure would silently skip the provider

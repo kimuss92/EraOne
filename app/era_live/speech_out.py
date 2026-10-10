@@ -38,7 +38,7 @@ import re
 from app.era_live.tts_text import open_note_at, sanitize_for_tts, strip_notes
 from core import tts_router
 from core.audio_pcm import iter_pcm_frames
-from core.tts_fish import detect_lang
+from core.tts_fish import FISH, detect_lang
 
 # Sentence boundary: terminal punctuation followed by whitespace or end. Also
 # treat a newline as a boundary — list items and short lines rarely end in a
@@ -359,11 +359,21 @@ class SpeechOut:
         cb = getattr(self.era, "_tts_fallback", None)
         if cb is None:
             return
+        reason = f"fish synthesis failed: {FISH.last_error or 'no audio'}"
+        try:
+            from core.voice_mode import VOICE_CFG
+
+            if VOICE_CFG.is_kokoro():
+                from core.tts_kokoro import KOKORO
+
+                reason = f"kokoro synthesis failed: {KOKORO.last_error or 'no audio'}"
+        except Exception:
+            pass
         try:
             if held:
-                cb("fish synthesis failed", held_audio=held)
+                cb(reason, held_audio=held)
             else:
-                cb("fish synthesis failed")
+                cb(reason)
         except Exception as e:
             print(f"[TTS] fallback request failed: {e}")
 

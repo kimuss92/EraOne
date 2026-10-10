@@ -186,7 +186,7 @@ except ImportError:
 
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL = "models/gemini-3.1-flash-live-preview"
+LIVE_MODEL = "models/gemini-3.8-live"  # fallback only: config/llm.yaml era.voice rules
 from agent.executor import AgentExecutor
 from agent.task_queue import get_queue
 from app.audio_config import (  # noqa: F401  (re-export: preserves public + internal names)
@@ -244,7 +244,62 @@ from app.system_prompt import (  # noqa: F401  (re-export: preserves public + in
 from app.tool_declarations import TOOL_DECLARATIONS  # noqa: F401  (re-export)
 from core.live_health import LiveHealth
 from core.tts_fish import is_configured as _fish_configured
-from core.voice_mode import MODE_FISH_AUDIO, VOICE_CFG
+from core.voice_mode import MODE_FISH_AUDIO, MODE_KOKORO_AUDIO, MODE_LABELS, VOICE_CFG
+
+
+def _voice_refused(era, exc: BaseException) -> bool:
+    """Gemini refused the configured voice (1007 "No matching speaker voice found",
+    seen live 2026-10-10 for "Ario"/"Arlo" on the 3.1 model). Fall back to the
+    default voice for this run instead of treating it as a broken config."""
+    try:
+        leaves = era._flatten_exc(exc)
+        if not any("no matching speaker voice" in str(leaf).lower() for leaf in leaves):
+            return False
+        from core.voice_mode import DEFAULT_GEMINI_VOICE, reject_gemini_voice
+
+        refused = reject_gemini_voice()
+        if not refused:
+            return False  # the default itself was refused: a real config problem
+        era.ui.write_log(
+            f"SYS: Gemini does not know the voice '{refused}' - using "
+            f"{DEFAULT_GEMINI_VOICE}. Check gemini_voice in config/voice.json."
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _build_live_health() -> LiveHealth:
+    """LiveHealth with the patience set in config/llm.yaml routing.claude_voice.
+    Karim, 2026-10-10: Gemini is the better voice, so the rescue waits for a real
+    failure. A bad config value keeps LiveHealth's own defaults."""
+    try:
+        from core.llm.router import claude_voice_policy
+
+        pol = claude_voice_policy()
+        return LiveHealth(
+            hear_timeout_s=float(pol["deaf_after_s"]),
+            reply_timeout_s=float(pol["mute_after_s"]),
+            flaky_errors=int(pol["flaky_errors"]),
+        )
+    except Exception as e:
+        print(f"[LIVE-HEALTH] config unreadable ({type(e).__name__}); using defaults")
+        return LiveHealth()
+
+
+def _note_listening(era, what: str, interrupted: bool = False) -> None:
+    """Feed core/attention.py. A listening hook must never break the speaking
+    state or a typed command (a test engine has no _listening_state at all)."""
+    try:
+        state = getattr(era, "_listening_state", None)
+        if state is None:
+            return
+        if what == "finished":
+            state().era_finished_speaking(interrupted=interrupted)
+        else:
+            state().note_activity()
+    except Exception as e:
+        print(f"[ATTENTION] listening hook skipped: {type(e).__name__}: {e}")
 
 
 class EraLive(
@@ -507,7 +562,7 @@ class EraLive(
         # mute / flaky). Fed by app/era_live/audio.py and the connect loop below;
         # read by ClaudeVoiceMixin._live_health_watch. Upstream errors are kept
         # across reconnects on purpose — the pattern spans connections.
-        self.live_health = LiveHealth()
+        self.live_health = _build_live_health()
         # The tasks of the CURRENT Gemini session, so entering Claude voice can end
         # them at once instead of waiting for Gemini's next message (see run()).
         self._session_tasks: list[asyncio.Task] = []
@@ -613,6 +668,7 @@ class EraLive(
         # HUD conversation record: the typed/Telegram order as the user sent it.
         # Sentinels ("__mute__" etc.) are skipped inside user_input. Never raises.
         hud.user_input(text, "telegram" if self._tg_reply_pending else "typed")
+        _note_listening(self, "activity")  # typing to Era opens the window
 
         # === "abort mission", TYPED — FIRST, above everything ===
         # Nothing may outrank it, not even the reboot order: an abort is the
@@ -1052,17 +1108,18 @@ class EraLive(
         """
         resolved = VOICE_CFG._resolve_alias(target)
         if resolved is None:
-            self.ui.write_log(f"SYS: Unknown voice '{target}'. Say 'fish' or 'gemini'.")
+            self.ui.write_log(f"SYS: Unknown voice '{target}'. Say 'fish', 'kokoro' or 'gemini'.")
             return
 
         wants_fish = resolved == MODE_FISH_AUDIO
         if wants_fish and not _fish_configured():
             self.ui.write_log("SYS: Fish Audio has no API key — staying on the Gemini voice.")
             return
+        if resolved == MODE_KOKORO_AUDIO and not self._kokoro_ready_for_switch(target):
+            return  # loading; this switch re-runs itself once George can speak
 
-        already_active = (wants_fish and VOICE_CFG.is_fish()) or (
-            not wants_fish and VOICE_CFG.is_gemini()
-        )
+        label = MODE_LABELS[resolved]
+        already_active = VOICE_CFG.mode == resolved
         if already_active:
             # Era is already speaking in this voice — but she may be here only via
             # a transient fallback. An explicit request still (a) cancels any
@@ -1072,7 +1129,6 @@ class EraLive(
             # silently undone by the recovery timer.
             self._tts_primary_retry_at = 0.0
             self._tts_primary_mode = ""
-            label = "Fish" if wants_fish else "Gemini"
             if VOICE_CFG.preferred != resolved:
                 VOICE_CFG.set_mode(resolved)  # persist the deliberate choice
                 self.ui.write_log(f"SYS: Staying on the {label} voice — saved as your preference.")
@@ -1092,10 +1148,33 @@ class EraLive(
         # A deliberate switch overrides any pending fallback-recovery timer.
         self._tts_primary_retry_at = 0.0
 
-        label = "Fish" if applied == MODE_FISH_AUDIO else "Gemini"
+        label = MODE_LABELS.get(applied, applied)
         print(f"[VOICE] Switch -> {applied}")
         self.ui.write_log(f"SYS: Voice switched to {label}.")
         self.speak(f"Switching to my {label} voice, sir.")
+
+    def _kokoro_ready_for_switch(self, target: str) -> bool:
+        """True if Kokoro can speak NOW. Otherwise start loading it (~10 s), keep
+        the current voice, and re-run the switch once it is ready, so the switch
+        never lands on a voice that would fall straight back to Gemini."""
+        from core.tts_kokoro import KOKORO
+
+        if KOKORO.ready:
+            return True
+        ok, why = KOKORO.available()
+        if not ok:
+            self.ui.write_log(f"SYS: The Kokoro voice is not installed ({why}).")
+            return False
+
+        def _loaded(ok: bool) -> None:
+            if ok:
+                self._apply_voice_switch(target)
+            else:
+                self.ui.write_log(f"SYS: The Kokoro voice failed to load ({KOKORO.last_error}).")
+
+        self.ui.write_log("SYS: Loading the Kokoro voice (about 10 s)...")
+        KOKORO.warm_in_background(_loaded)
+        return False
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
@@ -1117,6 +1196,12 @@ class EraLive(
         elif not self.ui.muted:
             if changed and det is not None:
                 det.note_speaking(False)
+            if changed:
+                # Echo hold + conversation window (core/attention.py). No hold
+                # after a barge-in: the user is already mid-sentence.
+                _note_listening(
+                    self, "finished", interrupted=bool(getattr(self, "_barge_in_requested", False))
+                )
             self.ui.set_state("LISTENING")
             self.session_manager.transition_to(EraState.LISTENING, reason="speaking_finished")
 
@@ -1226,7 +1311,7 @@ class EraLive(
             return
 
         # No session, local fallback serving: speak literally through Fish or
-        # Piper. Neither branch below can (both end at the missing session).
+        # Kokoro. Neither branch below can (both end at the missing session).
         if self.session is None and self.local_speak(_unwrap_say_exactly(text)):
             self._tg_ack(_unwrap_say_exactly(text))
             return
@@ -1260,6 +1345,73 @@ class EraLive(
         if not self._loop or not self.session:
             return
         submit_coroutine(self.session.send_realtime_input(text=text), self._loop)
+
+    def _era_busy(self) -> bool:
+        state = str(self.session_manager.get_state_snapshot().get("current_state", ""))
+        return bool(
+            self._is_speaking
+            or state.upper().endswith("PROCESSING")
+            or getattr(self, "_tool_is_running", lambda: False)()
+        )
+
+    def _renew_for_voice(self) -> None:
+        log_event(main_logger, "engine.session.renewing", "INFO", reason="gemini_voice_changed")
+        self._loop.call_soon_threadsafe(self._go_away_event.set)
+
+    def apply_gemini_voice_now(self) -> str:
+        """HUD voice change, applied at once: the Gemini voice is part of the
+        session config, so it needs a new connection. Take the graceful renewal
+        the planned session rotation uses (resumption keeps the conversation),
+        never mid-sentence or mid-task: if Era is busy, a background waiter
+        renews the moment she is idle (up to 2 minutes, then the next routine
+        renewal picks it up)."""
+        if self.session is None or not self._loop:
+            return "Saved. It applies when Gemini connects."
+        if not self._era_busy():
+            self._renew_for_voice()
+            return "Voice changed. Reconnecting with it now."
+        if getattr(self, "_voice_apply_waiting", False):
+            return "Voice saved. It applies as soon as Era finishes."
+        self._voice_apply_waiting = True
+
+        def _wait_then_renew() -> None:
+            try:
+                for _ in range(240):  # 2 min at 0.5 s
+                    time.sleep(0.5)
+                    if self.session is not None and not self._era_busy():
+                        self._renew_for_voice()
+                        return
+            except Exception as e:
+                print(f"[VOICE] deferred voice apply skipped: {type(e).__name__}: {e}")
+            finally:
+                self._voice_apply_waiting = False
+
+        threading.Thread(target=_wait_then_renew, name="voice-apply", daemon=True).start()
+        return "Voice saved. It applies as soon as Era finishes."
+
+    def speak_brief(self, situation: str, fallback: str) -> None:
+        """Era says ONE brief line about `situation` in her OWN words.
+
+        Karim, 2026-10-10: the standby lines were fixed system phrases ("System
+        offline.", "Era One online."). Now the model composes them under rules:
+        one short sentence, no question, no tool, and never the wake word (it is
+        named here only so the model knows what to avoid; it is never spoken).
+        With a session, the note goes INTO it in every voice mode: Gemini speaks
+        it, or Fish/Kokoro speak its transcript. With no session (outage), the
+        short `fallback` is spoken literally by the local voice.
+        """
+        if self.session is None or not self._loop:
+            self.speak(_say_exactly(fallback))
+            return
+        words = [WAKE_CFG.word, *WAKE_CFG.aliases]
+        avoid = ", ".join(f"'{w}'" for w in words if w)
+        note = (
+            f"[System note: {situation} Tell the user in your own words, in ONE brief "
+            "sentence of at most six words. Never say the wake word "
+            f"({avoid}) and never explain how to wake you. Do not ask a question. "
+            "Do not use any tool.]"
+        )
+        submit_coroutine(self.session.send_realtime_input(text=note), self._loop)
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -1481,21 +1633,12 @@ class EraLive(
         # arrives through the normal receive path with no standby gates.
         if not network_failure:
             print("[STANDBY] Speaking notification...")
-            # speak() feeds the live session as if the USER had said this, so a bare
-            # affirmation was treated as conversation and paraphrased — answering
-            # "I'm online. What's the goal?" while actually going to sleep. Pin the
-            # wording verbatim the way the CM brand-ask does.
-            #
-            # Standby-logic overhaul (2026-09-16): the spoken phrase is EXACTLY
-            # "System offline." — no other phrasing is permitted, and the wake word
-            # is NEVER spoken aloud (this line used to say "Say {wake word} to
-            # resume", which both broke the wake-word constraint and used a
-            # forbidden phrase). The user already knows the wake word; the Telegram
-            # text notice (not spoken) still names it for a remote wake.
-            self.speak(
-                "[System note: Say aloud exactly this and nothing more, then stop: "
-                '"System offline." '
-                "Do not add any other words, do not ask a question, do not use any tool.]"
+            # Her own brief words (Karim, 2026-10-10), not the pinned "System
+            # offline." line: speak_brief composes one short sentence and forbids
+            # the wake word. The Telegram notice (not spoken) still names it.
+            self.speak_brief(
+                "You are going into standby now and will stop listening.",
+                fallback="Going quiet, sir.",
             )
         else:
             print("[STANDBY] Network offline. Skipping cloud TTS.")
@@ -1634,14 +1777,14 @@ class EraLive(
                 self.session = None
                 return
             # ── Cascade voice mode: no Gemini Live session at all ──
-            # mic -> local STT -> CodeCraft -> Fish/Piper (app/era_live/cascade.py).
+            # mic -> local STT -> CodeCraft -> Fish/Kokoro (app/era_live/cascade.py).
             # Taken only when CodeCraft is configured; returns False otherwise,
             # and Gemini Live connects below exactly as before.
             if await self.serve_cascade():
                 continue
             # ── Claude voice mode: Gemini is connected-but-silent, or the user asked ──
             # While a Claude window is open (app/era_live/claude_voice.py) the local
-            # loop serves — mic -> Whisper -> LocalBrain(claude -p) -> Fish/Piper. It
+            # loop serves — mic -> Whisper -> LocalBrain(claude -p) -> Fish/Kokoro. It
             # must be offered BEFORE Gemini connects or the window never opens.
             # Returns False (and Gemini connects below, unchanged) whenever no window
             # is open, which is always so while routing.claude_voice.enabled is false.
@@ -1925,6 +2068,8 @@ class EraLive(
                     self.session_manager.prepare_reconnect()
                 else:
                     kind = self._classify_disconnect(e)
+                    if kind == "config" and _voice_refused(self, e):
+                        kind = "transient"  # the default voice works: reconnect now
                     self._last_disconnect_kind = kind
                     # Consecutive "no internet" failures (DNS, refused, aborted).
                     # Two in a row sends Era to local mode within seconds instead
@@ -2069,7 +2214,7 @@ class EraLive(
 
                 # ── Escape hatch: serve LOCALLY instead of waiting deaf ──
                 # Mic, local STT, the Ollama brain (with Era's gated tools) and
-                # Fish/Piper speech, for the length of the cooldown — capped at
+                # Fish/Kokoro speech, for the length of the cooldown — capped at
                 # routing.local_fallback.probe_gemini_every_s so Gemini is retried
                 # often and Era returns to it as soon as quota is back. Returns
                 # False when the local stack isn't ready; the old wait follows.

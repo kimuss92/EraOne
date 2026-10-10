@@ -25,8 +25,9 @@ def cfg(monkeypatch, tmp_path):
     return c
 
 
-def test_only_two_modes_remain():
-    assert set(VALID_MODES) == {MODE_FISH_AUDIO, MODE_GEMINI_AUDIO}
+def test_three_modes_kokoro_is_back():
+    # Kokoro George on the GPU was re-added 2026-10-10 (Karim) as the fast local voice.
+    assert set(VALID_MODES) == {MODE_FISH_AUDIO, MODE_GEMINI_AUDIO, "kokoro_audio"}
 
 
 def test_gemini_is_the_first_run_default(monkeypatch):
@@ -78,7 +79,8 @@ def test_gemini_aliases(spoken):
 
 
 def test_unknown_alias_is_rejected(cfg):
-    assert VoiceModeConfig._resolve_alias("kokoro") is None  # removed engine
+    assert VoiceModeConfig._resolve_alias("kokoro") == "kokoro_audio"  # re-added 2026-10-10
+    assert VoiceModeConfig._resolve_alias("local voice") == "kokoro_audio"
     assert VoiceModeConfig._resolve_alias("banana") is None
     with pytest.raises(ValueError):
         cfg.set_mode("banana")
@@ -182,3 +184,202 @@ def test_a_voice_switch_keeps_other_voice_settings(filed):
     c.set_mode("fish")
     saved = json.loads(p.read_text("utf-8"))
     assert saved == {"mode": "fish_audio", "fish_voices": {"fr": "abc"}}
+
+
+# ── Gemini's own voice is a setting, not code (2026-10-10) ───────────────────
+def test_gemini_voice_defaults_to_algenib(monkeypatch, tmp_path):
+    import core.voice_mode as vm
+
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", tmp_path / "voice.json")
+    assert vm.gemini_voice_name() == "Algenib"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("charon", "Charon"), (" ORUS ", "Orus"), ("Finn", "Algenib"), ("", "Algenib")],
+)
+def test_gemini_voice_is_read_from_voice_json_and_validated(monkeypatch, tmp_path, raw, expected):
+    import json
+
+    import core.voice_mode as vm
+
+    p = tmp_path / "voice.json"
+    p.write_text(json.dumps({"mode": "gemini_audio", "gemini_voice": raw}))
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", p)
+    assert vm.gemini_voice_name() == expected
+
+
+def test_the_live_session_uses_the_configured_voice():
+    import inspect
+
+    from app.era_live import tool_dispatch
+
+    src = inspect.getsource(tool_dispatch)
+    assert "voice_name=gemini_voice_name()" in src and 'voice_name="Algenib"' not in src
+
+
+def test_a_voice_gemini_refuses_falls_back_for_this_run(monkeypatch, tmp_path):
+    """Live 2026-10-10: 3.1 answered 1007 "No matching speaker voice ... Arlo"."""
+    import json
+
+    import core.voice_mode as vm
+
+    p = tmp_path / "voice.json"
+    p.write_text(json.dumps({"gemini_voice": "Charon"}))
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", p)
+    monkeypatch.setattr(vm, "_refused_voice", {"name": ""})
+    assert vm.gemini_voice_name() == "Charon"
+    assert vm.reject_gemini_voice() == "Charon"
+    assert vm.gemini_voice_name() == "Algenib"
+    assert vm.reject_gemini_voice() == "", "the default refused too: no retry loop"
+
+
+def test_main_turns_a_voice_refusal_into_a_quick_reconnect(monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    import core.voice_mode as vm
+    import main
+
+    p = tmp_path / "voice.json"
+    p.write_text(json.dumps({"gemini_voice": "Charon"}))
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", p)
+    monkeypatch.setattr(vm, "_refused_voice", {"name": ""})
+    logs = []
+    era = SimpleNamespace(_flatten_exc=lambda e: [e], ui=SimpleNamespace(write_log=logs.append))
+    err = Exception("1007 None. No matching speaker voice found for name: Charon and language: ")
+    assert main._voice_refused(era, err) is True
+    assert vm.gemini_voice_name() == "Algenib" and "Charon" in logs[0]
+    assert main._voice_refused(era, Exception("1007 modalities (TEXT) not supported")) is False
+
+
+# ── 2026-10-10: Gemini voice from the HUD; standby lines in Era's own words ──
+def test_set_gemini_voice_keeps_other_keys_and_rejects_odd_names(monkeypatch, tmp_path):
+    import json
+
+    import core.voice_mode as vm
+
+    p = tmp_path / "voice.json"
+    p.write_text(json.dumps({"mode": "kokoro_audio", "listening": {"echo_hold_ms": 500}}))
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", p)
+    monkeypatch.setattr(vm, "_refused_voice", {"name": "Finn"})
+    assert vm.set_gemini_voice(" charon ") == "Charon"
+    data = json.loads(p.read_text())
+    assert data == {
+        "mode": "kokoro_audio",
+        "listening": {"echo_hold_ms": 500},
+        "gemini_voice": "Charon",
+    }
+    assert vm._refused_voice["name"] == "", "a new choice gets a fresh chance"
+    for bad in ["", "x" * 41, "Arlo; rm -rf", "../voice", "<script>", "Finn", "en-us-finn"]:
+        with pytest.raises(ValueError):
+            vm.set_gemini_voice(bad)
+    assert json.loads(p.read_text())["gemini_voice"] == "Charon"
+
+
+def _engine(**kw):
+    from types import SimpleNamespace
+
+    import main
+
+    sent, said = [], []
+
+    class Loop:
+        def call_soon_threadsafe(self, fn, *a):
+            fn(*a)
+
+        def is_running(self):
+            return True
+
+    eng = SimpleNamespace(
+        session=kw.get("session", object()),
+        _loop=Loop(),
+        _is_speaking=kw.get("speaking", False),
+        _tool_is_running=lambda: kw.get("tool", False),
+        session_manager=SimpleNamespace(
+            get_state_snapshot=lambda: {"current_state": kw.get("state", "listening")}
+        ),
+        _go_away_event=SimpleNamespace(set=lambda: sent.append("renew")),
+        speak=said.append,
+    )
+    eng._era_busy = main.EraLive._era_busy.__get__(eng)
+    eng._renew_for_voice = main.EraLive._renew_for_voice.__get__(eng)
+    eng.apply = main.EraLive.apply_gemini_voice_now.__get__(eng)
+    eng.brief = main.EraLive.speak_brief.__get__(eng)
+    return eng, sent, said
+
+
+def test_a_voice_change_applies_at_once_or_as_soon_as_era_is_idle(monkeypatch):
+    import main
+
+    started = []
+    monkeypatch.setattr(
+        main.threading,
+        "Thread",
+        lambda **kw: type("T", (), {"start": lambda self: started.append(kw["name"])})(),
+    )
+    eng, sent, _ = _engine()
+    assert "Reconnecting" in eng.apply() and sent == ["renew"], "idle: at once"
+    for busy in ({"speaking": True}, {"state": "processing"}, {"tool": True}):
+        eng, sent, _ = _engine(**busy)
+        assert "as soon as Era finishes" in eng.apply() and sent == [], "never mid-turn"
+    assert started == ["voice-apply"] * 3, "a waiter applies it the moment she is idle"
+    eng, sent, _ = _engine(session=None)
+    assert "when Gemini connects" in eng.apply() and sent == []
+
+
+def test_standby_line_is_composed_by_era_under_rules(monkeypatch):
+    import main
+
+    notes = []
+    monkeypatch.setattr(main, "submit_coroutine", lambda coro, loop: notes.append(coro))
+
+    class Session:
+        def send_realtime_input(self, text):
+            return text
+
+    eng, _, said = _engine(session=Session())
+    eng.brief("You are going into standby now.", fallback="Going quiet, sir.")
+    note = notes[0]
+    assert "in your own words" in note and "ONE brief sentence" in note
+    assert "Never say the wake word" in note and main.WAKE_CFG.word in note
+    assert "Do not ask a question" in note and said == []
+
+
+def test_standby_line_without_a_session_is_the_short_fallback():
+    eng, _, said = _engine(session=None)
+    eng.brief("You are going into standby now.", fallback="Going quiet, sir.")
+    assert len(said) == 1 and "Going quiet, sir." in said[0]
+
+
+def test_hud_settings_show_the_30_live_voices_with_gender(monkeypatch, tmp_path):
+    import json
+
+    import core.voice_mode as vm
+    from app.hud.api import _gemini_voice_view
+
+    p = tmp_path / "voice.json"
+    p.write_text(json.dumps({"gemini_voice": "charon"}))
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", p)
+    monkeypatch.setattr(vm, "_refused_voice", {"name": ""})
+    view = _gemini_voice_view()
+    assert view["gemini_voice"] == "Charon" == view["gemini_voice_active"]
+    assert view["gemini_voice_note"] == ""
+    assert len(view["gemini_voices"]) == 30
+    assert {"name": "Charon", "style": "Informative", "gender": "male"} in view["gemini_voices"]
+    assert {v["gender"] for v in view["gemini_voices"]} == {"male", "female", "neutral"}
+
+
+def test_a_library_voice_is_explained_not_silently_swapped(monkeypatch, tmp_path):
+    """Live 2026-10-10: Live accepted "Finn" (male in AI Studio) and spoke with a
+    default FEMALE voice (~220 Hz). It is now never sent; the HUD says why."""
+    import json
+
+    import core.voice_mode as vm
+
+    p = tmp_path / "voice.json"
+    p.write_text(json.dumps({"gemini_voice": "Finn"}))
+    monkeypatch.setattr(vm, "VOICE_CONFIG_PATH", p)
+    view = vm.gemini_voice_view()
+    assert view["gemini_voice_active"] == "Algenib"
+    assert "Finn" in view["gemini_voice_note"] and "cannot use it" in view["gemini_voice_note"]

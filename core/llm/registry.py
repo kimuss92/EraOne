@@ -78,6 +78,7 @@ class ModelEntry:
 # Derived from the model id rather than hand-listed per alias, so adding an
 # alias or renaming a model does not require a second edit here.
 _DISPLAY_RULES: tuple[tuple[str, str], ...] = (
+    ("gemini-3.8-live", "Gemini 3.8 Live"),
     ("gemini-3.1-flash-live", "Gemini 3.1 Flash Live"),
     ("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite"),
     ("gemini-3.8-flash", "Gemini 3.8 Flash"),

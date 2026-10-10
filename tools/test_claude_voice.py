@@ -618,7 +618,6 @@ def _patch_local_models(monkeypatch):
         "core.local_stt.LocalListener",
         lambda **_k: SimpleNamespace(load=lambda: None, reset=lambda: None),
     )
-    monkeypatch.setattr("core.local_tts.PIPER", SimpleNamespace(warm=lambda: None))
 
 
 def test_the_local_loop_uses_the_claude_brain_for_the_claude_reasons(monkeypatch):
