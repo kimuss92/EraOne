@@ -186,7 +186,7 @@ except ImportError:
 
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL = "models/gemini-3.8-live"  # fallback only: config/llm.yaml era.voice rules
+LIVE_MODEL = "models/gemini-3.1-flash-live-preview"  # fallback: config/llm.yaml era.voice wins
 from agent.executor import AgentExecutor
 from agent.task_queue import get_queue
 from app.audio_config import (  # noqa: F401  (re-export: preserves public + internal names)

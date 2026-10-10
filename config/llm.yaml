@@ -85,10 +85,13 @@ aliases:
   # ── Voice / realtime ──────────────────────────────────────────────────────
   era.voice:
     provider: gemini
-    # 2026-10-10 (Karim): gemini-3.8-live, Google's current Live model; same price
-    # row as 3.1, and it knows AI Studio's voice library (e.g. "Arlo", which 3.1
-    # refused). Roll back: models/gemini-3.1-flash-live-preview (legacy preview).
-    model: models/gemini-3.8-live
+    # 2026-10-10 (Karim): rolled BACK to 3.1 — the better brain in actual use.
+    # 3.8 was adopted earlier the same day for the same price row plus AI
+    # Studio's voice library (e.g. "Arlo", which 3.1 refuses with 1007). That
+    # library is the ONLY thing given up here: the 30 classic voices in
+    # core/voice_mode.GEMINI_VOICES all still work, and an unknown name falls
+    # back to Algenib. Forward again: models/gemini-3.8-live
+    model: models/gemini-3.1-flash-live-preview
     role: The brain. Hearing, speaking, intent, and tool selection in one
       bidirectional session. The ONLY alias that can serve the voice loop.
     capabilities:
