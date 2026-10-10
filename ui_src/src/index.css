@@ -320,6 +320,13 @@
   .kv { display: flex; align-items: baseline; justify-content: space-between; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--text-1); }
   .field { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--field); transition: border-color var(--dur-1); }
   .field:focus-within { border-color: var(--accent-line); }
+  /* A <select>'s open list is drawn by the browser, which ignored the HUD theme:
+     white list, pale HUD text (unreadable, 2026-10-10). Give it the theme's own
+     solid panel colour and text; the scheme follows .light via the tokens. */
+  select.field { color-scheme: inherit; }
+  select.field option,
+  select.field optgroup { background-color: var(--panel-solid); color: var(--text-1); }
+  select.field optgroup { color: var(--accent); font-weight: 600; }
   .mini-btn {
     display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
     padding: var(--sp-1) 10px; font-size: var(--fs-meta); color: var(--text-1); transition: background var(--dur-1);
