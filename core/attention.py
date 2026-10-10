@@ -161,16 +161,30 @@ class ListeningState:
         return self._clock() < self._hold_until
 
     def window_open(self) -> bool:
+        """Is Era in conversation, or must the next sentence carry her name?
+
+        The timeout applies ONLY while media plays. That is the entire reason
+        this gate exists -- lyrics and video dialogue reaching Gemini, and
+        Era's reply to one re-opening the window for the next (2026-10-10).
+
+        With nothing playing there is no such speech to protect against, and
+        letting the window lapse after 45 s of quiet meant Era ignored the
+        owner's FIRST sentence every time and had to be addressed by name to
+        wake up -- a real, constant cost for a risk that is not present. What
+        remains in a silent room (talk meant for someone else) is what the
+        owner voice gate and the wake word are for, and both still apply.
+        """
         window = get_listening_config()["attention_window_s"]
         if window <= 0:
             return True  # the rule is switched off
-        last = self._last_activity
         try:
-            if self._media_active():
-                last = self._last_explicit  # media: only a deliberate address counts
+            media = self._media_active()
         except Exception:
-            pass
-        return self._clock() - last <= window
+            media = False  # unsure: listen, like the rest of this module
+        if not media:
+            return True
+        # Media: only a deliberate address counts, and it expires.
+        return self._clock() - self._last_explicit <= window
 
 
 class AttentionGate:

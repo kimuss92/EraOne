@@ -74,10 +74,42 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
+_DEVICE_OVERRIDE: int | None = None
+
+
+def recording_device():
+    """The microphone to enrol on: --device, else the one Era listens with.
+
+    The docstring's "record with the mic you normally use" used to be left to
+    the operator, and on 2026-10-10 it silently stopped being true: connecting
+    the Star Glass glasses moved Windows' default input to their Bluetooth mic
+    while this profile had been built on the Intel array. Era then scored her
+    own owner at 0.16-0.47 against a 0.488 threshold and went deaf to him.
+
+    So the rule is enforced instead of asked for: enrol on whatever
+    core/voice_input says Era will actually open. None means the system
+    default, for both, which keeps them in agreement either way.
+    """
+    if _DEVICE_OVERRIDE is not None:
+        return _DEVICE_OVERRIDE
+    try:
+        from core import voice_input
+
+        return voice_input.resolve_input_index()
+    except Exception:
+        return None
+
+
 def record(seconds: float) -> np.ndarray:
     import sounddevice as sd
 
-    audio = sd.rec(int(seconds * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="int16")
+    audio = sd.rec(
+        int(seconds * SAMPLE_RATE),
+        samplerate=SAMPLE_RATE,
+        channels=1,
+        dtype="int16",
+        device=recording_device(),
+    )
     sd.wait()
     return audio.reshape(-1).astype(np.float32) / 32768.0
 
@@ -270,12 +302,45 @@ def cmd_enroll(settings: dict, wake_reps: int) -> int:
     return 0
 
 
+def _announce_microphone() -> None:
+    """Say which microphone this profile is being built on, and warn if narrow.
+
+    A profile is only valid for the mic it was recorded on, so the operator
+    must be able to see -- before speaking a word -- that it is the right one.
+    """
+    try:
+        import sounddevice as sd
+
+        index = recording_device()
+        info = sd.query_devices(index if index is not None else sd.default.device[0])
+        rate = int(info.get("default_samplerate") or 0)
+        where = f"device {index}" if index is not None else "system default"
+        print(f"Microphone: {info['name']!r} ({where}, {rate} Hz)")
+        if rate and rate <= 16000:
+            print(
+                "  Note: a narrowband Bluetooth headset mic. Fine to enrol on -- "
+                "but this profile will then only fit THIS mic, so re-run this "
+                "tool if you go back to the laptop microphone."
+            )
+    except Exception as e:  # never block enrolment over a cosmetic line
+        print(f"Microphone: could not be identified ({e}).")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--wake-reps", type=int, default=5)
+    ap.add_argument(
+        "--device",
+        type=int,
+        default=None,
+        help="PortAudio input index to enrol on (default: the mic Era listens with)",
+    )
     args = ap.parse_args()
+    global _DEVICE_OVERRIDE
+    _DEVICE_OVERRIDE = args.device
+    _announce_microphone()
     settings = load_settings()
     if args.check:
         return cmd_check(settings)

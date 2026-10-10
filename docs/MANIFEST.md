@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**326 source modules** · 119,292 lines · 200 test modules · 57 declared tools · 57 registered actions
+**326 source modules** · 119,371 lines · 200 test modules · 57 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 

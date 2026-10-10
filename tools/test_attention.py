@@ -54,9 +54,16 @@ def _config(monkeypatch, tmp_path):
 
 
 def _closed_gate(text: str, after: int = 3):
+    """A gate in its CHECKING state -- the only state that inspects words.
+
+    Media must be playing: since 2026-10-11 that is the sole condition under
+    which the window closes. With nothing playing the window never lapses, so
+    Era answers the owner's first sentence without being named (she used to
+    ignore it and have to be woken by name, which is what that changed).
+    """
     clock = Clock()
-    state = ListeningState(clock=clock)
-    clock.t += 60  # well past the 20 s window: only named speech gets through
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60  # well past the window: only named speech gets through
     events = []
     gate = AttentionGate(state, lambda: FakeRec(text, after), lambda k, h: events.append((k, h)))
     return gate, state, clock, events
@@ -89,13 +96,38 @@ def test_inside_the_window_speech_passes_untouched():
 
 def test_the_window_closes_after_its_length_and_reopens_on_activity():
     clock = Clock()
-    s = ListeningState(clock=clock)
+    s = ListeningState(clock=clock, media_active=lambda: True)
     clock.t += 44.5
     assert s.window_open()
     clock.t += 1.0
     assert not s.window_open()
-    s.note_activity()
+    # During media only a deliberate address re-opens it, or Era's reply to a
+    # lyric would re-open it for the next lyric (the loop of 2026-10-10).
+    s.note_activity(explicit=True)
     assert s.window_open()
+
+
+def test_with_nothing_playing_the_window_never_lapses():
+    """Era must answer the owner's FIRST sentence, however long the silence.
+
+    The timeout used to apply with no media too, so after 45 s of quiet Era
+    ignored whatever was said next and had to be woken by name -- a constant
+    cost to protect against lyrics that were not playing. What guards a silent
+    room is the owner voice gate and the wake word, not this.
+    """
+    clock = Clock()
+    s = ListeningState(clock=clock)
+    clock.t += 36_000  # ten hours
+    assert s.window_open()
+
+
+def test_a_gate_with_no_media_passes_unnamed_speech_without_checking():
+    gate = AttentionGate(
+        ListeningState(clock=Clock()),
+        lambda: pytest.fail("a silent room must not cost a name check"),
+    )
+    frame = _speech()
+    assert gate.feed(frame) == [frame]
 
 
 def test_named_speech_is_held_then_sent_whole_and_in_order():
@@ -224,8 +256,8 @@ def test_local_loop_ignores_speech_not_meant_for_era():
     from app.era_live.local_fallback import LocalFallbackMixin
 
     clock = Clock()
-    state = ListeningState(clock=clock)
-    clock.t += 60
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60  # media + past the window: the gate inspects words
 
     class Era(LocalFallbackMixin):
         def _listening_state(self):
@@ -256,8 +288,8 @@ def test_a_near_miss_heard_as_era_at_low_confidence_is_not_her_name():
     "Error in the report" reached 0.87: at the 0.80 bar that rare case passes, a
     deliberate trade so a real "Era" through music (0.85) is never refused."""
     clock = Clock()
-    state = ListeningState(clock=clock)
-    clock.t += 60
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60  # media + past the window: the gate inspects words
     events = []
     gate = AttentionGate(
         state, lambda: ConfRec([("era", 0.51), ("era", 0.66)]), lambda k, h: events.append((k, h))
@@ -269,8 +301,8 @@ def test_a_near_miss_heard_as_era_at_low_confidence_is_not_her_name():
 
 def test_a_confident_era_is_her_name():
     clock = Clock()
-    state = ListeningState(clock=clock)
-    clock.t += 60
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60  # media + past the window: the gate inspects words
     events = []
     gate = AttentionGate(
         state, lambda: ConfRec([("era", 0.95), ("[unk]", 0.54)]), lambda k, h: events.append((k, h))
