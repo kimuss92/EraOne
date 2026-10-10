@@ -70,7 +70,7 @@ from app.wake import (  # noqa: F401  (re-export: preserves public + internal na
     WakeWordConfig,
     init_vosk,
 )
-from core.cancel_registry import CURRENT_TOKEN, REGISTRY
+from core.cancel_registry import CURRENT_TOKEN, REGISTRY, run_with_grace
 from core.confirmation import ConfirmationManager
 from core.confirmation_preview import (
     ANNOUNCED_KEY,
@@ -156,6 +156,34 @@ _CANCEL_DISCARD = (
     "had already started may be half-done. Do NOT retry it, do NOT report a result "
     "for it, and do NOT apologise at length -- the user already knows it stopped. "
     "If they gave a replacement instruction, that instruction is what matters now."
+)
+
+# How long a slow tool may hold the receive loop before it is detached and the
+# model answered. Keyed just above each tool's MEASURED median
+# (logs/task_trace-*.jsonl, 16 days, 2500+ calls), because these are bimodal:
+# spotify_control's median is 976 ms but its p90 is 10.8 s. A name-keyed
+# "always background" would ack over ~2000 pause/next/volume calls that already
+# return in under a second; a grace discriminates by what actually happened.
+_BG_GRACE_S: dict[str, float] = {
+    "self_improve": 0.5,  # median 28ms  / p90 4.6s  / max 68s
+    "code_helper": 1.0,  # median 3ms   / p90 61.6s / max 76s  (worst ratio)
+    "file_controller": 1.2,  # median 24ms  / p90 588ms / max 68s
+    "spotify_control": 1.5,  # median 976ms / p90 10.8s / max 57s
+    "netflix_control": 1.5,  # median 831ms / p90 13.7s / max 47s
+    "gmail_control": 1.5,  # median 920ms / p90 7.6s  / max 61s
+    "web_search": 2.0,  # median 10.1s -- essentially always detaches
+    "file_processor": 2.0,  # median 5.8s  / p90 22.0s
+    "screen_process": 2.5,  # median 6.3s  / p90 30.7s
+}
+
+# Model-facing text for a tool that outlived its grace. It must not let the
+# model invent an outcome: the real one is spoken later by _deliver_tool_outcome
+# through the reconnect-surviving path, exactly as the crew lane does.
+_BG_ACK_TEMPLATE = (
+    "Started: {label}. It is STILL RUNNING and has not finished. Tell the user "
+    "briefly that you are on it. Do NOT claim a result, do NOT guess what it "
+    "found, and do NOT call this tool again for this request -- the real "
+    "outcome is reported to the user automatically the moment it completes."
 )
 
 _PROTOCOL_ONE_COMMAND = re.compile(r"\blaunch\s+protocol\s+(?:one|1)\b", re.IGNORECASE)
@@ -1047,19 +1075,52 @@ class ToolDispatchMixin:
         # Counted rather than a bool — tool batches can overlap.
         self._tools_in_flight = getattr(self, "_tools_in_flight", 0) + 1
         result = None
+        detached = False
         try:
-            result = await self._execute_tool_result(fc)
+            # ── Slow tools: answer within the grace, then detach ────────────
+            # Awaiting a slow tool here keeps `async for ... session.receive()`
+            # suspended, so nothing the owner says is READ BACK until it
+            # returns. That is exactly why a mid-task correction was
+            # impossible: her words reached Gemini, but the reply could not be
+            # processed and the abort check on the partial transcript could not
+            # fire. Detaching the slow ones keeps the socket draining, which is
+            # what lets "no, I meant the next track" land while the wrong
+            # search is still running. Fast calls never reach the deadline, so
+            # nothing about them changes.
+            grace = self._background_grace(name, hud_args)
+            if grace is None:
+                result = await self._execute_tool_result(fc)
+            else:
+                finished, result, task = await run_with_grace(self._execute_tool_result(fc), grace)
+                if not finished:
+                    detached = True
+                    REGISTRY.attach_task(hud_call, task)
+                    self._spawn_background_deliver(fc, hud_call, hud_args, task)
         finally:
+            # Released even when detached: this counter only protects the tool
+            # RESPONSE from a GoAway closing the socket under it, and the ack
+            # below is that response. Holding it for a 60 s detached job would
+            # block session renewal for a minute.
             self._tools_in_flight = max(0, getattr(self, "_tools_in_flight", 1) - 1)
             CURRENT_TOKEN.reset(token_reset)
-            REGISTRY.finish(hud_call)
-            if result is None:  # raised or was cancelled: never leave the row "running"
-                hud.tool_finished(
-                    hud_call,
-                    name,
-                    hud_args,
-                    ToolResult(success=False, error="No result (raised or cancelled)"),
-                )
+            if not detached:
+                REGISTRY.finish(hud_call)  # the worker retires a detached one
+                if result is None:  # raised/cancelled: never leave the row "running"
+                    hud.tool_finished(
+                        hud_call,
+                        name,
+                        hud_args,
+                        ToolResult(success=False, error="No result (raised or cancelled)"),
+                    )
+
+        if detached:
+            if not self.ui.muted and not self._standby_active:
+                self.ui.set_state("LISTENING")
+            return build_function_response(
+                fc,
+                ToolResult.ok(message=_BG_ACK_TEMPLATE.format(label=name)),
+                types.FunctionResponse,
+            )
 
         # ── Soft cancel: the owner abandoned this while it ran ──────────────
         # Most tool bodies sit in run_in_executor, a thread Python cannot
@@ -1153,6 +1214,127 @@ class ToolDispatchMixin:
         return build_function_response(fc, result, types.FunctionResponse)
 
     # ── Crew: run off the receive loop, report the real outcome ─────────────
+    def _background_grace(self, name: str, args: dict) -> float | None:
+        """Seconds this tool may hold the receive loop, or None to stay inline.
+
+        None for every case where an ack is the wrong answer -- a later step,
+        another lane or the batch itself needs the REAL result, not a promise.
+        """
+        grace = _BG_GRACE_S.get(name)
+        if grace is None:
+            return None
+        from app.era_live.tool_batch import HALTING_TOOLS
+
+        if name in HALTING_TOOLS:
+            return None  # tool_batch decides what runs next from the real result
+        try:
+            from core.task_scheduler import current_task
+
+            if current_task.get() is not None:
+                return None  # a scheduled chain: a later step consumes this
+        except Exception:  # noqa: BLE001 — no scheduler context means the live path
+            pass
+        try:
+            from app.era_live.autopilot import LOCAL_EXECUTION
+
+            if LOCAL_EXECUTION.get():
+                return None  # autopilot awaits with wait_for(...,30) and reads .message
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._pending_cm_ask_active() or self._cm_handoff_active():
+                return None  # the CM holds must not be skipped by an ack
+        except Exception:  # noqa: BLE001
+            pass
+        if getattr(self, "ui", None) is not None and self.ui.muted:
+            return None  # nobody to deliver the later outcome to
+        if getattr(self, "_standby_active", False):
+            return None
+        return grace
+
+    def _spawn_background_deliver(self, fc, hud_call: str, hud_args: dict, task) -> None:
+        """Finish a detached tool: close its HUD row and report the real outcome.
+
+        The same shape as _start_background_crew_ask, generalised. The HUD row
+        stays *running* until the true result lands, so the panel never shows a
+        premature success, and the trace line keeps the inline path's fields.
+        """
+        name = fc.name or "unknown"
+        user_text = getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", "")
+        # Consume the router's crumbs now, or they leak onto the next call.
+        routed = getattr(self, "_trace_routed", None) or (name, dict(hud_args))
+        safety = getattr(self, "_trace_safety", None)
+        self._trace_routed = self._trace_safety = None
+
+        async def _worker() -> None:
+            try:
+                result = await task
+            except asyncio.CancelledError:
+                # Explicit: CancelledError does not inherit from Exception, and
+                # a cancel is an ordinary outcome here, not a crash to log.
+                result = ToolResult.fail(
+                    message="Cancelled.", error="Cancelled.", error_type="Cancelled"
+                )
+            except Exception as exc:  # noqa: BLE001 — a crash is still an outcome
+                result = ToolResult.fail(
+                    message=f"{name} failed: {type(exc).__name__}",
+                    error=f"{name} failed: {type(exc).__name__}",
+                    error_type="BotError",
+                )
+            finally:
+                REGISTRY.finish(hud_call)
+            if not isinstance(result, ToolResult):
+                result = ToolResult.from_any(result)
+
+            if REGISTRY.is_cancelled(hud_call):
+                print(f"[era] [CANCEL] Discarding {name}: cancelled while detached.")
+                self._trace_cancelled_call(name, fc, result)
+                return
+            try:
+                hud.tool_finished(hud_call, name, hud_args, result, routed_to=routed[0])
+            except Exception as e:  # noqa: BLE001 — the HUD never breaks the report
+                print(f"[era] [BG] HUD finish skipped: {e}")
+            try:
+                from core.task_trace import trace
+
+                trace(
+                    "tool",
+                    app="era",
+                    user_text=user_text,
+                    requested=name,
+                    requested_args=hud_args,
+                    tool=routed[0],
+                    args=routed[1],
+                    safety=safety,
+                    ok=bool(result.success),
+                    error_type=result.error_type,
+                    result=result.short_message(300),
+                    duration_ms=result.duration_ms,
+                    verification=result.verification_status,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            self._deliver_tool_outcome(name, result)
+
+        self._spawn_background_task(_worker(), f"bg-{name}")
+
+    def _deliver_tool_outcome(self, name: str, result: ToolResult) -> None:
+        """Speak a detached tool's real outcome -- success OR failure.
+
+        Through the reconnect-surviving path, so a result is never swallowed
+        because the session rotated while the work ran, and the HUD and Era can
+        never disagree about what happened.
+        """
+        if result.success:
+            spoken = result.short_message(600).strip() or "Done."
+        else:
+            reason = result.short_message(300).strip() or (result.error_type or "no reason given")
+            spoken = f"That didn't finish, sir. {reason}"
+        try:
+            self._deliver_or_queue_cm_report(spoken, verbatim=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[era] [BG] could not deliver the {name} outcome: {e}")
+
     def _crew_ask_should_background(self, name: str, args: dict) -> bool:
         """True for a crew `ask` that should run as a background task.
 

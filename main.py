@@ -683,6 +683,19 @@ class EraLive(
             self.trigger_abort("typed", text)
             return
 
+        # "cancel that" / "no, I meant X" while something is running. BELOW the
+        # abort (which outranks it) and above everything else, because a
+        # correction must beat normal routing -- otherwise the replacement
+        # command is read as a fresh request while the wrong task still runs.
+        # Inert when nothing is in flight, so it cannot shadow ordinary speech.
+        # getattr, not a direct call: this is an enhancement on top of routing,
+        # and a partial Era (the stubs several tests build) must still route.
+        _correct = getattr(self, "_cancel_or_correct", None)
+        if _correct is not None and _correct(text, source="typed"):
+            self._note_user_utterance(text)
+            self.ui.write_log(f"You: {text}")
+            return
+
         # === "reboot Era One", TYPED (desk or Telegram) ===
         # First, and needing no session: a reboot is for when Era is lagging or
         # half-broken, which is exactly when the model may not be reachable.

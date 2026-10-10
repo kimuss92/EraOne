@@ -855,6 +855,15 @@ class AudioIOMixin:
                                 # backstop below is free to fire too.
                                 if self._is_abort_order(self._inflight_user_text):
                                     self.trigger_abort("voice", self._inflight_user_text)
+                                # "no, I meant the next track" while a task is
+                                # running. Reachable mid-task only because the
+                                # slow tools now detach (_background_grace);
+                                # while one was awaited inline this loop stayed
+                                # suspended and nothing here could fire.
+                                else:
+                                    self._cancel_or_correct(
+                                        self._inflight_user_text, source="voice", partial=True
+                                    )
 
                         # Gemini's own end-of-speech mark on the input transcript:
                         # the user stopped talking, the answer is now pending.
@@ -917,6 +926,12 @@ class AudioIOMixin:
                                 # an abort must never be escalated to a restart.
                                 if self._is_abort_order(full_in):
                                     self.trigger_abort("voice", full_in)
+                                # Turn-end backstop for a correction split
+                                # across partial chunks. Idempotent: the token
+                                # is already gone if the mid-turn check caught
+                                # it, so this is a no-op in the common case.
+                                elif self._cancel_or_correct(full_in, source="voice"):
+                                    pass
                                 # "reboot Era One" — acted on from the transcript,
                                 # not left to the model, which may have heard
                                 # "reboot" as the computer. No-op if the model's
