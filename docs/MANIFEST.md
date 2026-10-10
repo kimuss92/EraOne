@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**325 source modules** · 119,124 lines · 199 test modules · 57 declared tools · 57 registered actions
+**326 source modules** · 119,292 lines · 200 test modules · 57 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
@@ -132,7 +132,7 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `app/era_live/__init__.py` | 2 | EraLive behavioral mixins (extracted from main.py). |
-| `app/era_live/audio.py` | 1511 | Audio I/O loops for EraLive (extracted from main.py). |
+| `app/era_live/audio.py` | 1521 | Audio I/O loops for EraLive (extracted from main.py). |
 | `app/era_live/audio_output.py` | 292 | Self-healing speaker output for Era's Live voice. |
 | `app/era_live/autopilot.py` | 239 | Run the lane router's offline lanes before any Gemini request or local brain turn. |
 | `app/era_live/cancel.py` | 159 | Cancel one task that is already running (model in core/cancel_registry.py). |

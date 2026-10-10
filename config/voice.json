@@ -1,4 +1,5 @@
 {
   "mode": "gemini_audio",
-  "gemini_voice": "Ario"
+  "gemini_voice": "Ario",
+  "voice_input": "Microphone Array"
 }

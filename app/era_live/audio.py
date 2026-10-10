@@ -28,6 +28,7 @@ from app.text_intents import (
     is_drop_request,
     is_resume_request,
 )
+from core import voice_input
 from core.logger import log_crash, log_event, main_logger
 from core.mic_mute import is_mic_off_order
 from core.vad import fade_out_pcm
@@ -610,14 +611,23 @@ class AudioIOMixin:
         retry_delay = 1.0
         while not self._go_away_event.is_set() and not self._shutdown_requested:
             try:
+                # WHICH microphone, deliberately. With no pin this resolves to
+                # None -- the system default, exactly as before. The pin exists
+                # because connecting the Star Glass glasses moves Windows'
+                # default INPUT to their 8 kHz Hands-Free mic, which no longer
+                # matches the owner voiceprint enrolled on the 48 kHz array; the
+                # fail-closed gate then turned every utterance into silence and
+                # Era answered "<no speech detected>". See core/voice_input.py.
+                mic_index = voice_input.resolve_input_index(sd)
                 with sd.InputStream(
                     samplerate=SEND_SAMPLE_RATE,
                     channels=CHANNELS,
                     dtype="int16",
                     blocksize=CHUNK_SIZE,
+                    device=mic_index,
                     callback=callback,
                 ) as stream:
-                    print("[era] [MIC] Mic stream open")
+                    print(f"[era] [MIC] Mic stream open ({voice_input.status(sd)})")
                     retry_delay = 1.0
                     while not self._go_away_event.is_set() and not self._shutdown_requested:
                         if getattr(stream, "active", True) is False:
