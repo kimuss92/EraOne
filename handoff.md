@@ -8,6 +8,226 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-10 (17:20) · Gemini Live uses ONLY its 30 voices; library voices were a silent swap
+- **Karim:** "Finn is male in AI Studio but female in Era". He wants all AI Studio voices, a drop-down, and immediate effect.
+- **Measured (voice pitch, autocorrelation F0):**
+  - gemini-3.8-live: Charon 109 Hz, Kore 200 Hz; "Finn" 220 Hz, "en-us-finn" 202 Hz, "Arlo" 207 Hz, "en-us-arlo" 200 Hz.
+  - gemini-3.8-flash-tts: "Finn" 113 Hz, "en-us-finn" 124 Hz.
+  - So Live ACCEPTS library names (and ids, from `GET /v1beta/voices`) but speaks a default female voice. The earlier "Arlo accepted" was wrong: accepted is not used.
+  - The TTS model (AI Studio's page) does use them, but returned 429 quota after a few calls, so per-sentence TTS is not viable on the free tier.
+- **Changes:**
+  - `core/voice_mode.py`: only the 30 Live voices (`GEMINI_VOICES` + `GEMINI_VOICE_GENDER` from Google's voices list; Kore measured). `set_gemini_voice` refuses others. `gemini_voice_name` falls back to Algenib. `gemini_voice_view` adds `gemini_voice_note` explaining a library-name fallback. `GEMINI_LIBRARY_VOICES` removed.
+  - `main.apply_gemini_voice_now`: applies at once when idle, else a daemon waiter renews the moment Era is idle (<=2 min).
+  - HUD: Settings → VOICE is a `<select>` grouped Male (16) / Female (13) / Neutral (1), "Name — Style". Selecting applies immediately. Backup `.phase7_backups/hud-gemini-voice-dropdown-20261010/`.
+- **Verified:** 101 passed (voice_mode + HUD); tsc clean; HUD built. `config/voice.json` currently "Cleo" → Algenib with an explanation (Karim to pick a Live voice).
+
+### 2026-10-10 (16:55) · HUD voice picker is now a click list
+- Karim: pick the voice without typing.
+- Settings → VOICE is a radio list:
+  - "YOUR AI STUDIO PICKS" (Arlo, Cleo, Finn: `core/voice_mode.GEMINI_LIBRARY_VOICES`, each live-tested on 3.8);
+  - then the 30 CLASSIC VOICES with their style words.
+- A click saves (applies at the next reconnect); **Apply now** reconnects when idle. "Other AI Studio voice name…" stays as a collapsed field.
+- The view moved to `voice_mode.gemini_voice_view()`, so `app/hud/api.py` is 485 lines (it was 501 > 500).
+- HUD rebuilt (tsc clean). Backup: `.phase7_backups/hud-gemini-voice-radio-20261010/`. 100 passed. Era restart needed for the backend list.
+
+### 2026-10-10 (16:40) · Standby lines in Era's own words; Gemini voice picker in the HUD
+- **Standby lines:** the fixed "System offline." / "Era One online." are replaced by `main.EraLive.speak_brief(situation, fallback)`.
+  - With a session, a note goes INTO it in every voice mode: own words, ONE sentence of at most six words, never the wake word (WAKE_CFG.word + aliases are named only so the model avoids them), no question, no tool.
+  - With no session, a literal fallback ("Going quiet, sir." / "I'm here, sir.").
+  - Used by `enter_standby` and `_resume_from_standby`. Telegram notices still use `_RESUME_ACK` (text, not spoken).
+- **HUD voice picker** (Settings → VOICE): a free-text field with the 30 classic voices as suggestions (any AI Studio library name works on 3.8), plus **Save** and **Save & apply now**, and an Active/refused line.
+  - Backend: `/api/settings` GET adds `gemini_voice`, `gemini_voice_active`, `gemini_voices`. POST accepts `gemini_voice` → `core/voice_mode.set_gemini_voice()` (validated `^[A-Za-z][A-Za-z' -]{0,39}$`, keeps the other `voice.json` keys, clears a past refusal) + optional `apply_voice`.
+  - Apply now: `EraLive.apply_gemini_voice_now()` takes the planned-renewal reconnect (resumption keeps the conversation), only when idle. Otherwise it applies at the next routine renewal.
+- **HUD rebuilt** (`npm run build`, tsc clean). Backup: `.phase7_backups/hud-gemini-voice-20261010/`.
+- **Verified:**
+  - real `HudApi` on a temp server: GET 200 (30 voices), POST Arlo saved, POST "<script>" 400 with the file untouched;
+  - live: 3.8 accepts "Finn" (Karim's current choice);
+  - tests: 6 new; the voice/HUD/standby/attention set passes. Era restart needed.
+
+### 2026-10-10 (16:10) · Era interrupted herself on PC speakers: adaptive echo floor
+- **Log:** at 15:50:49 output moved to the PC speakers (Realtek). Then 6 `[BARGE-IN] User interrupted` in 2 min with nobody speaking. Each cut her off, and the mic heard her tail as the user ("¿Qué", "sorry").
+- **Cause:** `BargeInDetector`'s only guards were a fixed 0.05 floor + webrtcvad + 150 ms. Her echo through open speakers IS loud speech.
+- **Fix (`core/vad.py`):** an adaptive echo floor. An interruption must be `echo_factor` (default 2.0, about 6 dB; config `barge_in.echo_factor` / `ERA_BARGE_IN_ECHO`; 0 = off) times the 90th percentile of her echo over the last ~2 s, seeded in the onset grace.
+  - Loud frames are held as a burst awaiting a verdict: if it fires, they are discarded; if it dies out, it was her syllable and joins the echo history. Committing them immediately made a real interruption impossible (caught by `test_detector_fires_on_loud_capture`).
+  - On glasses/headset the echo is tiny, so the 0.05 floor rules as before.
+- **Tests:** 5 new. Speaker echo for 4 s never fires; the user over the echo fires in <=3 buffers; headset unchanged; echo_factor 0 reproduces the self-interrupt. 35/35 barge-in tests pass.
+- **Owed:** Era restart; live check on the speakers. If it still self-interrupts, raise echo_factor to 3; if Karim must shout, lower it to 1.5.
+
+### 2026-10-10 (16:00) · Era's Live brain moved to gemini-3.8-live, voice "Arlo"
+- **Why:** Karim chose "Arlo" from AI Studio's voice library. `gemini-3.1-flash-live-preview` refused it (1007 "No matching speaker voice found"); `gemini-3.8-live` accepts it (and Cleo, Charon).
+  - First, the voice.json typo "Ario" was fixed to "Arlo".
+- **Cost / limits checked before switching:** same price row on ai.google.dev/pricing (free tier; paid $0.75/$3 in, $4.50/$12 out per 1M). The rate-limits page has no Live numbers, but says preview models are more restricted and limits are per project, not per key. The Extended Thinking variant was avoided (slower).
+- **Changes:**
+  - `config/llm.yaml` `era.voice.model`: `models/gemini-3.8-live`, with a rollback comment. `main.LIVE_MODEL` fallback matches. The registry display "Gemini 3.8 Live".
+  - `gemini_voice_name()` passes any library name through (the classic 30 get canonical spelling).
+  - A 1007 voice refusal: `main._voice_refused()` → `reject_gemini_voice()`; default Algenib for this run, a HUD line, and a quick reconnect instead of the slow "config rejected" path. The default itself being refused stays a config error (no loop).
+- **Live-verified on 3.8 with Era's prompt + 57 tools + Arlo:**
+  - connect 1.5 s;
+  - "pause the music" → media/spotify tool, then spoke "Music paused." (1.42 s);
+  - volume → computer_settings, "Volume adjusted." (1.25 s);
+  - chat "I am well, thank you, sir." (first audio 1.36 s).
+  - Note: `session.receive()` ends at each turn_complete; Era's loop re-enters it, and a test harness must too.
+- **Verified:** 744 passed across 18 voice files (+2 refusal tests); ruff clean. **Owed:** Era restart; full suite with Era stopped; watch `voice.verify`/quota on 3.8.
+
+### 2026-10-10 (15:30) · Gemini's voice is now a setting
+- Decision: Gemini Live is the main voice (speed, interactivity). Fish and Kokoro are fallbacks on a connection drop, or on request.
+- Was hard-coded `voice_name="Algenib"` in `tool_dispatch.py`. Now `config/voice.json` `"gemini_voice"` is read by `core/voice_mode.gemini_voice_name()`:
+  - 30 names from ai.google.dev (Live native audio accepts all TTS voices);
+  - case-insensitive;
+  - an unknown name falls back to Algenib.
+- It applies at the next connect (restart/reconnect); there is no language code for native audio.
+- 5 new tests (98 passed in voice_mode/toolspec/tts_fish). Not committed.
+
+### 2026-10-10 (15:15) · Voice lock off (Karim's choice); Gemini gets time before any fallback
+- **Live (15:00-15:08):** after restart the voice lock passed Karim in Kokoro mode (3/3) and Gemini (13/13). Then 15:04-15:07 it refused 9/10 (0.28-0.48 vs 0.49), right after a Spotify track change, with music on all session. Not mode-specific.
+  - The verify log keeps only scores, so the cause (likely vocal music) is unproven.
+  - Karim turned the lock OFF ("annoying"). It persists; nothing changed in code.
+- **Attention window:** independent of the voice lock, stays active (45 s, name or wake word after that).
+- **Gemini gets more time** (Karim: "fallback only if gemini voice fail totally"):
+  - `routing.claude_voice` gains `deaf_after_s` 30 / `mute_after_s` 60 / `flaky_errors` 6 (code defaults 12 / 25 / 3, unchanged). `main._build_live_health()` builds `LiveHealth` from them; a bad config value keeps the defaults.
+  - `routing.local_fallback.upstream_after_failures` 2 → 0: hand over only after ALL reconnect retries. Internet down still hands over at once ("network").
+- **Verified:** 337 passed (3 new tests); values load as 30/60/6 and 0. Era restart needed (read at startup).
+
+### 2026-10-10 (15:00) · "Voice lock ignores me" was the ATTENTION WINDOW, not the voice lock
+- **Logs 14:49-14:53 local:**
+  - The voice lock accepted Karim ~12/13 times (match 0.56-0.70 >= 0.49; one 0.47 miss). Plus 2 "short utterance ignored" from its 8 s follow-up rule.
+  - The new attention gate dropped his real sentences ("Can you hear me?", "Why you took so long to answer me?").
+- **Three faults, mine:**
+  1. The 20 s window counted from Era's last words and ran out mid-conversation (14:50:08, 33 s after her reply).
+  2. Local-mode replies (`_local_play_locked`) never reopened it, so it expired right after she answered.
+  3. `live_health.note_voice` measured the RAW mic before both gates. Speech the gate silenced looked like "heard the user, no answer for 25 s", which triggered the Claude rescue at 14:51:10 (the slow replies). Same latent bug for strangers refused by the voice gate.
+- **Fixes:**
+  - The window is 45 s and stays open while Era is busy (PROCESSING, local turn running, local speaking, pending confirmation).
+  - Local replies refresh it.
+  - `_note_sent_voice` feeds live_health only the frames actually SENT (after both gates).
+- **Verified:** 778 passed across 21 voice/mic/gate files (8 new attention tests); ruff clean. The full suite is owed when Era is stopped. Era restart needed.
+
+### 2026-10-10 (14:30) · Voiceprint re-enrolled; full suite green
+- **Enrollment:** Karim re-enrolled at 14:06: 11 samples, thresholds command 0.49 / wake 0.51 (were 0.44 / 0.48). The old profile is kept as `speaker_profile.json.bak-20261010-140657`. Voice lock is still OFF until Karim says "turn on voice lock".
+- **First full run: 1 failure, mine.** `_on_text_command` called `self._listening_state()` directly, and an engine without it (the autopilot test's fake) crashed the whole typed-command path.
+  - Now the module-level `main._note_listening()` guards both hooks (typed command, speaking edge). A listening hook can never break a command or the speaking state.
+- **Final:** full `pytest tools/` → **6,271 passed, 1 skipped, 0 failed** (15:31). The voice.json watcher saw 0 writes. `ruff check .` clean, manifest 322 modules, `main.py` has no BOM.
+- **Owed:** Karim starts Era and says "turn on voice lock"; check the new pass rate from `voice.verify` and `attention.*` after a day of use. Nothing committed.
+
+### 2026-10-10 · Three voices only, no self-answering, and an attention window
+Karim: "keep only gemini fish audio and kokoro no piper"; Era answered herself / media in Kokoro mode; "a system to ignore organic noise and self talk or if i talk to someone on phone". Decisions (asked): attention window; re-enroll the voiceprint, then turn the gate on.
+
+- **Piper removed.**
+  - `core/local_tts.py` is Fish -> Kokoro -> text only (French with Fish down = text, never George). `available()` = Kokoro installed or Fish configured.
+  - Kokoro now warms at EVERY startup (it is the only offline voice).
+  - Updated: the bench tool and the cascade "switch to piper" phrase.
+  - Model files `models/local_voice/tts` (156 MB) are still on disk; deletion is Karim's call.
+- **Echo hold (cause of "answers herself").** The mic reopened the instant Era's last chunk was HANDED to the sound card, while ~0.2-0.5 s of it still played (buffer, Bluetooth, reverb).
+  - `set_speaking(False)` now starts a 700 ms hold (`core/attention.py`), with none after a barge-in.
+  - The `_listen_audio` callback drops frames during the hold.
+- **Attention window (`core/attention.py`, new).**
+  - 20 s after the last exchange, speech flows freely. After that, an utterance reaches Gemini only if its first words are "era" or the wake word ("shazam"), checked locally by Vosk using the wake grammar plus decoys and SetWords confidence >= 0.90 (same bar as the wake word).
+  - Not addressed: zeros to Gemini. While closed, quiet frames are zeros too, so an earpiece never leaks.
+  - A pending confirmation keeps it open. Wake and typed commands reopen it.
+  - Wired after the voice gate in `_send_realtime`; the local loop applies `addressed_to_era` to its transcript (safety orders pass first). Fail-open: no Vosk = old behaviour.
+  - Events: `attention.accepted` / `attention.ignored`. HUD: one hint per quiet spell.
+  - Config: `voice.json` `"listening"`: echo_hold_ms, attention_window_s (0 = off), name_check_s, names, name_confidence.
+- **Measured on real speech** (Kokoro voice into the real Vosk model, 2 mic levels): **28/28 correct**. "Error in the report" decodes as era:0.51-0.61 and is now refused. Known pass-through: "Ira…", "Arab…" score era:1.00 (homophones).
+- **Narrated silence** ("Organic noise detected.", "Say nothing. Silence maintained.") is dropped in `sanitize_for_tts` (Fish/Kokoro modes only; Gemini's own audio cannot be filtered).
+- **Owner gate:** OFF (`voice_lock_enabled: false`). When it was on in late September: command 69% / wake 52% pass. The profile dates from 2026-09-17, before the glasses. **Owed:** Karim re-enrolls (`tools/enroll_speaker.py`), then the pass rate is checked in `voice.verify`, then he turns it on by voice.
+- **Verified:** 708 passed across 18 voice/mic files (33 new in `tools/test_attention.py`); `ruff check .` clean. The full suite needs Era stopped (lock).
+
+### 2026-10-10 · Kokoro "doesn't finish the phrase / doesn't speak" — three causes, all fixed
+- **Log review** (session 12:31): no Kokoro error, no fallback, and Kokoro on CUDA. The text was the problem.
+- **(1) French reached George.** At 12:40 Era answered in French while on Kokoro, and English-only George mangled it.
+  - Now `tts_kokoro.language_of()` returns `ar` for Arabic script, `fr` for >=2 French function words, else `en`.
+  - Non-English: `synthesize()` returns b"" ("not English") before any load, so the turn goes to Gemini's voice (same rule as Karim's Fish decision).
+  - The local loop uses the same judge, so French goes to Piper.
+- **(2) `_WORD` was A-Z only:** "tâche" became t+che, "Céramique" became C+ramique, "café" became caf, and "m²" lost the ².
+  - Now Unicode letters, and m²/m³/²/³ are spoken ("square metres").
+- **(3) Latent double voice.** After a Kokoro fallback, `tts_router` handed the queued sentences to Fish (any non-Kokoro mode meant Fish).
+  - Now Gemini mode is silent in the router. `test_router_stream_passes_through` now pins Fish mode explicitly.
+- **Known limit:** in a MIXED-language turn the Gemini fallback replays that turn's whole held audio, so English already spoken by George can repeat.
+- **Not changed:** the barge-in at 12:38:11 ("Shall I resume?" cut, 36 frames) may be the user or the mic hearing Era. Watch for cuts while Karim is silent.
+- **Verified:** 461 passed across 12 voice files; `ruff check .` clean. Era restart needed.
+
+### 2026-10-10 · Kokoro George too quiet: loudness levelled to Fish/Gemini
+- Karim: George is quiet even at maximum volume.
+- **Measured:** raw Kokoro speech RMS -20.5 dBFS with peaks -7..-9 dBFS. The Fish/JARVIS samples sit at -15.4..-17.0 dBFS. That is ~5 dB short, roughly half as loud.
+- **Fix:** `tts_kokoro.normalize_loudness()` brings each sentence's speech RMS (ignoring pauses) to `loudness_db`. The default is -15, set in `config/voice.json` `kokoro.loudness_db` and clamped to -30..-9. A tanh soft limiter keeps every peak under -1 dBFS; a plain multiply would clip. The boost is capped at +12 dB.
+- **Result** (Era's interpreter, GPU): speech -15.4 dBFS, peaks -2.1..-3.8 dBFS, synthesis time unchanged (358 ms "Yes, sir."). Sample: `runtime/voice_samples/kokoro_george_gpu_louder.wav`.
+- 4 new tests; 89 passed across the Kokoro, chaos and voice-mode files.
+- **Owed:** Era restart and a live listen.
+
+### 2026-10-10 (02:40) · Karim's live Kokoro test: 2 bugs found in the logs, plus 1 test leak
+- **Kokoro ran on the CPU inside Era** (`[KOKORO] loaded on CPUExecutionProvider`).
+  - Cause: Era runs under `…\AppData\Local\Python\pythoncore-3.14-64`, not `C:\Python314`. That Python has a CPU-only `onnxruntime` 1.30 (pulled in by faster-whisper), and it shadowed the GPU build appended from `D:\Kokoro\rt_gpu`.
+  - Fix: `core/tts_kokoro.install_gpu_runtime()` adds a meta-path finder that resolves ONLY the name `onnxruntime` to `rt_gpu`. ORT finds its NVIDIA DLLs relative to its own package. It is installed by `core/voice_mode` at import, before anything loads onnxruntime.
+  - Verified in Era's own Python: providers include CUDA; faster-whisper's VAD still loads on it; numpy/protobuf stay Era's own; "Yes, sir." 369 ms.
+  - It refuses (and logs) if a CPU onnxruntime was already imported.
+- **Words glued together** ("Kokorois active.What isthe nextobjective?"); pre-existing, also in Fish mode on 10-09.
+  - Cause: `_clean_transcript` `.strip()`s every streamed `output_transcription` chunk, and the word breaks sit at chunk EDGES. It also hid sentence ends ("active.What"), so SpeechOut could not split them, which made first audio later.
+  - Fix: `_clean_stream_chunk` (no strip) feeds the voice, and a whitespace-only chunk still feeds " ". The HUD/barge-in text path is unchanged.
+  - The replayed chunks reproduce the logged line exactly with the old cleaner.
+- **Test leak, mine:** `test_set_voice_to_a_warm_kokoro_switches_at_once` wrote the real `config/voice.json` to `kokoro_audio` in the full run, but not alone. Found with a diagnostic watcher plugin (scratchpad only). Its `_write` stub missed the config object an earlier test had swapped.
+  - Fix: autouse `conftest._isolate_voice_json` points `VOICE_CONFIG_PATH` at `tmp_path` for every test.
+  - `tts_kokoro._under_pytest()` now also checks `"pytest" in sys.modules`, since `PYTEST_CURRENT_TEST` is unset during collection, when the redirect would otherwise install in the test process.
+  - `voice.json` restored to `gemini_audio`.
+- The 02:17 `era_crash.log` entry is NOT a crash: `shutdown_era` by the user, clean exit 0.
+- Unused bench downloads in `D:\Kokoro`: the delete was blocked by the permission layer; Karim to run it.
+- First full suite after the Kokoro work: **6,225 passed, 1 skipped, 0 failed** (14:38). `ruff check .` clean. `ruff format --check` flags only Python snippets inside 2 `.md` docs that are not ours.
+
+### 2026-10-10 · Kokoro George is back: fast local voice on the GPU
+Karim: "use kokoro … keep male voice george … i want fast response … keep it outside voicebox".
+- **Why not Voicebox's own copy.** `D:\Voicebox` holds Kokoro's PyTorch weights plus one voice (`bm_george.pt`), and Era's Python has no torch. Voicebox's server measured ~1.4 s first audio at ~1x realtime (2026-07-29).
+- **Speed, measured on this laptop (i7-12700H, RTX 3070):**
+  - CPU is a dead end: int8 RTF 2.3-4.3, fp32 RTF 0.76-1.5, plain onnxruntime 1.31 RTF ~0.7.
+  - DirectML fails on the model's grouped `ConvTranspose`.
+  - **CUDA:** ~0.3 s for a short sentence, median 0.43 s, ~10x realtime, ~0.8 GB VRAM.
+  - cuDNN `HEURISTIC` search matters: `DEFAULT` doubled the median (888 ms) with a new length on every call.
+- **Installed outside Era's Python and outside Voicebox:**
+  - `D:\Kokoro\kokoro-multi-lang-v1_0`: sherpa-onnx's Kokoro v1.0 ONNX pack, SHA-256 verified against GitHub.
+  - `D:\Kokoro\rt_gpu` (1.9 GB): onnxruntime-gpu 1.31, CUDA 13 / cuDNN 9 wheels, espeakng-loader, phonemizer-fork.
+  - Also left behind from the bench, deletable: `rt_cpu`, `rt_dml`, the int8 pack, `_download`.
+- **`core/tts_kokoro.py` (new):** in-process engine. Text → tokens like misaki: the bundled British dictionary (192k words) first, espeak-ng for unknown words and numbers via misaki's own E2M table. George = speaker 26. Config `config/voice.json` `"kokoro": {voice, speed, provider, model_dir, runtime_dir}`.
+  - It never makes a sentence wait for its ~8-11 s load: `warm_in_background(on_done)`, inert under pytest.
+  - Through Era's real `SpeechOut`: **first audio 329-634 ms** (Fish ~750 ms + network).
+- **Local loop** (Gemini down): Fish → **Kokoro** (English, once warm) → Piper (French, floor). It warms with Piper in `_local_prepare`.
+- **New voice mode `kokoro_audio`** (Gemini brain, George's voice):
+  - Switch phrases: "switch to kokoro", "use your local/offline voice", "switch to george", typed or via `set_voice`.
+  - A switch to a cold Kokoro loads first and switches by itself; Era keeps her current voice meanwhile. It warms at startup when it is the saved voice.
+  - Fallback to Gemini's held audio as with Fish. The auto-restore now checks the readiness of the voice it returns TO; it used to check Fish whatever the target.
+- **Golden file** regenerated: the diff is exactly the 2 `set_voice` description lines, 57 tools. `test_voice_mode` updated for 3 modes (it pinned the 2026-09-16 removal). `main.py` still has no BOM.
+- **Verified:** 738 passed across 21 voice files (incl. 33 new in `tools/test_tts_kokoro.py`); `ruff check .` clean; manifest 321 modules.
+- **Open:**
+  - Era must be restarted to load the new code. `config/voice.json` is still `gemini_audio`: say or type "switch to kokoro" to make George the voice.
+  - Full suite with Era stopped; not committed. Live listen owed: `runtime/voice_samples/kokoro_george_gpu.wav`.
+
+### 2026-10-10 · Session 3 (Phase 2a): voice cascade bounded, visible, chaos-tested
+Backups: `.backups/20261010-004819-phase2a/`. Audit first: the cascade already existed,
+so it was tightened, not rebuilt.
+- **As built:** Fish mode = Fish → Gemini's held audio (`_tts_fallback`). Gemini Live down = local loop, Fish → **Piper**.
+  - Kokoro was removed on 2026-09-16. Piper (`core/local_tts.py`, sherpa-onnx, offline) is the floor; master prompt §4.5 allows "the project's existing local TTS backend".
+  - `s2.1-pro-free` is confirmed as the configured model (live, key never printed).
+- **Gap 1, fixed: a hung Fish meant 45 s of silence.** The only bound was `SYNTH_TIMEOUT_S = 45`.
+  - Now `connect` + `sock_read` are bounded by `STALL_TIMEOUT_S = 3.0` (config `fish_audio.stall_timeout_s`), covering first byte and every gap after it. The 45 s total stays as the ceiling for a long sentence.
+  - Replay of the pre-fix code against a hung server: **45.0 s → 3.0 s**.
+  - 2 s was tried first and **tripped on 1 of ~32 live requests**. A trip flips Era's voice to Gemini, hence 3 s.
+  - Live 2026-10-10, 21 cold requests: first audio p50 748 / max 1,099 ms; largest gap between chunks max 1,163 ms. Then 12/12 live requests at 3 s with 0 false trips. Fish's first audio today is about 2× yesterday's 337 ms; not investigated.
+- **Gap 2, fixed: Piper failing too was silent and invisible.** `synthesize_best` now returns `(b"", "none")`. `_local_play` writes one HUD line per outage: "SYS: Voice unavailable (…) - replying in text only."
+- **Gap 3, fixed: switches were prints only.** New structured events:
+  - `voice.fallback` (from_backend / to_backend / reason) for fish→gemini and fish→piper;
+  - `voice.unavailable` and `voice.restored`.
+
+  The fallback reason now carries Fish's real error (e.g. `HTTP 429`, `stalled …`). An empty HTTP 200 now records `empty response` (no cooldown).
+- **Chaos test `tools/test_voice_cascade_chaos.py` (18):** a real aiohttp client against a fake Fish on loopback.
+  - Reported failures (401/402/403/429/500/503/empty 200) fall through in **<1 s** with the right cooldown.
+  - Hang → cut at the deadline. Mid-stream stall keeps what played.
+  - Fish mode → Gemini takeover <1 s for 429 and for a 0.4 s-deadline hang.
+  - Local loop → Piper <1 s, the next sentence skips Fish with no request, and Piper failing too → text only, said once.
+- **Not under 1 s, honestly:** a refused connect takes **2.0 s** on Windows (it retries a refused loopback SYN). A silent hang costs the deadline (3 s). Gemini Live dropping → local loop is still 2 failed reconnects, which needs the live test (TODO 39).
+- **Verified:**
+  - ruff clean on the 6 files;
+  - 15 voice/fallback test files: **517 passed**;
+  - manifest regenerated (320 modules, 0 unparseable).
+- **Not run:** the full suite. Era was live and holds the test lock.
+- **Open:** full `pytest tools/` with Era stopped; nothing committed. Uncommitted `core/audio_devices.py`, `core/voice_output.py` and `tools/test_voice_media_persistence.py` (glasses voice re-assert, 2026-10-09 23:33) are another session's work, left untouched.
+
 ### 2026-10-09 (evening) · Fish speaks only speech; Era keeps working when Gemini drops
 Plan: `~/.claude/plans/what-you-suggest-to-hidden-kahn.md`. Backups: `.backups/20261009-step1`, `-step2`, `-voicemap`.
 
