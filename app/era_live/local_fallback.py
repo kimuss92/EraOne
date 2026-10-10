@@ -405,7 +405,10 @@ class LocalFallbackMixin:
             from core.attention import addressed_to_era
 
             state = self._listening_state()
-            if state.window_open() or self._attention_keep_open() or addressed_to_era(text):
+            if addressed_to_era(text):
+                state.note_activity(explicit=True)
+                return True
+            if state.window_open() or self._attention_keep_open():
                 state.note_activity()
                 return True
             return False

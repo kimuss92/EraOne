@@ -86,7 +86,7 @@ class ReconnectMixin:
         # next words need no name.
         listening = getattr(self, "_listening_state", None)
         if listening is not None:
-            listening().note_activity()
+            listening().note_activity(explicit=True)  # a wake is deliberate
         self._stop_wake_word_listener()
         # Discard any stale audio (e.g. a delayed pre-standby turn) so the
         # first thing the user hears on wake is the resume ack, not an echo.

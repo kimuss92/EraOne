@@ -45,9 +45,10 @@ DEFAULTS = {
     "name_check_s": 1.6,  # speech heard before the name check must decide
     "names": ["era"],  # always accepted, besides the wake word and its aliases
     # Vosk word confidence the name must reach. Measured 2026-10-10 on real
-    # speech: "Era ..." 0.95-1.00, "Error in the report" 0.51, "Errors" 0.67;
-    # the wake word uses the same 0.90 bar.
-    "name_confidence": 0.90,
+    # speech: "Era ..." 0.95-1.00 in quiet, "Error in the report" 0.51-0.61,
+    # "Errors" 0.61-0.67. Live with music on, a real "Era" scored 0.85 and the
+    # old 0.90 bar refused it; 0.80 still sits above every near-miss measured.
+    "name_confidence": 0.80,
 }
 _VOICE_JSON = Path(__file__).resolve().parent.parent / "config" / "voice.json"
 _END_SILENCE_S = 0.7  # this much quiet ends an utterance
@@ -135,6 +136,12 @@ class ListeningState:
         self._media_active = media_active or (lambda: False)
         self._hold_until = 0.0
         self._last_activity = clock()  # a fresh session starts in conversation
+        # The user deliberately addressed Era (her name, a wake, typing). While
+        # media plays ONLY this opens the window: Era's own replies must not keep
+        # it open, or a reply to a lyric re-opens it for the next lyric (the loop
+        # of 2026-10-10). Requiring her name on EVERY sentence instead made her
+        # deaf mid-conversation with music on (the next fix, same day).
+        self._last_explicit = clock()
 
     def era_finished_speaking(self, interrupted: bool) -> None:
         now = self._clock()
@@ -142,9 +149,13 @@ class ListeningState:
             self._hold_until = now + get_listening_config()["echo_hold_ms"] / 1000.0
         self._last_activity = now
 
-    def note_activity(self) -> None:
-        """An accepted utterance, a typed command or a wake: conversation is on."""
-        self._last_activity = self._clock()
+    def note_activity(self, explicit: bool = False) -> None:
+        """Conversation is on. explicit=True: the user addressed Era by name, by
+        typing or by waking her — the only kind that opens it during media."""
+        now = self._clock()
+        self._last_activity = now
+        if explicit:
+            self._last_explicit = now
 
     def echo_hold_active(self) -> bool:
         return self._clock() < self._hold_until
@@ -153,12 +164,13 @@ class ListeningState:
         window = get_listening_config()["attention_window_s"]
         if window <= 0:
             return True  # the rule is switched off
+        last = self._last_activity
         try:
             if self._media_active():
-                return False  # media playing: only her name gets through
+                last = self._last_explicit  # media: only a deliberate address counts
         except Exception:
             pass
-        return self._clock() - self._last_activity <= window
+        return self._clock() - last <= window
 
 
 class AttentionGate:
@@ -266,7 +278,7 @@ class AttentionGate:
         heard = " ".join(f"{w}:{c:.2f}" for w, c in words)
         if _named(words, _names(), get_listening_config()["name_confidence"]):
             self._on_event("accepted", heard)
-            self.state.note_activity()
+            self.state.note_activity(explicit=True)
             self.mode = IDLE if ended else PASSING
             return held  # the whole utterance so far, name included, in order
         self._on_event("ignored", heard)

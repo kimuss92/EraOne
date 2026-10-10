@@ -297,7 +297,7 @@ def _note_listening(era, what: str, interrupted: bool = False) -> None:
         if what == "finished":
             state().era_finished_speaking(interrupted=interrupted)
         else:
-            state().note_activity()
+            state().note_activity(explicit=True)  # typing to Era is a deliberate address
     except Exception as e:
         print(f"[ATTENTION] listening hook skipped: {type(e).__name__}: {e}")
 

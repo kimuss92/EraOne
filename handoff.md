@@ -8,6 +8,19 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-10 (17:45) · Music made Era deaf: a name opens a normal conversation
+- **Log 17:31-17:35:** with Spotify on, the attention gate ignored almost everything; the voice lock was off. Two causes:
+  1. My 17:40 media rule required her name on EVERY sentence, so follow-ups were ignored.
+  2. "era:0.85" through music was refused by the 0.90 bar.
+- **Fix:** `ListeningState` has an explicit-address clock (named utterance, wake, typed command).
+  - While media plays, only that clock opens the 45 s window. Her own replies and unaddressed speech do not extend it, so the lyric loop stays broken.
+  - Without media, behaviour is unchanged.
+  - `name_confidence` 0.90 → 0.80. Deliberate trade: one measured "Error in the report" reading was 0.87, usually 0.51-0.67.
+- **Also answered:** Cleo/Lora "worked" because Live's silent fallback voice is female; Finn exposed it.
+- Karim picked "Vindemiatrix" in the HUD (works).
+- New untracked `core/cancel_registry.py` + its test (17:33) come from elsewhere; not touched or committed.
+- **Verified:** 436 passed across 9 files. Era restart needed.
+
 ### 2026-10-10 (17:40) · Era answered song lyrics: media-aware attention + prompt rule
 - Karim decided: keep the 30 Live voices (option 1). Raw-WebSocket probes confirmed Live ignores library voices in every field (`voiceConfig.voice` is accepted but ignored: even "Charon" came out female).
 - **Bug:** with Spotify on, lyrics ("es", "¿Qué") got "Sorry, I did not catch that."

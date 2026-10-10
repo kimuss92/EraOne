@@ -252,13 +252,15 @@ class ConfRec(FakeRec):
 
 
 def test_a_near_miss_heard_as_era_at_low_confidence_is_not_her_name():
-    """Live 2026-10-10: "Error in the report" decoded as era:0.51 / era:0.87."""
+    """Typical near-misses score 0.51-0.67 ("Error...", "Errors"). One reading of
+    "Error in the report" reached 0.87: at the 0.80 bar that rare case passes, a
+    deliberate trade so a real "Era" through music (0.85) is never refused."""
     clock = Clock()
     state = ListeningState(clock=clock)
     clock.t += 60
     events = []
     gate = AttentionGate(
-        state, lambda: ConfRec([("era", 0.51), ("era", 0.87)]), lambda k, h: events.append((k, h))
+        state, lambda: ConfRec([("era", 0.51), ("era", 0.66)]), lambda k, h: events.append((k, h))
     )
     out = [o for _ in range(4) for o in gate.feed(_speech())]
     assert [k for k, _ in events] == ["ignored"]
@@ -373,19 +375,40 @@ def test_handover_zero_means_only_after_every_retry():
 
 
 # ── 2026-10-10: Spotify lyrics ("es", "¿Qué") got "Sorry, I did not catch that" ──
-def test_while_media_plays_only_her_name_gets_through():
+def test_with_music_her_name_opens_a_normal_conversation_but_replies_do_not():
+    """Live 2026-10-10, twice: first a reply to a lyric re-opened the window for
+    the next lyric (a loop); then requiring her name on EVERY sentence made her
+    deaf mid-conversation. Now: a deliberate address opens 45 s, her replies
+    alone never extend it while media plays."""
     clock = Clock()
     playing = [True]
     s = ListeningState(clock=clock, media_active=lambda: playing[0])
-    s.era_finished_speaking(interrupted=False)  # she just answered something
-    assert not s.window_open(), "music: the free window would let lyrics through"
+    clock.t += 60  # long after start
+    s.era_finished_speaking(interrupted=False)  # she replied to something (a lyric?)
+    assert not s.window_open(), "her reply alone must not open it during music"
+    s.note_activity(explicit=True)  # "Era, ..." / typing / wake
+    clock.t += 30
+    s.era_finished_speaking(interrupted=False)
+    assert s.window_open(), "follow-ups within 45 s of addressing her need no name"
+    clock.t += 20
+    assert not s.window_open(), "45 s after the last deliberate address it closes"
     playing[0] = False
-    assert s.window_open(), "music stopped: normal conversation window again"
+    s.era_finished_speaking(interrupted=False)
+    assert s.window_open(), "no music: her replies keep the conversation open as before"
+
+
+def test_a_name_heard_through_music_at_085_counts():
+    """Live 17:33:00: 'era:0.85' with Spotify on was refused by the old 0.90 bar."""
+    from core.attention import _named
+
+    assert _named([("era", 0.85)], {"era"}, attention.get_listening_config()["name_confidence"])
+    assert not _named([("era", 0.66)], {"era"}, attention.get_listening_config()["name_confidence"])
 
 
 def test_a_lyric_never_reaches_gemini_and_a_named_request_does():
     clock = Clock()
     s = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60  # past the fresh-session window: nobody has addressed her
     events = []
     gate = AttentionGate(s, lambda: FakeRec("es que"), lambda k, h: events.append(k))
     out = [o for _ in range(6) for o in gate.feed(_speech())]
