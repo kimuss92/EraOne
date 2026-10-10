@@ -428,5 +428,8 @@ def test_display_names_are_human_readable(monkeypatch):
 
     assert display_name("era.deep") == "Claude Opus 5"
     assert display_name("era.reason") == "Claude Sonnet 5"
-    assert display_name("era.voice") == "Gemini 3.8 Live"  # moved from 3.1 on 2026-10-10
+    # 3.8 on 2026-10-10, rolled back to 3.1 the same day: the better brain in
+    # use, at the cost of AI Studio's voice library. config/llm.yaml is the one
+    # that decides; this asserts the HUD names whatever it says readably.
+    assert display_name("era.voice") == "Gemini 3.1 Flash Live"
     assert "era." not in display_name("era.fast")
