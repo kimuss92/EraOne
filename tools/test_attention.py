@@ -370,3 +370,50 @@ def test_handover_zero_means_only_after_every_retry():
     assert handover_reason(attempts=5, **kw) is None
     assert handover_reason(attempts=6, **kw) == "upstream"
     assert handover_reason(attempts=1, offline=True, max_attempts=6, upstream_after=0) == "network"
+
+
+# ── 2026-10-10: Spotify lyrics ("es", "¿Qué") got "Sorry, I did not catch that" ──
+def test_while_media_plays_only_her_name_gets_through():
+    clock = Clock()
+    playing = [True]
+    s = ListeningState(clock=clock, media_active=lambda: playing[0])
+    s.era_finished_speaking(interrupted=False)  # she just answered something
+    assert not s.window_open(), "music: the free window would let lyrics through"
+    playing[0] = False
+    assert s.window_open(), "music stopped: normal conversation window again"
+
+
+def test_a_lyric_never_reaches_gemini_and_a_named_request_does():
+    clock = Clock()
+    s = ListeningState(clock=clock, media_active=lambda: True)
+    events = []
+    gate = AttentionGate(s, lambda: FakeRec("es que"), lambda k, h: events.append(k))
+    out = [o for _ in range(6) for o in gate.feed(_speech())]
+    assert all(o == bytes(len(o)) for o in out) and events == ["ignored"]
+    events.clear()
+    for _ in range(20):
+        gate.feed(SILENT)
+    gate2 = AttentionGate(s, lambda: FakeRec("era pause the music"), lambda k, h: events.append(k))
+    for _ in range(3):
+        gate2.feed(_speech())
+    assert events == ["accepted"], "with music on, 'Era, ...' still works"
+
+
+def test_busy_does_not_keep_the_window_open_during_media(monkeypatch):
+    monkeypatch.setattr("core.media_activity.media_playing", lambda: True)
+    assert _BusyEra(state="processing")._attention_keep_open() is False
+    assert _BusyEra(pending=object())._attention_keep_open() is True, "a confirmation still can"
+
+
+def test_a_broken_media_check_fails_open():
+    def boom():
+        raise RuntimeError("COM died")
+
+    s = ListeningState(clock=Clock(), media_active=boom)
+    assert s.window_open()
+
+
+def test_media_activity_is_inert_under_pytest():
+    from core.media_activity import _state, media_playing
+
+    assert media_playing() is False and _state["started"] is False

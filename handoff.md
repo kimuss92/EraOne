@@ -8,6 +8,17 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-10 (17:40) · Era answered song lyrics: media-aware attention + prompt rule
+- Karim decided: keep the 30 Live voices (option 1). Raw-WebSocket probes confirmed Live ignores library voices in every field (`voiceConfig.voice` is accepted but ignored: even "Charon" came out female).
+- **Bug:** with Spotify on, lyrics ("es", "¿Qué") got "Sorry, I did not catch that."
+  1. My attention window let everything through for 45 s after a reply, and each reply re-opened it: a loop.
+  2. gemini-3.8-live treats lyric fragments as TIER 3 ("unclear") where 3.1 treated them as noise.
+- **Fix:**
+  - `core/media_activity.py` (new): Windows per-app audio peak meters (pycaw), Era's own pid excluded, 0.5 s poll, 2 s hold, fail-open, inert under pytest. Live: Spotify read 0.56-0.63, and `media_playing()` returned True.
+  - `ListeningState(media_active=...)` closes the window while media plays (her name or wake word is required). `_attention_keep_open` lets only a pending confirmation through during media.
+  - Prompt TIER 1 now lists lyrics, music, TV/video dialogue and talk meant for others, and forbids answering them with "Sorry, I did not catch that".
+- **Verified:** 5 new tests; voice/HUD set passes. Era restart needed.
+
 ### 2026-10-10 (17:20) · Gemini Live uses ONLY its 30 voices; library voices were a silent swap
 - **Karim:** "Finn is male in AI Studio but female in Era". He wants all AI Studio voices, a drop-down, and immediate effect.
 - **Measured (voice pitch, autocorrelation F0):**

@@ -124,8 +124,15 @@ def _rms(frame: bytes) -> float:
 class ListeningState:
     """The two clocks: echo hold, and when Era last talked WITH the user."""
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+        media_active: Callable[[], bool] | None = None,
+    ) -> None:
         self._clock = clock
+        # Music/video playing (core/media_activity): the free window would let
+        # lyrics through, and each reply to one re-opened it (live 2026-10-10).
+        self._media_active = media_active or (lambda: False)
         self._hold_until = 0.0
         self._last_activity = clock()  # a fresh session starts in conversation
 
@@ -144,7 +151,14 @@ class ListeningState:
 
     def window_open(self) -> bool:
         window = get_listening_config()["attention_window_s"]
-        return window <= 0 or self._clock() - self._last_activity <= window
+        if window <= 0:
+            return True  # the rule is switched off
+        try:
+            if self._media_active():
+                return False  # media playing: only her name gets through
+        except Exception:
+            pass
+        return self._clock() - self._last_activity <= window
 
 
 class AttentionGate:

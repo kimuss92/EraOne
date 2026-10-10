@@ -385,8 +385,9 @@ class AudioIOMixin:
         state = getattr(self, "_listening", None)
         if state is None:
             from core.attention import ListeningState
+            from core.media_activity import media_playing
 
-            state = self._listening = ListeningState()
+            state = self._listening = ListeningState(media_active=media_playing)
         return state
 
     def _attention_gate(self):
@@ -429,6 +430,10 @@ class AudioIOMixin:
             store = getattr(self, "_pending_store", None)
             if store is not None and store.peek() is not None:
                 return True
+            from core.media_activity import media_playing
+
+            if media_playing():
+                return False  # music/video: "busy" must not let lyrics through
             snap = self.session_manager.get_state_snapshot()
             if str(snap.get("current_state", "")).upper().endswith("PROCESSING"):
                 return True
