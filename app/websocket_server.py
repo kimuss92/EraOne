@@ -70,6 +70,7 @@ class WebSocketServer:
         self._on_model_select: Any = None
         self._on_client_connect: Any = None
         self._on_interrupt: Any = None
+        self._on_cancel_task: Any = None
         self._on_shutdown: Any = None
         self._on_restart: Any = None
         self.engine_provider: Any = lambda: None
@@ -327,6 +328,12 @@ class WebSocketServer:
             self._spawn(self._on_model_select, str(data.get("alias", "") or ""))
         elif t == "interrupt":
             self._spawn(self._on_interrupt)
+        elif t == "cancel_task":
+            # An empty cid means "whatever is running" (the global button); a
+            # cid addresses one row's X. Its own message type rather than a
+            # "command", because a cancel must reach the engine while the
+            # model's channel is exactly what is not being read.
+            self._spawn(self._on_cancel_task, str(data.get("cid", "") or "")[:120])
         elif t == "ping":
             try:
                 await ws.send_str(json.dumps({"type": "pong", "t": data.get("t")}))

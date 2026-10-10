@@ -31,6 +31,7 @@ def server(tmp_path_factory):
     srv.commands = []  # type: ignore[attr-defined]
     srv._on_command = srv.commands.append
     srv._on_interrupt = lambda: srv.commands.append("__interrupt__")
+    srv._on_cancel_task = lambda cid: srv.commands.append(f"__cancel__{cid}")
     srv.engine_provider = lambda: object()
     srv.start()
     assert srv.ready.wait(10) and srv.bound_port, srv.bind_error
@@ -371,9 +372,32 @@ def test_new_workspace_reads_need_authentication(server, path):
     assert get(server, path, token=server.session_token)[0] == 200
 
 
-@pytest.mark.parametrize("path", ["/api/visual", "/api/development", "/api/schedule/action"])
+@pytest.mark.parametrize(
+    "path", ["/api/visual", "/api/development", "/api/schedule/action", "/api/tasks/cancel"]
+)
 def test_new_workspace_writes_need_authentication(server, path):
     assert post(server, path, {"action": "reset"})[0] == 401
+
+
+def test_cancelling_a_task_needs_a_target_but_no_confirmation(server):
+    """Cancel is a DE-escalation: it must not sit behind a confirm field.
+
+    shutdown/restart/schedule-approve demand `confirm: true` because they
+    escalate. A cancel behind a dialog is a cancel that arrives after the thing
+    it was meant to stop, so it follows /api/interrupt instead, which also
+    takes none. Pinned here so nobody "hardens" it later.
+    """
+    assert post(server, "/api/tasks/cancel", {}, token=server.session_token)[0] == 400
+
+    status, body = post(
+        server, "/api/tasks/cancel", {"scope": "current"}, token=server.session_token
+    )
+    assert status == 200 and body["accepted"] is True
+    assert "__cancel__" in server.commands
+
+    status, body = post(server, "/api/tasks/cancel", {"cid": "t7"}, token=server.session_token)
+    assert status == 200 and body["cid"] == "t7"
+    assert "__cancel__t7" in server.commands
 
 
 def test_visual_rest_updates_are_validated(server, tmp_path, monkeypatch):

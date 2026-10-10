@@ -70,6 +70,7 @@ from app.wake import (  # noqa: F401  (re-export: preserves public + internal na
     WakeWordConfig,
     init_vosk,
 )
+from core.cancel_registry import CURRENT_TOKEN, REGISTRY
 from core.confirmation import ConfirmationManager
 from core.confirmation_preview import (
     ANNOUNCED_KEY,
@@ -141,6 +142,20 @@ _CREW_BG_ACK = (
     "words, that you have put the crew on it and will report back the moment they "
     "answer. Do NOT claim the crew has answered yet, do NOT invent their findings, "
     "and do NOT call the crew tool again for this request."
+)
+
+# Model-facing text for a task the owner cancelled WHILE it was running (the X
+# on the HUD row, "cancel that", or a correction). Most tool bodies sit in
+# run_in_executor and cannot be interrupted, so the work may well have finished
+# -- but its result is unwanted and must not be reported or retried. The owner
+# has already had their feedback (the row went terminal, or Era said so), which
+# is why this asks for no apology: narrating a cancel at length recreates
+# exactly the noise the owner cancelled to stop.
+_CANCEL_DISCARD = (
+    "Not completed: the user cancelled this task while it was running. Whatever it "
+    "had already started may be half-done. Do NOT retry it, do NOT report a result "
+    "for it, and do NOT apologise at length -- the user already knows it stopped. "
+    "If they gave a replacement instruction, that instruction is what matters now."
 )
 
 _PROTOCOL_ONE_COMMAND = re.compile(r"\blaunch\s+protocol\s+(?:one|1)\b", re.IGNORECASE)
@@ -953,6 +968,38 @@ class ToolDispatchMixin:
             ),
         )
 
+    def _trace_cancelled_call(self, name: str, fc, result) -> None:
+        """Record an abandoned task in logs/task_trace-*.jsonl. Never raises.
+
+        core/task_trace.py only ever wrote on completion, so before this a
+        cancelled task left no trace at all -- and "how much did the cancel
+        actually stop?" is the first question after one. The requested args are
+        kept so a mishearing ("hard track" for "next track") is visible in the
+        log that explains why the owner cancelled.
+        """
+        try:
+            from core.task_trace import trace
+
+            routed = getattr(self, "_trace_routed", None) or (name, {})
+            trace(
+                "tool",
+                app="era",
+                user_text=getattr(self, "_inflight_user_text", "")
+                or getattr(self, "_last_user_text", ""),
+                requested=name,
+                requested_args=fc_args_to_dict(fc),
+                tool=routed[0],
+                args=routed[1],
+                safety=getattr(self, "_trace_safety", None),
+                ok=False,
+                error_type="Cancelled",
+                result=(result.short_message(300) if result is not None else "cancelled"),
+                duration_ms=getattr(result, "duration_ms", None),
+                verification=getattr(result, "verification_status", None),
+            )
+        except Exception:
+            pass
+
     async def _execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name or "unknown"
         print(f"[era] [TOOL] {name}")
@@ -960,6 +1007,13 @@ class ToolDispatchMixin:
         # HUD Live Activity: the real call, as it enters and leaves this gate.
         hud_args = fc_args_to_dict(fc)
         hud_call = hud.tool_started(getattr(fc, "id", None), name, hud_args)
+        # One cancel token per task, keyed by the HUD row's id -- the only task
+        # id that already reaches the browser, so the X on that row can address
+        # it. The ContextVar carries it down the coroutine chain; crossing into
+        # a worker thread needs cancel_registry.offload(), because
+        # run_in_executor does not copy contextvars.
+        token = REGISTRY.register(hud_call, name)
+        token_reset = CURRENT_TOKEN.set(token)
         self.ui.set_state("THINKING")
         self.session_manager.transition_to(
             EraState.PROCESSING, reason="tool_call", metadata={"tool": name}
@@ -979,6 +1033,10 @@ class ToolDispatchMixin:
             self._start_background_crew_ask(fc, hud_call, hud_args)
             if not self.ui.muted and not self._standby_active:
                 self.ui.set_state("LISTENING")
+            # The token stays REGISTERED so the owner can still cancel the crew
+            # ask from its HUD row; the worker retires it in its own finally.
+            # Only the ContextVar is released, because this coroutine is done.
+            CURRENT_TOKEN.reset(token_reset)
             return build_function_response(
                 fc, ToolResult.ok(message=_CREW_BG_ACK), types.FunctionResponse
             )
@@ -993,6 +1051,8 @@ class ToolDispatchMixin:
             result = await self._execute_tool_result(fc)
         finally:
             self._tools_in_flight = max(0, getattr(self, "_tools_in_flight", 1) - 1)
+            CURRENT_TOKEN.reset(token_reset)
+            REGISTRY.finish(hud_call)
             if result is None:  # raised or was cancelled: never leave the row "running"
                 hud.tool_finished(
                     hud_call,
@@ -1000,6 +1060,33 @@ class ToolDispatchMixin:
                     hud_args,
                     ToolResult(success=False, error="No result (raised or cancelled)"),
                 )
+
+        # ── Soft cancel: the owner abandoned this while it ran ──────────────
+        # Most tool bodies sit in run_in_executor, a thread Python cannot
+        # interrupt, so the work finished anyway. The result is still unwanted.
+        # Discard it rather than act on it: no success/failure fed to the
+        # recovery layer, nothing taught to intent memory, no HUD row to close
+        # (tool_cancelled already made it terminal), and a model-facing note
+        # that says plainly what happened so Era neither reports a result the
+        # owner cancelled nor retries it.
+        if REGISTRY.is_cancelled(hud_call):
+            print(f"[era] [CANCEL] Discarding the result of {name}: cancelled mid-flight.")
+            # The batch loop knows only the provider's call id, which is not
+            # always the HUD row id this token is keyed by. Alias it so
+            # tool_batch can reopen the ledger claim for a re-ask.
+            REGISTRY.note_cancelled_id(getattr(fc, "id", "") or "")
+            self._trace_cancelled_call(name, fc, result)
+            self._trace_routed = self._trace_safety = None
+            return build_function_response(
+                fc,
+                ToolResult.fail(
+                    message=_CANCEL_DISCARD,
+                    error=_CANCEL_DISCARD,
+                    error_type="Cancelled",
+                    tool_name=name,
+                ),
+                types.FunctionResponse,
+            )
 
         if not result.success and result.error:
             error_type = result.error_type or ""
@@ -1130,8 +1217,19 @@ class ToolDispatchMixin:
                     error=f"The crew failed: {type(exc).__name__}",
                     error_type="BotError",
                 )
+            finally:
+                # _execute_tool handed the token over still registered so the
+                # owner could cancel the crew from its HUD row; retire it here,
+                # or a stale entry would keep catching the next "cancel that".
+                REGISTRY.finish(hud_call)
             if not isinstance(result, ToolResult):
                 result = ToolResult.from_any(result)
+
+            # The owner cancelled while the crew was thinking: the HUD row is
+            # already terminal and the answer is unwanted. Say nothing.
+            if REGISTRY.is_cancelled(hud_call):
+                print("[era] [CANCEL] Discarding the crew's answer: cancelled mid-flight.")
+                return
 
             # A staged replace that needs the user's yes: put the plan in front
             # of the user over a channel the model cannot edit, and let the
@@ -2158,6 +2256,14 @@ class ToolDispatchMixin:
                         risk_level=risk_level,
                         reason=reason,
                     )
+                    # Remember which task owns the single confirmation slot, so
+                    # cancelling that task releases the question too. Otherwise
+                    # the slot stays occupied (the store refuses the next one as
+                    # busy) and a later "yes" meant for something else runs this
+                    # abandoned action. See app/era_live/cancel.py.
+                    _token = CURRENT_TOKEN.get()
+                    if _token is not None:
+                        _token.confirmation_id = cid
                 except PendingConfirmationBusy as busy:
                     # Never displace the question the user is mid-answer to.
                     print(f"[era] [BUSY] refused: {busy}")

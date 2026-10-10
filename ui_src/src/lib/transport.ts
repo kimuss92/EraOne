@@ -460,6 +460,18 @@ export const actions = {
   interrupt(): void {
     if (!send({ type: 'interrupt' })) void api('/api/interrupt', { method: 'POST' }).catch(() => {});
   },
+  /** Cancel one running task by its tool-run id (the X on an Activity row).
+   *  Its own message type rather than a command, because a cancel has to
+   *  reach the engine exactly when the model's channel is not being read. */
+  cancelTask(cid: string): void {
+    if (!send({ type: 'cancel_task', cid }))
+      void api('/api/tasks/cancel', { method: 'POST', body: { cid } }).catch(() => {});
+  },
+  /** Cancel whatever is running now (the Cancel button in the command bar). */
+  cancelCurrentTask(): void {
+    if (!send({ type: 'cancel_task', cid: '' }))
+      void api('/api/tasks/cancel', { method: 'POST', body: { scope: 'current' } }).catch(() => {});
+  },
   setMic(active: boolean): void {
     send({ type: 'mic_toggle', active });
   },

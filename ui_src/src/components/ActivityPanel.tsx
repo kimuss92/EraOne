@@ -23,9 +23,11 @@ import {
   ShieldQuestion,
   Sparkles,
   Workflow,
+  X,
   Zap,
 } from 'lucide-react';
 import { useHud } from '../lib/store';
+import { actions } from '../lib/transport';
 import { clock, duration } from '../lib/format';
 import type { TimelineItem, ToolRun, ToolStatus } from '../lib/types';
 import PathText from './PathText';
@@ -131,7 +133,8 @@ function ToolCard({ run }: { run: ToolRun }) {
   const args = Object.entries(run.args || {});
   return (
     <article className={`tool-card ${CARD_TONE[run.status] || ''}`}>
-      <button type="button" className="flex w-full items-start gap-2.5 text-left" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+      <div className="flex w-full items-start gap-1">
+      <button type="button" className="flex min-w-0 flex-1 items-start gap-2.5 text-left" aria-expanded={open} onClick={() => setOpen(o => !o)}>
         <span className="tool-icon"><Icon className="h-3.5 w-3.5" /></span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
@@ -154,6 +157,21 @@ function ToolCard({ run }: { run: ToolRun }) {
           </span>
         </span>
       </button>
+      {/* Sibling of the expand button, never nested inside it: a button in a
+          button is invalid HTML and swallows the expand click target. Only on
+          a running row -- a settled one has nothing left to stop. */}
+      {run.status === 'running' && (
+        <button
+          type="button"
+          className="icon-btn icon-btn-xs shrink-0"
+          title="Cancel this task"
+          aria-label={`Cancel ${run.label}`}
+          onClick={() => actions.cancelTask(run.id)}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+      </div>
       {open && <RunDetails run={run} />}
     </article>
   );

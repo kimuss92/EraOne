@@ -6,13 +6,13 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**323 source modules** · 118,339 lines · 196 test modules · 57 declared tools · 57 registered actions
+**325 source modules** · 119,124 lines · 199 test modules · 57 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
 | Subsystem | Go here when | Entry points |
 |---|---|---|
-| **Voice loop / live session** | hearing, speaking, reconnects, barge-in | `app/era_live/__init__.py`, `app/era_live/audio.py`, `app/era_live/audio_output.py`, `app/era_live/autopilot.py` _(+15 more)_ |
+| **Voice loop / live session** | hearing, speaking, reconnects, barge-in | `app/era_live/__init__.py`, `app/era_live/audio.py`, `app/era_live/audio_output.py`, `app/era_live/autopilot.py` _(+16 more)_ |
 | **Tool dispatch & declarations** | a tool is not called, called wrongly, or needs adding | `app/era_live/tool_dispatch.py`, `app/tool_declarations.py` |
 | **HUD (browser UI)** | anything the user SEES | `app/hud/__init__.py`, `app/hud/api.py`, `app/hud/browser.py`, `app/hud/bus_approval.py` _(+15 more)_ |
 | **Safety & confirmation** | gates, approvals, owner-only checks, abort | `core/confirmation.py`, `core/confirmation_preview.py`, `core/input_safety_gate.py`, `core/panic_stop.py` _(+3 more)_ |
@@ -35,13 +35,13 @@ This table is Era's self-model: if a tool is not here, she cannot do it.
 |---|---|---|---|
 | `open_app` | Opens an APPLICATION on the computer system. If the application is already running or matching open windows on | `app_name` | `actions/open_app.py` |
 | `web_search` | Searches the web for any information. | `query` | `actions/web_search.py` |
-| `capability_check` | What you can actually do, computed from your own live tool declarations. Call this INSTEAD OF answering from m | — | `app/era_live/tool_dispatch.py:2753` |
+| `capability_check` | What you can actually do, computed from your own live tool declarations. Call this INSTEAD OF answering from m | — | `app/era_live/tool_dispatch.py:2859` |
 | `weather_report` | Gives the weather report to user | `city` | `actions/weather_report.py` |
 | `send_message` | Sends a text message via WhatsApp, Telegram, or other messaging platform. | `receiver`, `message_text`, `platform` | `actions/send_message.py` |
 | `reminder` | Sets a timed reminder using Task Scheduler. | `date`, `time`, `message` | `actions/reminder.py` |
 | `scheduled_task` | Creates and manages the user's SCHEDULED TASKS: a reminder, one Era tool call, or a CHAIN of tool calls run in | `action` | `actions/scheduled_task.py` |
 | `youtube_video` | Controls YouTube. Use for: playing videos, pausing/resuming playback, summarizing a video's content, getting v | — | `actions/youtube_video.py` |
-| `screen_process` | Captures and analyzes the screen or webcam image. MUST be called when user asks what is on screen, what you se | — | `app/era_live/tool_dispatch.py:2293` |
+| `screen_process` | Captures and analyzes the screen or webcam image. MUST be called when user asks what is on screen, what you se | — | `app/era_live/tool_dispatch.py:2399` |
 | `computer_settings` | Controls the COMPUTER ITSELF: volume, brightness, window management, keyboard shortcuts, typing text on screen | — | `actions/computer_settings.py` |
 | `audio_control` | Audio DEVICES: list every speaker/headphone/microphone with its live level, switch the default output or input | `action` | `actions/audio_control.py` |
 | `system_performance` | Controls laptop performance profiles and system optimization. Switches the MSI Center user scenario (extreme p | `action` | `actions/system_performance.py` |
@@ -50,46 +50,46 @@ This table is Era's self-model: if a tool is not here, she cannot do it.
 | `netflix_control` | Controls Netflix end to end: opening it, finding and playing a title, and every playback control once somethin | `action` | `actions/netflix_control.py` |
 | `premiere_control` | Controls Adobe Premiere Pro timeline and video editing. Use this exclusively when the user asks to edit video, | `command` | `actions/premiere_control.py` |
 | `file_controller` | Manages files and folders: list, create, delete, move, copy, rename, read, write, find, open, last_download, d | `action` | `actions/file_controller.py` |
-| `desktop_control` | Controls the desktop: wallpaper, organize, clean, list, stats. | `action` | `app/era_live/tool_dispatch.py:2836` |
+| `desktop_control` | Controls the desktop: wallpaper, organize, clean, list, stats. | `action` | `app/era_live/tool_dispatch.py:2942` |
 | `code_helper` | Writes, edits, explains, runs, or builds code files. | `action` | `actions/code_helper.py` |
 | `dev_agent` | Builds complete multi-file projects from scratch: plans, writes files, installs deps, opens VSCode, runs and f | `description` | `actions/dev_agent.py` |
-| `agent_task` | Executes complex multi-step tasks requiring multiple different tools. Examples: 'research X and save to file', | `goal` | `app/era_live/tool_dispatch.py:2854` |
+| `agent_task` | Executes complex multi-step tasks requiring multiple different tools. Examples: 'research X and save to file', | `goal` | `app/era_live/tool_dispatch.py:2960` |
 | `computer_control` | Direct computer control: type, click, hotkeys, scroll, move mouse, screenshots, find elements on screen. | `action` | `actions/computer_control.py` |
 | `game_updater` | THE ONLY tool for ANY Steam or Epic Games request. Use for: installing, downloading, updating games, listing i | — | `actions/game_updater.py` |
 | `flight_finder` | Searches Google Flights and speaks the best options. | `origin`, `destination`, `date` | `actions/flight_finder.py` |
-| `enter_standby` | Mutes the microphone and puts era into standby mode. Call this ONLY on one of these four exact commands: 'stan | — | `app/era_live/tool_dispatch.py:2445` |
-| `set_microphone` | Turns era's OWN microphone off or on (privacy mute). Call with state='off' when the user tells you to stop hea | `state` | `app/era_live/tool_dispatch.py:2455` |
-| `set_wake_word` | Changes era's OWN wake word — the word that wakes her from standby. Call this ONLY when the user explicitly as | `wake_word` | `app/era_live/tool_dispatch.py:2458` |
-| `voice_lock` | Turns era's voice recognition (the owner-only voice check) ON or OFF in real time. While ON, era only responds | — | `app/era_live/tool_dispatch.py:2485` |
-| `set_voice` | Switches era's OWN speaking voice between her Fish Audio voice (cloud, cloned), her Kokoro voice (George, loca | `voice` | `app/era_live/tool_dispatch.py:2488` |
-| `manage_schedule` | View or change a brand's recurring community-management schedules: the weekly content plan and the auto-publis | `action` | `app/era_live/tool_dispatch.py:2491` |
-| `manage_offer` | View or change a brand's standing promotions (discounts/offers) that the community-management agent may use in | `action` | `app/era_live/tool_dispatch.py:2494` |
-| `community_manager` | Hand a social-media / content order to the community-management agent, which runs it in the BACKGROUND while y | `order` | `app/era_live/tool_dispatch.py:2497` |
-| `shutdown_era` | Shuts down ERA HERSELF — the assistant program only. It does NOT touch the computer. ONLY call this when the u | — | `app/era_live/tool_dispatch.py:2946` |
-| `confirm_pending_confirmation` | Confirm and execute the currently pending high-risk action after the user clearly says yes, confirm, proceed,  | — | `app/era_live/tool_dispatch.py:2679` |
-| `cancel_pending_confirmation` | Cancel the currently pending high-risk action after the user says no, cancel, stop, don't do it, or never mind | — | `app/era_live/tool_dispatch.py:2734` |
+| `enter_standby` | Mutes the microphone and puts era into standby mode. Call this ONLY on one of these four exact commands: 'stan | — | `app/era_live/tool_dispatch.py:2551` |
+| `set_microphone` | Turns era's OWN microphone off or on (privacy mute). Call with state='off' when the user tells you to stop hea | `state` | `app/era_live/tool_dispatch.py:2561` |
+| `set_wake_word` | Changes era's OWN wake word — the word that wakes her from standby. Call this ONLY when the user explicitly as | `wake_word` | `app/era_live/tool_dispatch.py:2564` |
+| `voice_lock` | Turns era's voice recognition (the owner-only voice check) ON or OFF in real time. While ON, era only responds | — | `app/era_live/tool_dispatch.py:2591` |
+| `set_voice` | Switches era's OWN speaking voice between her Fish Audio voice (cloud, cloned), her Kokoro voice (George, loca | `voice` | `app/era_live/tool_dispatch.py:2594` |
+| `manage_schedule` | View or change a brand's recurring community-management schedules: the weekly content plan and the auto-publis | `action` | `app/era_live/tool_dispatch.py:2597` |
+| `manage_offer` | View or change a brand's standing promotions (discounts/offers) that the community-management agent may use in | `action` | `app/era_live/tool_dispatch.py:2600` |
+| `community_manager` | Hand a social-media / content order to the community-management agent, which runs it in the BACKGROUND while y | `order` | `app/era_live/tool_dispatch.py:2603` |
+| `shutdown_era` | Shuts down ERA HERSELF — the assistant program only. It does NOT touch the computer. ONLY call this when the u | — | `app/era_live/tool_dispatch.py:3052` |
+| `confirm_pending_confirmation` | Confirm and execute the currently pending high-risk action after the user clearly says yes, confirm, proceed,  | — | `app/era_live/tool_dispatch.py:2785` |
+| `cancel_pending_confirmation` | Cancel the currently pending high-risk action after the user says no, cancel, stop, don't do it, or never mind | — | `app/era_live/tool_dispatch.py:2840` |
 | `media_coordinator` | Orchestrates media playing between Spotify, YouTube, and Netflix. Pauses conflicting sources when a new stream | `target`, `action` | `actions/media_coordinator.py` |
 | `file_processor` | Processes any file that the user has uploaded or dropped onto the interface. Use this when the user refers to  | — | `actions/file_processor.py` |
-| `save_memory` | Save an important personal fact about the user to long-term memory. YOU decide when to call it — the user does | `category`, `key`, `value` | `app/era_live/tool_dispatch.py:2566` |
-| `retrieve_memory_context` | Retrieve memories relevant to the current conversation context. Use when you need to remember user-specific pr | `query` | `app/era_live/tool_dispatch.py:2648` |
-| `list_memory_keys` | List all keys stored in long-term memory, grouped by category. Optionally filter by a specific category. Suppo | — | `app/era_live/tool_dispatch.py:2659` |
-| `forget_memory` | Delete one specific key from long-term memory by exact category and key name. BOTH category and key are requir | `category`, `key` | `app/era_live/tool_dispatch.py:2670` |
+| `save_memory` | Save an important personal fact about the user to long-term memory. YOU decide when to call it — the user does | `category`, `key`, `value` | `app/era_live/tool_dispatch.py:2672` |
+| `retrieve_memory_context` | Retrieve memories relevant to the current conversation context. Use when you need to remember user-specific pr | `query` | `app/era_live/tool_dispatch.py:2754` |
+| `list_memory_keys` | List all keys stored in long-term memory, grouped by category. Optionally filter by a specific category. Suppo | — | `app/era_live/tool_dispatch.py:2765` |
+| `forget_memory` | Delete one specific key from long-term memory by exact category and key name. BOTH category and key are requir | `category`, `key` | `app/era_live/tool_dispatch.py:2776` |
 | `window_control` | Advanced window management. Use to list all open windows, focus a specific window by title, move/resize, minim | `action` | `actions/window_control.py` |
-| `agent_browser` | Advanced browser automation for complex multi-step web tasks. Use for web research, form filling, data extract | `query` | `app/era_live/tool_dispatch.py:2292` |
-| `record_feedback` | Record user feedback, corrections, preferences, or future behavior instructions to feedback_memory.jsonl. Use  | `feedback_text` | `app/era_live/tool_dispatch.py:2995` |
-| `vault_note` | Write something into Era's Obsidian vault — her SECOND BRAIN and the only source of truth for community manage | `content` | `app/era_live/tool_dispatch.py:2294` |
-| `vault_bridge` | Work with specific notes in Era's Obsidian vault. action='search' finds notes by keywords in their title and b | `action` | `app/era_live/tool_dispatch.py:2960` |
-| `crew` | Hand a request to Era's crew. Laura (chief of staff) coordinates by default and routes to Drew (vault research | `action` | `app/era_live/tool_dispatch.py:1077` |
-| `manage_preference` | Persist or revoke a STANDING user preference that must survive restarts. Use when the user grants or cancels a | `action` | `app/era_live/tool_dispatch.py:3043` |
+| `agent_browser` | Advanced browser automation for complex multi-step web tasks. Use for web research, form filling, data extract | `query` | `app/era_live/tool_dispatch.py:2398` |
+| `record_feedback` | Record user feedback, corrections, preferences, or future behavior instructions to feedback_memory.jsonl. Use  | `feedback_text` | `app/era_live/tool_dispatch.py:3101` |
+| `vault_note` | Write something into Era's Obsidian vault — her SECOND BRAIN and the only source of truth for community manage | `content` | `app/era_live/tool_dispatch.py:2400` |
+| `vault_bridge` | Work with specific notes in Era's Obsidian vault. action='search' finds notes by keywords in their title and b | `action` | `app/era_live/tool_dispatch.py:3066` |
+| `crew` | Hand a request to Era's crew. Laura (chief of staff) coordinates by default and routes to Drew (vault research | `action` | `app/era_live/tool_dispatch.py:1164` |
+| `manage_preference` | Persist or revoke a STANDING user preference that must survive restarts. Use when the user grants or cancels a | `action` | `app/era_live/tool_dispatch.py:3149` |
 | `self_diagnosis` | Runs a deep diagnosis of Era's OWN code and health: syntax sweep of her source files, the era_doctor healthche | — | `actions/self_diagnosis.py` |
 | `self_heal` | Era's autonomous self-healing loop. It runs by itself in the background: it finds faults in her log that Pytho | — | `actions/self_heal.py` |
 | `self_improve` | Fixes or improves Era's OWN source code, cautiously: every change is backed up, syntax/lint/test verified, and | — | `actions/self_improve.py` |
 | `protocol_one` | Protocol One, Era's project health guardian. action=launch runs a full maintenance cycle in the background: de | `action` | `actions/protocol_one.py` |
 | `protocol_zero` | Protocol Zero, Era's prompt-synchronisation auditor. action=execute compares every tool Era has against her sy | `action` | `actions/protocol_zero.py` |
 | `gmail_control` | The user's Gmail. Use for ANY request about their email: checking the inbox, finding or reading a message, wor | `action` | `actions/gmail_control.py` |
-| `visual_engine` | Update the running HUD without restart. command is JSON: action upsert/remove/layout/reset; widget {id,kind:te | `command` | `app/era_live/tool_dispatch.py:3296` |
-| `autonomous_development` | Create or improve Era One's own features using tool-less Claude Code. Generates changes in a separate workspac | `action` | `app/era_live/tool_dispatch.py:3324` |
-| `run_feature` | Run an activated feature from autonomous development. Always needs user confirmation. Use autonomous_developme | `feature_id` | `app/era_live/tool_dispatch.py:3364` |
+| `visual_engine` | Update the running HUD without restart. command is JSON: action upsert/remove/layout/reset; widget {id,kind:te | `command` | `app/era_live/tool_dispatch.py:3402` |
+| `autonomous_development` | Create or improve Era One's own features using tool-less Claude Code. Generates changes in a separate workspac | `action` | `app/era_live/tool_dispatch.py:3430` |
+| `run_feature` | Run an activated feature from autonomous development. Always needs user confirmation. Use autonomous_developme | `feature_id` | `app/era_live/tool_dispatch.py:3470` |
 
 ## 3. Highest-traffic modules
 
@@ -98,8 +98,8 @@ Most-imported first. A change here has the widest blast radius.
 | Module | Imported by | Purpose |
 |---|---|---|
 | `core.utils` | 84 |  |
-| `core.tool_result` | 40 |  |
-| `core.logger` | 37 |  |
+| `core.tool_result` | 41 |  |
+| `core.logger` | 38 |  |
 | `core.win_subprocess` | 31 | One definition of "run a helper program without flashing a window at Karim". |
 | `core.llm.types` | 29 | Provider-neutral request/response types for Era's LLM layer. |
 | `core.llm.registry` | 26 | Alias registry — the one place that maps Era's internal model aliases to a provider and a  |
@@ -107,17 +107,17 @@ Most-imported first. A change here has the widest blast radius.
 | `app.era_live.tool_dispatch` | 24 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
 | `core.safety_guard` | 24 |  |
 | `core.user_prefs` | 23 | Persistent user-granted preference exceptions and behavior rules. |
-| `app.text_intents` | 21 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
+| `app.text_intents` | 22 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
 | `core.llm` | 21 | Provider-neutral LLM layer for Era One. |
 | `main` | 21 |  |
+| `core.pending_confirmation` | 20 |  |
 | `era_dispatch` | 20 | era_dispatch.py — Era One → Claude Code dispatcher. |
 | `actions.browser_control` | 19 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
+| `app.hud.events` | 19 | The HUD's single, truthful event stream and agent state machine. |
 | `core.ai_provider` | 19 | Unified Gemini provider for Era One. |
-| `core.pending_confirmation` | 19 |  |
 | `core.cm_vault` | 18 | cm_vault.py — read/write bridge between Era's community-management lane and the Obsidian v |
 | `actions.self_improve` | 17 | actions/self_improve.py — Era cautiously fixes and improves her OWN code. |
 | `app.era_live` | 17 | EraLive behavioral mixins (extracted from main.py). |
-| `app.hud.events` | 17 | The HUD's single, truthful event stream and agent state machine. |
 | `core.self_healing_router` | 17 | Self-healing tool router for Era One. |
 | `core.voice_mode` | 17 | Era's voice mode — which backend speaks. |
 | `app.hud` | 16 | Localhost HUD layer: event bus, HTTP/WebSocket server glue, launcher helpers. |
@@ -135,11 +135,12 @@ Every source module, its size, and what it is for.
 | `app/era_live/audio.py` | 1511 | Audio I/O loops for EraLive (extracted from main.py). |
 | `app/era_live/audio_output.py` | 292 | Self-healing speaker output for Era's Live voice. |
 | `app/era_live/autopilot.py` | 239 | Run the lane router's offline lanes before any Gemini request or local brain turn. |
+| `app/era_live/cancel.py` | 159 | Cancel one task that is already running (model in core/cancel_registry.py). |
 | `app/era_live/cascade.py` | 183 | Cascade voice mode — Era WITHOUT the Gemini Live session. |
 | `app/era_live/claude_voice.py` | 286 | Claude voice mode — Era answers through the Claude subscription CLI when Gemini Live is not answering. |
 | `app/era_live/cm_flow.py` | 575 | Community-management flow mixin for EraLive (extracted from main.py). |
 | `app/era_live/dispatch.py` | 360 | Dispatch — being ANSWERED by a model other than the live voice session. |
-| `app/era_live/local_fallback.py` | 685 | Local fallback voice loop — Era keeps hearing and acting while Gemini is down. |
+| `app/era_live/local_fallback.py` | 688 | Local fallback voice loop — Era keeps hearing and acting while Gemini is down. |
 | `app/era_live/local_guards.py` | 70 | Security gates for the local fallback loop (app/era_live/local_fallback.py). |
 | `app/era_live/mic_mute.py` | 274 | Voice-controlled microphone mute for EraLive (see core/mic_mute.py for the model). |
 | `app/era_live/model_route.py` | 322 | Era's session-scoped model preference, and the routing decision it feeds. |
@@ -147,15 +148,15 @@ Every source module, its size, and what it is for.
 | `app/era_live/reconnect_mixin.py` | 698 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
 | `app/era_live/session_runtime.py` | 43 | Bound connection setup and release SDK transports on every reconnect. |
 | `app/era_live/speech_out.py` | 470 | Speech output — turns the model's text into audio, sentence by sentence. |
-| `app/era_live/tool_batch.py` | 281 | One-response-per-call execution of a model's tool-call batch. |
-| `app/era_live/tool_dispatch.py` | 3506 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
+| `app/era_live/tool_batch.py` | 291 | One-response-per-call execution of a model's tool-call batch. |
+| `app/era_live/tool_dispatch.py` | 3612 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
 | `app/era_live/tts_text.py` | 101 | What a TTS voice may say — the text rules for every synthesized sentence. |
 
 ### Tool dispatch & declarations
 
 | File | Lines | Purpose |
 |---|---:|---|
-| `app/era_live/tool_dispatch.py` | 3506 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
+| `app/era_live/tool_dispatch.py` | 3612 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
 | `app/tool_declarations.py` | 2233 | Gemini Live tool declarations for Era. |
 
 ### HUD (browser UI)
@@ -163,12 +164,12 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `app/hud/__init__.py` | 6 | Localhost HUD layer: event bus, HTTP/WebSocket server glue, launcher helpers. |
-| `app/hud/api.py` | 486 | REST endpoints for the localhost HUD. |
+| `app/hud/api.py` | 510 | REST endpoints for the localhost HUD. |
 | `app/hud/browser.py` | 216 | Open (or re-focus) the HUD as a Chromium app window. |
 | `app/hud/bus_approval.py` | 114 | Approval half of the HUD bus: mirrors Era's single pending confirmation. |
 | `app/hud/bus_const.py` | 95 | Constants and pure helpers shared by the HUD event bus modules. |
 | `app/hud/bus_legacy.py` | 170 | Legacy-UI observation and the read side of the HUD bus. |
-| `app/hud/bus_tools.py` | 168 | Tool-execution half of the HUD bus: real tool calls in, activity rows out. |
+| `app/hud/bus_tools.py` | 218 | Tool-execution half of the HUD bus: real tool calls in, activity rows out. |
 | `app/hud/events.py` | 500 | The HUD's single, truthful event stream and agent state machine. |
 | `app/hud/instance.py` | 214 | Single-instance guards and the backend's discovery file. |
 | `app/hud/launcher.py` | 353 | ERA ONE launcher — the one thing the desktop shortcut runs. |
@@ -328,7 +329,7 @@ Every source module, its size, and what it is for.
 | `core/tts_fish.py` | 430 | Fish Audio TTS client — Era's PRIMARY speech synthesis backend. |
 | `core/tts_kokoro.py` | 456 | Kokoro-82M on the GPU: Era's fast local voice (George by default). |
 | `core/tts_router.py` | 82 | Speech-synthesis router — Fish or Kokoro, with Gemini as the fallback. |
-| `core/voice_output.py` | 607 | Where Era's SPOKEN VOICE plays - the single source of truth. |
+| `core/voice_output.py` | 661 | Where Era's SPOKEN VOICE plays - the single source of truth. |
 
 ### Community management (CM)
 

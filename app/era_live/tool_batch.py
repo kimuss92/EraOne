@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from google.genai import types
 
+from core.cancel_registry import REGISTRY
 from core.llm.exec_ledger import ExecLedger, assign_ordinals, derive_request_id
 from core.logger import log_event, main_logger
 from core.main_tool_bridge import build_function_response, fc_args_to_dict
@@ -271,7 +272,16 @@ class ToolBatchMixin:
                 ledger.fail(claim, exc)
                 raise
 
-            ledger.complete(claim, fr)
+            # A cancelled call must NOT be recorded as completed. The ledger
+            # caches a completed call's result and refuses a repeat of the same
+            # key within the request, so a completed-looking cancel would make
+            # the owner's correction come back as "already ran" with the cancel
+            # ack replayed -- precisely the failure this feature removes.
+            # ledger.fail reopens the key (exec_ledger's _STATE_FAILED).
+            if REGISTRY.is_cancelled(getattr(fc, "id", "") or ""):
+                ledger.fail(claim, "cancelled")
+            else:
+                ledger.complete(claim, fr)
             responses.append(fr)
 
             if name in HALTING_TOOLS:

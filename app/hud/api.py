@@ -70,6 +70,7 @@ class HudApi:
         r.add_get("/api/diagnostics", self.diagnostics)
         r.add_post("/api/message", self.message)
         r.add_post("/api/interrupt", self.interrupt)
+        r.add_post("/api/tasks/cancel", self.cancel_task)
         r.add_post("/api/voice/start", self.voice_start)
         r.add_post("/api/voice/stop", self.voice_stop)
         r.add_post("/api/standby", self.standby)
@@ -286,6 +287,29 @@ class HudApi:
     async def interrupt(self, _r: web.Request):
         self._need_engine()
         return web.json_response({"accepted": self._call(self.s._on_interrupt)})
+
+    async def cancel_task(self, r: web.Request):
+        """Cancel a running task. `{"cid": "..."}` or `{"scope": "current"}`.
+
+        No `confirm` field, deliberately. That convention guards escalations
+        (shutdown, restart, an approved schedule change); this is the opposite
+        -- a de-escalation, in the same category as /api/interrupt, which also
+        takes none. A cancel behind a confirmation dialog is a cancel that
+        arrives after the thing it was meant to stop.
+
+        The WebSocket `cancel_task` message is the primary path; this exists
+        for when the socket is down, mirroring how actions.interrupt falls back.
+        """
+        self._need_engine()
+        body = await _json_body(r)
+        cid = str(body.get("cid") or "").strip()[:120]
+        scope = str(body.get("scope") or "").strip()
+        if not cid and scope != "current":
+            return web.json_response(
+                {"error": "cid or scope=current required"},
+                status=400,
+            )
+        return web.json_response({"accepted": self._call(self.s._on_cancel_task, cid), "cid": cid})
 
     async def voice_start(self, _r: web.Request):
         self._need_engine()

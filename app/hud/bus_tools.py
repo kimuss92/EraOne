@@ -65,6 +65,50 @@ class ToolEventsMixin:
             pass
         return cid
 
+    def tool_cancelled(self, call_id: str, reason: str = "") -> None:
+        """Close a running row as cancelled NOW, without waiting for a result.
+
+        The owner clicked the X (or said "cancel that") and must see the row go
+        terminal immediately -- not in 45 seconds when the uninterruptible
+        worker thread finally returns. `cancelled` is a status the frontend
+        already renders (ui_src/src/components/ActivityPanel.tsx) and
+        `tool.cancelled` an event transport.ts already handles, so nothing
+        downstream needs to change.
+
+        This terminal state IS the soft-cancel discard discriminator -- the
+        same job SpeechOut.interrupt's generation counter does for in-flight
+        TTS, expressed as state instead of a counter. See the guard at the top
+        of tool_finished.
+        """
+        try:
+            with self._lock:
+                run = self._tools.get(call_id)
+                if run is None or run["status"] != "running":
+                    return  # nothing to cancel, or already settled
+                dur = (time.monotonic() - run["_mono"]) * 1000
+                run.update(
+                    status="cancelled",
+                    duration=int(dur),
+                    summary=reason or "Cancelled.",
+                    finishedAt=time.time(),
+                )
+                self._emit(
+                    "tool.cancelled",
+                    toolName=run["tool"],
+                    toolCallId=call_id,
+                    label=run["label"],
+                    message=run["summary"],
+                    duration=int(dur),
+                    metadata=self._public_run(run),
+                )
+                # A cancel can land while a confirmation is on screen -- the
+                # cancelled call may be the very one that armed it.
+                if self._approval is not None:
+                    self._sync_approval()
+                self._poke()
+        except Exception:
+            pass
+
     def tool_finished(
         self,
         call_id: str,
@@ -83,6 +127,12 @@ class ToolEventsMixin:
                     run = self._tools.get(call_id)
                     if run is None:
                         return
+                # A late result for a row the owner already abandoned. The
+                # worker thread could not be interrupted so it ran to
+                # completion anyway, but `cancelled` is terminal and this
+                # result is unwanted. Race-free: both paths hold self._lock.
+                if run["status"] == "cancelled":
+                    return
                 now_ts = time.time()
                 info = tool_adapter.summarize(tool, args, result, call_id=call_id, ts=now_ts)
                 dur = (

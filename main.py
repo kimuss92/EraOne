@@ -221,6 +221,7 @@ _agent_task_queue.start()
 
 from app.era_live.audio import AudioIOMixin
 from app.era_live.autopilot import AutopilotMixin
+from app.era_live.cancel import CancelMixin
 from app.era_live.cascade import CascadeMixin
 from app.era_live.claude_voice import ClaudeVoiceMixin, claude_voice_order
 from app.era_live.cm_flow import CMFlowMixin
@@ -312,6 +313,7 @@ class EraLive(
     ReconnectMixin,
     MicMuteMixin,
     PanicStopMixin,
+    CancelMixin,
     AudioIOMixin,
     LocalFallbackMixin,
     CascadeMixin,
@@ -2752,6 +2754,30 @@ def main():
         if era is not None and loop is not None and loop.is_running():
             loop.call_soon_threadsafe(era.trigger_barge_in, "hud")
 
+    def _hud_cancel_task(cid: str = "") -> bool:
+        """Cancel a running task from the HUD: the row's X, or the global button.
+
+        Deliberately NOT routed through _on_command (the way the approval
+        buttons send a literal "yes"). An approval belongs to the model, so it
+        goes through the model. A cancel has to work precisely when the model's
+        channel is not being read -- the receive loop is suspended for the
+        duration of the tool call -- so it takes its own path, like interrupt.
+
+        No loop hop here either: cancel_task sets the threading.Event on this
+        thread and closes the HUD row through the server's own loop, so the
+        owner sees it stop even while Era's loop is blocked inside the tool.
+        """
+        era = active_era_instance
+        if era is None:
+            return False
+        try:
+            if cid:
+                return era.cancel_task(cid, "hud")
+            return era.cancel_current_task("hud")
+        except Exception as e:
+            print(f"[era] [WARN] HUD cancel failed: {e}")
+            return False
+
     def _hud_shutdown(relaunch: bool = False) -> None:
         era = active_era_instance
         if era is None:
@@ -2782,6 +2808,7 @@ def main():
             print(f"[era] [WARN] HUD shutdown failed: {e}")
 
     ws_server._on_interrupt = _hud_interrupt
+    ws_server._on_cancel_task = _hud_cancel_task
     ws_server._on_shutdown = _hud_shutdown
     ws_server._on_restart = lambda: _hud_shutdown(relaunch=True)
     if ui_mode == "browser":

@@ -1,5 +1,5 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Mic, MicOff, Paperclip, Power, Send, Square } from 'lucide-react';
+import { Ban, Mic, MicOff, Paperclip, Power, Send, Square } from 'lucide-react';
 import { getState, live, useHud } from '../lib/store';
 import { actions } from '../lib/transport';
 
@@ -87,6 +87,9 @@ const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onF
 
   const online = link === 'online';
   const speaking = state === 'speaking';
+  // How many tasks are actually in flight, so the cancel button is live
+  // whenever there is work to stop -- including while she is silent.
+  const running = useHud(s => s.tools.filter(t => t.status === 'running').length);
   const micState = !online ? 'MIC DISCONNECTED' : standby ? 'STANDBY · SAY THE WAKE WORD' : micActive ? 'MIC ACTIVE' : 'MIC OFF';
 
   const submit = () => {
@@ -171,6 +174,19 @@ const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onF
           onClick={() => actions.interrupt()}
         >
           <Square className="h-3.5 w-3.5" />
+        </button>
+        {/* Separate from "Stop speaking", which only silences audio and is
+            therefore honestly dead while she is merely working. This one stops
+            the WORK. Not bound to Esc -- Esc is barge-in and stays that way. */}
+        <button
+          type="button"
+          className={`round-btn ${running ? 'round-btn-warn' : ''}`}
+          title={running ? 'Cancel the running task' : 'Nothing is running'}
+          aria-label="Cancel the running task"
+          disabled={!online || running === 0}
+          onClick={() => actions.cancelCurrentTask()}
+        >
+          <Ban className="h-4 w-4" />
         </button>
         <button type="submit" className="round-btn round-btn-accent" title="Send" aria-label="Send" disabled={!online || !text.trim()}>
           <Send className="h-4 w-4" />
