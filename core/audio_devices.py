@@ -97,9 +97,20 @@ def probe_glass(force: bool = False) -> dict:
 
 
 def invalidate() -> None:
-    """Drop the cache so the next probe re-enumerates (e.g. after a reconnect)."""
+    """Drop the cache so the next probe re-enumerates (e.g. after a reconnect).
+
+    Also the moment media routing has just moved (set_default_device calls this),
+    so the voice is re-asserted onto its chosen device here: the glasses keep
+    Era's voice while media goes to the speakers and back.
+    """
     _cache["state"] = None
     _cache["ts"] = 0.0
+    try:
+        from core.voice_output import reassert_after_media_change
+
+        reassert_after_media_change()
+    except Exception as e:  # a cache drop must never fail because of the voice
+        print(f"[AudioDevices] voice re-assert skipped: {type(e).__name__}: {e}")
 
 
 def glasses_connected(force: bool = False) -> bool:

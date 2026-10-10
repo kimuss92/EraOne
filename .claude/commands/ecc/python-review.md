@@ -251,6 +251,7 @@ def append(value, items=[]):
     items.append(value)
     return items
 
+
 # After
 def append(value, items=None):
     if items is None:

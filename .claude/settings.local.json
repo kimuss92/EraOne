@@ -116,7 +116,11 @@
       "PowerShell(Get-NetTCPConnection *)",
       "PowerShell(Get-ChildItem \"D:\\\\EraOne M4\" -Force | Select-Object -First 10; \\(Get-PSDrive D\\).Free/1GB)",
       "Bash(wmic cpu *)",
-      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)"
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Select-Object ProcessId,ExecutablePath,CreationDate | Format-List; \"--- listener 8642:\"; Get-NetTCPConnection -LocalPort 8642 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,OwningProcess; \"--- errors.log tail:\"; Get-Content D:\\\\hermes\\\\logs\\\\errors.log -Tail 15; \"--- gateway.log tail:\"; Get-Content D:\\\\hermes\\\\logs\\\\gateway.log -Tail 25; \"--- now: $\\(Get-Date\\)\")",
+      "PowerShell(foreach\\($n in 'FISH_AUDIO_MODEL','FISH_API_KEY','FISH_AUDIO_API_KEY'\\){ '{0}: {1}' -f $n, [bool][Environment]::GetEnvironmentVariable\\($n,'User'\\) }; Select-String -Path C:\\\\Users\\\\nesri\\\\OneDrive\\\\Documents\\\\EraOne\\\\core\\\\tts_fish.py -Pattern '_resolve\\\\\\(|def _resolve' | Select-Object -First 8 | ForEach-Object { $_.Line.Trim\\(\\) }; Select-String -Path C:\\\\Users\\\\nesri\\\\OneDrive\\\\Documents\\\\EraOne\\\\TODO.md -Pattern '^#|^- \\\\[ \\\\]' | Select-Object -First 15 | ForEach-Object { $_.Line.Trim\\(\\) })",
+      "Bash(ls -la docs/sessions/)",
+      "Bash(grep -nEi \"\\(api[_-]?key|token|secret|password|bearer\\)\\\\s*[:=]\\\\s*['\\\\\"]?[A-Za-z0-9_\\\\-]{12,}|sk-[A-Za-z0-9]{10,}|AIza[0-9A-Za-z_\\\\-]{20,}\" docs/sessions/* \"docs/ERAONE UNIFIED MASTER PROMPT.md\" docs/HERMES_SESSION_START.md docs/AUDIT_2026-10-09.md core/llm/adapters/omniroute.py tools/test_omniroute_adapter.py handoff.md TODO.md)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -15,14 +15,15 @@ Missed pattern:
 
 ```python
 async def _route_text_through_lanes(self, text: str) -> None:
-    import lane_dispatch                       # local import
+    import lane_dispatch  # local import
+
     decision = await asyncio.to_thread(lane_dispatch.handle, text, dispatch=False)
 ```
 
 Resolved pattern (works today):
 
 ```python
-import lane_dispatch          # module level
+import lane_dispatch  # module level
 from lane_router import route
 ```
 

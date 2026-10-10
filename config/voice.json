@@ -1,3 +1,4 @@
 {
-  "mode": "gemini_audio"
+  "mode": "gemini_audio",
+  "gemini_voice": "Ario"
 }

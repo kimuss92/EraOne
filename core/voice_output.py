@@ -156,6 +156,55 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s.casefold()).strip()
 
 
+# ── the Star Glasses display name  ->  endpoint ──────────────────────────────
+# What the user SAYS ('glasses', 'star glass') and what Windows CALLS the
+# endpoint ('Star glass (CY03-CB36)') share no word with the PC speakers, yet
+# the generic resolver could still land a glasses request on the laptop's
+# speakers. A glasses alias is therefore mapped to the endpoint by its hardware
+# tokens, deterministically, before any fuzzy matching gets a vote.
+_GLASS_ALIASES = frozenset(
+    {
+        "glass",
+        "glasses",
+        "star",
+        "star glass",
+        "star glasses",
+        "the glasses",
+        "my glasses",
+        "cy03",
+        "cb36",
+        "cy03 cb36",
+    }
+)
+# Tokens that appear in the glasses' output endpoint display name.
+_GLASS_ENDPOINT_TOKENS = ("star glass", "cy03", "cb36")
+
+
+def _glass_endpoint(query: str):
+    """The live Star Glasses output endpoint for a glasses alias, else None.
+
+    None means "not a glasses alias, or no single clear match" - the caller then
+    falls back to the generic resolver, which asks when a name is ambiguous.
+    """
+    if _norm(query) not in _GLASS_ALIASES:
+        return None
+    try:
+        from core.audio_endpoints import enumerate_endpoints
+
+        eps = list(enumerate_endpoints(OUTPUT))
+    except Exception as e:
+        print(f"[VoiceOutput] glasses endpoint probe failed: {type(e).__name__}: {e}")
+        return None
+    found = []
+    seen = set()
+    for ep in eps:
+        name = _norm(getattr(ep, "name", ""))
+        if any(tok in name for tok in _GLASS_ENDPOINT_TOKENS) and ep.id not in seen:
+            seen.add(ep.id)
+            found.append(ep)
+    return found[0] if len(found) == 1 else None
+
+
 def _name_score(endpoint_name: str, sd_name: str) -> int:
     """How well a PortAudio device name matches a Core Audio endpoint name.
 
@@ -422,6 +471,40 @@ def needs_reenumeration() -> bool:
     return resolve_output_index() is None
 
 
+def reassert_after_media_change() -> bool:
+    """Keep the voice on its chosen device after MEDIA routing moved. True if it re-routed.
+
+    Switching where media plays (the Windows default between the glasses and the
+    PC speakers) makes MME re-point its default and can knock the open voice
+    stream onto the fallback or a stale index, where nothing fails and so
+    nothing ever reopens. This compares where the stream actually opened with
+    where ``resolve_output_index`` says it belongs - the pin if there is one,
+    else the glasses while connected - and bumps ``generation()`` only when they
+    disagree, so ``_play_audio`` reopens on the right device without a restart.
+
+    It never picks a device itself (a pin always wins, because the decision is
+    ``resolve_output_index``), never touches the Windows default, and does
+    nothing when the target resolves to None: a vanished device is the playback
+    layer's recovery to handle, and tearing down a working stream for it would
+    cost the voice.
+    """
+    try:
+        route = active_route()
+        if route is None:
+            return False  # no stream yet; the first open resolves fresh
+        wanted = resolve_output_index()
+        if wanted is None:
+            return False
+        if not route.get("fallback") and route.get("index") == wanted:
+            return False  # already where it belongs - no needless reopen
+        print(f"[VoiceOutput] media routing changed; moving the voice back to device {wanted!r}.")
+        _bump()
+        return True
+    except Exception as e:  # degrade, never raise: this runs inside a routing command
+        print(f"[VoiceOutput] media-change re-assert skipped: {type(e).__name__}: {e}")
+        return False
+
+
 def _voice_lock_active() -> bool:
     """Is the owner-only voice gate on? Recorded WITH the pin so the routing
     decision carries the authority it was made under (see status())."""
@@ -436,14 +519,19 @@ def _voice_lock_active() -> bool:
 def set_pin(device: str) -> AudioResult:
     """Pin Era's voice to one named output device. Takes effect immediately.
 
-    Resolution goes through ``audio_endpoints.resolve``, so this inherits the
-    rule that matters most: a name matching several devices ASKS rather than
-    picking one. Nothing about the system default is touched - media playback
-    stays exactly where the user put it.
+    A glasses alias ('glasses', 'Star glass', 'CY03-CB36') is mapped to the Star
+    Glasses endpoint directly, so it can never resolve to the PC speakers. Any
+    other name goes through ``audio_endpoints.resolve``, which keeps the rule
+    that matters most: a name matching several devices ASKS rather than picking
+    one. Nothing about the system default is touched - media playback stays
+    exactly where the user put it.
     """
     from core.audio_endpoints import resolve
 
-    ep, err = resolve(device, OUTPUT)
+    ep = _glass_endpoint(device)
+    err = None
+    if ep is None:
+        ep, err = resolve(device, OUTPUT)
     if err:
         return err
 
