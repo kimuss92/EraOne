@@ -242,4 +242,12 @@ export interface HudSettings {
   open_hud_on_start: boolean;
   app_mode: boolean;
   autostart?: { enabled: boolean; startup_shortcut: boolean; scheduled_task: string | null };
+  /** Gemini Live's voice (config/voice.json): one of the 30 Live voices. */
+  gemini_voice?: string;
+  /** The voice Era actually uses now (differs if Gemini refused the configured one). */
+  gemini_voice_active?: string;
+  gemini_voices?: { name: string; style: string; gender?: 'male' | 'female' | 'neutral' }[];
+  /** Why the active voice differs from the configured one, if it does. */
+  gemini_voice_note?: string;
+  voice_note?: string;
 }

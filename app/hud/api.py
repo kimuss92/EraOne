@@ -228,15 +228,33 @@ class HudApi:
     async def get_settings(self, _r: web.Request):
         data = settings.load()
         data["autostart"] = await asyncio.to_thread(shortcuts.autostart_status)
+        data.update(_gemini_voice_view())
         return web.json_response(data)
 
     async def post_settings(self, r: web.Request):
         body = await _json_body(r)
         autostart = body.pop("autostart", None)
+        voice = body.pop("gemini_voice", None)  # config/voice.json, not hud_settings
+        apply_voice = body.pop("apply_voice", False) is True
+        voice_note = ""
+        if voice is not None:
+            from core.voice_mode import set_gemini_voice
+
+            try:
+                await asyncio.to_thread(set_gemini_voice, str(voice))
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
+            voice_note = "Saved. It applies at Era's next reconnect (within minutes)."
+            engine = self.s.engine()
+            if apply_voice and engine is not None and hasattr(engine, "apply_gemini_voice_now"):
+                voice_note = await asyncio.to_thread(engine.apply_gemini_voice_now)
         try:
             data = settings.update(body) if body else settings.load()
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
+        data.update(_gemini_voice_view())
+        if voice_note:
+            data["voice_note"] = voice_note
         if autostart is not None:
             if not isinstance(autostart, bool):
                 return web.json_response({"error": "autostart must be true or false"}, status=400)
@@ -455,3 +473,13 @@ def _dumps(obj: Any) -> str:
     import json
 
     return json.dumps(obj, default=str)
+
+
+def _gemini_voice_view() -> dict:
+    """Gemini's voice for the HUD Settings list (core/voice_mode)."""
+    try:
+        from core.voice_mode import gemini_voice_view
+
+        return gemini_voice_view()
+    except Exception:
+        return {}

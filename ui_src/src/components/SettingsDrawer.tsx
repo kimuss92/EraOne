@@ -29,12 +29,12 @@ export default function SettingsDrawer() {
     api<HudSettings>('/api/settings').then(c => { setCfg(c); setCity(c.weather_city); }).catch(e => setMsg(String(e.message || e)));
   }, []);
 
-  const save = async (patch: Partial<Omit<HudSettings, 'autostart'>> & { autostart?: boolean }) => {
+  const save = async (patch: Partial<Omit<HudSettings, 'autostart'>> & { autostart?: boolean; apply_voice?: boolean }) => {
     try {
       const next = await api<HudSettings>('/api/settings', { method: 'POST', body: patch });
       setCfg(next);
       setSoundsEnabled(next.hud_sounds);
-      setMsg('Saved.');
+      setMsg(next.voice_note || 'Saved.');
       window.dispatchEvent(new Event('era:settings'));
     } catch (e) {
       setMsg(String((e as Error).message || e));
@@ -51,6 +51,33 @@ export default function SettingsDrawer() {
             <h3 className="micro pt-1 t2">APPEARANCE</h3>
             <Toggle label="Light theme" hint="Also switchable by voice: “light mode” / “dark mode”." on={theme === 'light'} onChange={v => setState({ theme: v ? 'light' : 'dark' })} />
             <Toggle label="HUD sounds" hint="Subtle cues for wake, tool completion, errors and replies. Era's voice is separate." on={cfg.hud_sounds} onChange={v => save({ hud_sounds: v })} />
+
+            <h3 className="micro pt-3 t2">VOICE</h3>
+            <label className="block py-2">
+              <span className="block text-body t1">Gemini voice</span>
+              <span className="block pb-2 text-meta leading-snug t3">
+                The 30 voices Gemini Live can speak with. A new choice applies right away (or as soon as Era finishes speaking).
+              </span>
+              <select
+                value={cfg.gemini_voice || ''}
+                onChange={e => void save({ gemini_voice: e.target.value, apply_voice: true })}
+                className="field w-full px-2 py-1.5 text-body t1 outline-none"
+                aria-label="Gemini voice"
+              >
+                {(['male', 'female', 'neutral'] as const).map(g => {
+                  const list = (cfg.gemini_voices || []).filter(v => (v.gender || 'neutral') === g);
+                  if (!list.length) return null;
+                  return (
+                    <optgroup key={g} label={g === 'male' ? 'Male' : g === 'female' ? 'Female' : 'Neutral'}>
+                      {list.map(v => <option key={v.name} value={v.name}>{v.name} — {v.style}</option>)}
+                    </optgroup>
+                  );
+                })}
+              </select>
+              <span className="block pt-1 text-meta t3">
+                {cfg.gemini_voice_note || (cfg.gemini_voice_active ? `Active: ${cfg.gemini_voice_active}` : '')}
+              </span>
+            </label>
 
             <h3 className="micro pt-3 t2">WEATHER</h3>
             <form className="flex gap-2 py-2" onSubmit={e => { e.preventDefault(); void save({ weather_city: city }); }}>
