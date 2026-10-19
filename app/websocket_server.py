@@ -71,6 +71,8 @@ class WebSocketServer:
         self._on_client_connect: Any = None
         self._on_interrupt: Any = None
         self._on_cancel_task: Any = None
+        self._on_telegram_call: Any = None
+        self._on_approval: Any = None
         self._on_shutdown: Any = None
         self._on_restart: Any = None
         self.engine_provider: Any = lambda: None
@@ -334,6 +336,15 @@ class WebSocketServer:
             # "command", because a cancel must reach the engine while the
             # model's channel is exactly what is not being read.
             self._spawn(self._on_cancel_task, str(data.get("cid", "") or "")[:120])
+        elif t == "telegram_call":
+            action = data.get("action")
+            generation = data.get("generation", "")
+            if (
+                action in ("dial", "listen", "hangup", "recover", "renew_test", "stop_listening")
+                and isinstance(generation, str)
+                and len(generation) <= 32
+            ):
+                self._spawn(self._on_telegram_call, action, generation)
         elif t == "ping":
             try:
                 await ws.send_str(json.dumps({"type": "pong", "t": data.get("t")}))

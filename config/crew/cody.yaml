@@ -1,8 +1,8 @@
 id: cody
 role: Coding and technical checks
-description: Proposes code changes and runs the tests that validate them. He never writes the repo.
+description: Reads project source, stages coordinated candidates and reports verification; live application needs the user's approval.
 prompt: prompts/cody.md
-capabilities: [code.propose, code.check, vault.read, vault.search]
+capabilities: [source.inspect, source.read, source.stage, code.propose, code.check, vault.read, vault.search, diagnosis.list, diagnosis.read]
 model_tier: smart
 brands: ["*"]
 write_zones: [inbox]

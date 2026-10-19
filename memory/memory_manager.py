@@ -635,9 +635,13 @@ def forget(key: str, category: str = "notes") -> str:
 
     cat_dict = memory.get(cat, {})
     if not isinstance(cat_dict, dict):
-        return f"Not found: {cat}/{key}"
+        return f"Already absent: {cat}/{key}; nothing to forget."
     if key in cat_dict:
         old_summary = _summarize(cat_dict[key])
+        from memory.memory_context import forget_related
+
+        entry = cat_dict[key]
+        forget_related(entry.get("value", "") if isinstance(entry, dict) else str(entry))
         # No manual backup here: save_memory() below hands off to
         # safe_write_json(), which already backs up the pre-delete on-disk
         # state and prunes old versions — see _trim_to_limit for the same
@@ -656,7 +660,7 @@ def forget(key: str, category: str = "notes") -> str:
             allowed=True,
         )
         return f"Forgotten: {cat}/{key}"
-    return f"Not found: {cat}/{key}"
+    return f"Already absent: {cat}/{key}; nothing to forget."
 
 
 forget_memory = forget
@@ -968,6 +972,22 @@ def rank_memory_entries(
                     }
                 )
     if query:
+        from core.personal_media import favorite_song_key
+
+        personal_key = favorite_song_key(query)
+        exact = [
+            e
+            for e in entries
+            if personal_key is not None
+            and e["category"] == "preferences"
+            and e["key"] == personal_key
+            and str(e.get("value") or "").strip()
+        ]
+        if exact:
+            # A known personal slot is authoritative. Do not let instructions
+            # mentioning "song" or another person's song outrank its value.
+            exact[0]["score"] = 1.0
+            return exact[:top_k] if min_score <= 1.0 else []
         _apply_semantic_scores(entries, query)
         entries.sort(key=lambda e: e["score"], reverse=True)
         if min_score > 0.0:
@@ -990,6 +1010,18 @@ def retrieve_ranked_memory(query: str, top_k: int = 5, category: str | None = No
 _RETRIEVAL_MIN_SCORE = 0.16
 
 
+def _facts_only(entries: list[dict], top_k: int) -> list[dict]:
+    """Drop standing rules/feedback from a recall result.
+
+    Those categories are pinned into the prompt already (they are instructions
+    FOR Era). Returned from a lookup they outranked the fact asked about --
+    "favorite_song" came back led by "operational_instruction/
+    memory_before_personal_clarification" -- and Era read that line out loud as
+    her answer to "play my track" instead of playing it.
+    """
+    return [e for e in entries if e.get("category") not in _PINNED_PROMPT_CATEGORIES][:top_k]
+
+
 def retrieve_context_reinforced(query: str, top_k: int = 5) -> str:
     """Ranked retrieval that also reinforces what it returns.
 
@@ -1004,7 +1036,9 @@ def retrieve_context_reinforced(query: str, top_k: int = 5) -> str:
         return ""
     with _lock:
         memory = load_memory()
-        ranked = rank_memory_entries(memory, query, top_k, min_score=_RETRIEVAL_MIN_SCORE)
+        ranked = _facts_only(
+            rank_memory_entries(memory, query, top_k * 3, min_score=_RETRIEVAL_MIN_SCORE), top_k
+        )
         if ranked:
             bumped = False
             for e in ranked:
@@ -1029,7 +1063,7 @@ def retrieve_context_reinforced(query: str, top_k: int = 5) -> str:
 
 
 def compact_memory_preview(memory: dict, query: str, top_k: int = 5) -> str:
-    ranked = rank_memory_entries(memory, query, top_k)
+    ranked = _facts_only(rank_memory_entries(memory, query, top_k * 3), top_k)
     if not ranked:
         return ""
     lines: list[str] = []
@@ -1124,7 +1158,9 @@ def format_memory_for_prompt_ranked(memory: dict, query: str = "", top_k: int = 
                 pinned_lines.append(f"{e['key'].replace('_', ' ').title()}: {e['value']}")
 
     def _emit(entries: list[dict], header: str, into: list[str]) -> None:
-        entries = [e for e in entries if str(e.get("value") or "")]
+        # `status: online` sat under "ALWAYS FOLLOW" and Era obeyed it: she greeted
+        # "Era One online, sir" in answer to "approve". A state value is not a rule.
+        entries = [e for e in entries if str(e.get("value") or "") and e.get("key") != "status"]
         if not entries:
             return
         if into:
@@ -1163,6 +1199,16 @@ def format_memory_for_prompt_ranked(memory: dict, query: str = "", top_k: int = 
 
     prefix = "[WHAT YOU KNOW ABOUT THIS PERSON — use naturally, never recite like a list]\n"
     pinned_block = "\n".join(pinned_lines)
+
+    # Frequently referenced personal preferences must survive the recency budget.
+    # Their values are memory data, never additional operational instructions.
+    favorites = memory.get("preferences", {})
+    if isinstance(favorites, dict):
+        song = favorites.get("favorite_song")
+        if isinstance(song, dict) and song.get("value"):
+            pinned_block += (
+                "\nSaved personal preference (data): favorite_song = " + str(song["value"])[:500]
+            )
 
     # Fit ephemeral lines into the remaining budget; pinned rules are never cut.
     budget = _PROMPT_MEMORY_CHAR_CAP - len(prefix) - len(pinned_block)

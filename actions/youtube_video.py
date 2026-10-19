@@ -250,47 +250,34 @@ def _handle_playback_control(action: str, browser_name: str | None = _DEFAULT_BR
     js_scripts = {
         "pause": (
             "const v = document.querySelector('video'); "
-            "if(v) { v.pause(); return 'YouTube video paused cleanly'; } "
+            "if(v) { v.pause(); return v.paused ? 'YouTube video paused cleanly' : 'YouTube pause failed read-back'; } "
             "return 'No HTML5 video element found on YouTube page';"
         ),
         "resume": (
             "const v = document.querySelector('video'); "
-            "if(v) { v.play(); return 'YouTube video resumed cleanly'; } "
+            "if(v) { return v.play().then(() => !v.paused && !v.ended ? 'YouTube video resumed cleanly' : 'YouTube resume failed read-back').catch(() => 'YouTube playback was blocked'); } "
             "return 'No HTML5 video element found on YouTube page';"
         ),
         "play_pause": (
             "const v = document.querySelector('video'); "
-            "if(v) { if(v.paused) { v.play(); return 'YouTube video resumed'; } else { v.pause(); return 'YouTube video paused'; } } "
+            "if(v) { if(v.paused) { return v.play().then(() => !v.paused && !v.ended ? 'YouTube video resumed' : 'YouTube resume failed read-back').catch(() => 'YouTube playback was blocked'); } else { v.pause(); return v.paused ? 'YouTube video paused' : 'YouTube pause failed read-back'; } } "
             "return 'No HTML5 video target discovered';"
         ),
     }
 
     script = js_scripts.get(action if action in js_scripts else "play_pause")
 
-    cdp_error: str | None = None
     # Primary path: CDP-based JS injection into the YouTube tab.
     try:
         sess = get_browser_session(browser_name)
         result = sess.run(sess.evaluate_background_media("youtube.com", script))
         print(f"[YouTube] Native CDP Pipeline Response: {result}")
-        # If CDP succeeded, return the result directly.
-        if "No HTML5" not in result and "exception" not in result.lower():
-            return result
+        # Missing targets and failed reads do not identify a safe keyboard target.
+        # A timeout can also occur after mutation: never replay it as a toggle.
+        return result
     except Exception as e:
-        cdp_error = str(e)
-        print(f"[YouTube] CDP injection failed ({cdp_error}), falling back to keyboard simulation")
-
-    # Fallback: keyboard shortcut simulation on the focused browser window.
-    # YouTube uses Spacebar (or 'k') to toggle play/pause.
-    try:
-        import pyautogui
-
-        pyautogui.press("space")
-        print(f"[YouTube] Keyboard fallback sent spacebar for action: {action}")
-        return f"YouTube {action} triggered via keyboard fallback."
-    except Exception as kb_e:
-        cdp_detail = f" CDP: {cdp_error}" if cdp_error else ""
-        return f"YouTube control failed: keyboard ({kb_e}){cdp_detail}"
+        print(f"[YouTube] CDP control interrupted ({type(e).__name__}); playback is unverified")
+        return "YouTube control interrupted; playback is not verified. Check the player before retrying."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1060,9 +1047,9 @@ def youtube_video(
         try:
             from core.media_state import set_status
 
-            if action == "pause":
+            if result.startswith("YouTube video paused"):
                 set_status("youtube", "paused")
-            elif action in ("resume", "play_pause", "play"):
+            elif result.startswith("YouTube video resumed"):
                 set_status("youtube", "playing")
         except Exception:
             pass
@@ -1074,6 +1061,13 @@ def youtube_video(
         if action == "play":
             result = _handle_play(params, player, browser_name) or "Done."
             if "Playing" in result:
+                # Video sound goes to the remembered media device, like music.
+                try:
+                    from core.media_routing import enforce_media_target_async
+
+                    enforce_media_target_async("browser")
+                except Exception:
+                    pass
                 try:
                     from core.browser_grid_state import set_scroll_context
 

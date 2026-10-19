@@ -156,6 +156,7 @@ def test_offer_note_is_one_shot_and_constrained():
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 def _isolate(monkeypatch):
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {})
     monkeypatch.setattr("core.utils.load_config", lambda: {}, raising=False)
 
 
@@ -256,6 +257,7 @@ def test_looks_unfinished_false(text):
 
 def test_endpointing_defaults(monkeypatch):
     _isolate(monkeypatch)
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {})
     for v in (
         "ERA_ENDPOINTING",
         "ERA_ENDPOINTING_SILENCE_MS",
@@ -274,6 +276,7 @@ def test_endpointing_defaults(monkeypatch):
 
 def test_endpointing_env_override(monkeypatch):
     _isolate(monkeypatch)
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {})
     monkeypatch.setenv("ERA_ENDPOINTING", "false")
     monkeypatch.setenv("ERA_ENDPOINTING_SILENCE_MS", "1200")
     monkeypatch.setenv("ERA_ENDPOINTING_END", "high")
@@ -285,6 +288,7 @@ def test_endpointing_env_override(monkeypatch):
 
 def test_endpointing_bad_values_fall_back(monkeypatch):
     _isolate(monkeypatch)
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {})
     monkeypatch.setenv("ERA_ENDPOINTING_SILENCE_MS", "soon")
     monkeypatch.setenv("ERA_ENDPOINTING_END", "medium")  # not low/high
     ep = get_endpointing_config()
@@ -297,6 +301,7 @@ def test_realtime_input_config_builds_or_disables(monkeypatch):
     enabled and return None when disabled (guards against a genai API change)."""
     from app.era_live.tool_dispatch import ToolDispatchMixin
 
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {})
     monkeypatch.setattr("core.utils.load_config", lambda: {}, raising=False)
     monkeypatch.delenv("ERA_ENDPOINTING", raising=False)
     ric = ToolDispatchMixin._realtime_input_config(object())

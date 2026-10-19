@@ -1,5 +1,4 @@
 # core/utils.py
-import json
 import math
 import ntpath
 import os
@@ -75,8 +74,9 @@ def get_config_dir() -> Path:
 def load_config() -> dict:
     """Load the API keys / settings JSON file."""
     try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
-        return data if isinstance(data, dict) else {}
+        from core.protected_config import read_config
+
+        return read_config(CONFIG_PATH)
     except Exception:
         return {}
 

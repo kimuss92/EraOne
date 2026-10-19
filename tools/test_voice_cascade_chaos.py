@@ -75,7 +75,7 @@ async def fish_server():
 
 
 @pytest.fixture
-def fish(monkeypatch):
+async def fish(monkeypatch):
     """A fresh real Fish client (the singleton's session belongs to another
     loop), wired in everywhere the cascade looks it up."""
     client = tts_fish.FishAudioClient()
@@ -86,7 +86,10 @@ def fish(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(VoiceModeConfig, "_write", lambda self: None, raising=False)
     monkeypatch.setattr(local_tts, "_outage", {"reason": "", "noticed": True})
-    yield client
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 def _point_at(monkeypatch, url: str, **extra) -> None:
@@ -159,13 +162,19 @@ async def test_the_stall_deadline_is_configurable(fish, fish_server, monkeypatch
     assert elapsed < FAST
 
 
-async def test_a_mid_stream_stall_keeps_what_played_and_cools_down(fish, fish_server, monkeypatch):
+async def test_a_mid_stream_stall_marks_the_prefix_incomplete_and_cools_down(
+    fish, fish_server, monkeypatch
+):
     state, url = fish_server
     state["mode"] = "stall"
     _point_at(monkeypatch, url, stall_timeout_s=0.4)
-    audio, elapsed = await _timed_stream(fish)
-    await fish.close()
-    assert audio == PCM, "audio that already arrived is kept, not replayed by Gemini"
+    started = time.perf_counter()
+    chunks = []
+    with pytest.raises(tts_fish.IncompleteSpeechError, match="stalled"):
+        async for chunk in fish.stream("Testing the cascade."):
+            chunks.append(chunk)
+    elapsed = time.perf_counter() - started
+    assert b"".join(chunks) == PCM, "the prefix arrived but is not a complete playable phrase"
     assert elapsed < FAST
     assert fish.in_cooldown()
 

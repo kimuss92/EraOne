@@ -41,6 +41,10 @@ SKIP_DIRS: set[str] = {
 }
 
 MAX_WALK_DEPTH = 6
+_SKIP_CASEFOLD = frozenset(p.casefold() for p in SKIP_DIRS)
+
+# _compute_final_score grants max(0, 10 - 2 * root_priority): 5 means no bonus.
+_NO_ROOT_PRIORITY = 5
 
 # ── Watcher debounce interval (seconds) ─────────────────────────────────────
 _WATCHER_DEBOUNCE = 2.0
@@ -60,10 +64,16 @@ class FileIndex:
         self._build_thread: threading.Thread | None = None
         self._observer = None  # watchdog.Observer, lazy init
         self._watcher_started = False
+        self._watch_lock = threading.RLock()
+        self._watch_starting = False
+        self._watch_roots: list[str] = []
+        self._watch_failures: list[str] = []
+        self._change_listeners: set = set()
         self._roots: list[Path] = []
         self._last_event_time: float = 0.0
         self._event_timer: threading.Timer | None = None
         self._ready = threading.Event()
+        self._discovery = None
 
     # ── Connection management ────────────────────────────────────────────────
 
@@ -137,12 +147,21 @@ class FileIndex:
         conn.commit()
 
     def close(self) -> None:
-        if self._observer and self._watcher_started:
+        self._closed = True
+        if self._discovery is not None:
+            self._discovery.close()
+        if self._observer:
             try:
                 self._observer.stop()
+                if self._observer.ident is not None:
+                    self._observer.join(timeout=5.0)
+                if self._observer.is_alive():
+                    log("FileIndex", "close(): watcher still running; leaving connection open")
+                    return
             except Exception:
-                pass
-        self._closed = True
+                if self._observer.is_alive():
+                    return
+        self._watcher_started = False
         # The build worker shares this connection (check_same_thread=False), so
         # closing it mid-execute is a native access violation, not a Python
         # exception — it once crashed the whole pytest process. Wait for any
@@ -318,9 +337,14 @@ class FileIndex:
 
     def _flush_batch(self, conn: sqlite3.Connection, batch: list[tuple]) -> None:
         conn.executemany(
-            "INSERT OR REPLACE INTO files "
+            "INSERT INTO files "
             "(path, name, extension, size, modified, created, is_dir, root_priority, indexed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET name=excluded.name, "
+            "extension=excluded.extension, size=excluded.size, modified=excluded.modified, "
+            "created=excluded.created, is_dir=excluded.is_dir, "
+            "root_priority=MIN(files.root_priority, excluded.root_priority), "
+            "indexed_at=excluded.indexed_at",
             batch,
         )
         conn.commit()
@@ -613,8 +637,10 @@ class FileIndex:
                 c["score"] = 0.0
                 continue
 
-            # Determine root_priority (0 = highest priority)
-            root_priority = 0
+            # Determine root_priority (0 = highest priority). A path under none of
+            # the usual folders gets the LOWEST rank (bonus 0): defaulting to 0
+            # made %TEMP% debris outrank the same file inside Documents.
+            root_priority = _NO_ROOT_PRIORITY
             try:
                 parts = Path(c["path"]).parts
                 # Desktop, Downloads, Documents are highest priority
@@ -663,9 +689,138 @@ class FileIndex:
 
     # ── File watcher ─────────────────────────────────────────────────────────
 
-    def start_watcher(self, roots: list[Path] | None = None) -> None:
-        if self._watcher_started:
+    def subscribe_changes(self, listener):
+        """Reuse this indexer's native watcher; subscribers must only enqueue."""
+        with self._watch_lock:
+            self._change_listeners.add(listener)
+
+        def unsubscribe():
+            with self._watch_lock:
+                self._change_listeners.discard(listener)
+
+        return unsubscribe
+
+    def watcher_status(self) -> dict:
+        with self._watch_lock:
+            observer = self._observer
+            alive = bool(observer and observer.is_alive())
+            emitters = tuple(observer.emitters) if observer else ()
+            running = alive and bool(emitters) and all(e.is_alive() for e in emitters)
+            return {
+                "running": running,
+                "roots": list(self._watch_roots),
+                "failedRoots": list(self._watch_failures),
+                "discovery": self._discovery.snapshot()
+                if self._discovery
+                else {
+                    "pending": 0,
+                    "active": False,
+                    "dropped": 0,
+                    "last": {"indexed": 0, "skipped": 0, "incomplete": False},
+                },
+            }
+
+    def _watch_path_ignored(self, value: str) -> bool:
+        path = Path(value)
+        if any(part.casefold() in _SKIP_CASEFOLD for part in path.parts):
+            return True
+        # SQLite writes its own WAL/shm/journal under the watched user tree.
+        # Indexing those notifications would write the WAL again indefinitely.
+        key = os.path.normcase(os.path.abspath(value))
+        database = os.path.normcase(os.path.abspath(self._db_path))
+        return key in {database, database + "-wal", database + "-shm", database + "-journal"}
+
+    def _handle_watch_event(self, event) -> None:
+        if self._closed:
             return
+        kind = event.event_type
+        if kind not in {"created", "modified", "deleted", "moved"}:
+            return
+        if kind == "modified" and event.is_directory:
+            return  # Child events carry the actionable change, not synthetic parent noise.
+        src = str(event.src_path)
+        dest = str(getattr(event, "dest_path", "") or "")
+        is_directory = bool(event.is_directory)
+        if kind in {"deleted", "moved"} and not is_directory:
+            # Windows cannot stat a path after deletion and watchdog reports
+            # deleted directories as files. The index preserves its known type.
+            try:
+                row = (
+                    self._get_conn()
+                    .execute("SELECT is_dir FROM files WHERE path = ? COLLATE NOCASE", (src,))
+                    .fetchone()
+                )
+                is_directory = bool(row and row["is_dir"])
+            except Exception as exc:
+                log("FileIndex", f"Deleted-path type lookup failed: {type(exc).__name__}")
+        src_ok = bool(src) and not self._watch_path_ignored(src)
+        dest_ok = bool(dest) and not self._watch_path_ignored(dest)
+        if not src_ok and not dest_ok:
+            return
+        if kind in {"deleted", "moved"} and self._discovery is not None:
+            self._discovery.invalidate(src)
+        if kind == "moved" and not src_ok:
+            kind, src, dest = "created", dest, ""
+        elif kind == "moved" and not dest_ok:
+            kind, dest = "deleted", ""
+        data = {
+            "kind": kind,
+            "path": src,
+            "destination": dest or None,
+            "isDirectory": is_directory,
+            "observedAt": time.time(),
+        }
+        with self._watch_lock:
+            listeners = tuple(self._change_listeners)
+        for listener in listeners:
+            try:
+                listener(dict(data))
+            except Exception as exc:
+                log("FileIndex", f"File event subscriber failed: {type(exc).__name__}")
+        if kind == "deleted":
+            if is_directory:
+                self._incremental_subtree(src)
+            else:
+                self._incremental_remove(src)
+        elif kind == "moved":
+            if is_directory:
+                self._incremental_subtree(src, dest)
+                self._incremental_add(dest)
+                self._discover_tree(dest)
+            else:
+                self._incremental_remove(src)
+                self._incremental_add(dest)
+        elif kind == "created" and is_directory:
+            self._incremental_add(src)
+            self._discover_tree(src)
+        elif not is_directory:
+            if kind == "created":
+                self._incremental_add(src)
+            else:
+                self._incremental_update(src)
+
+    def _discover_tree(self, path: str) -> None:
+        from core.subtree_discovery import SubtreeDiscovery
+
+        with self._watch_lock:
+            if self._closed:
+                return
+            if self._discovery is None:
+                self._discovery = SubtreeDiscovery(self._db_path, self._watch_path_ignored)
+            self._discovery.enqueue(path)
+
+    def start_watcher(self, roots: list[Path] | None = None) -> None:
+        with self._watch_lock:
+            if self._closed or self._watch_starting or self.watcher_status()["running"]:
+                return
+            self._watch_starting = True
+        try:
+            self._start_watcher(roots)
+        finally:
+            with self._watch_lock:
+                self._watch_starting = False
+
+    def _start_watcher(self, roots: list[Path] | None = None) -> None:
         try:
             from watchdog.events import FileSystemEventHandler
             from watchdog.observers import Observer
@@ -677,39 +832,41 @@ class FileIndex:
             roots = self._roots
         if not roots:
             return
+        if self._observer:
+            self._observer.stop()
+            if self._observer.ident is not None:
+                self._observer.join(timeout=5.0)
+            if self._observer.is_alive():
+                log("FileIndex", "Old watcher did not stop; refusing a duplicate")
+                return
 
         class _IndexEventHandler(FileSystemEventHandler):
             def __init__(self, index: FileIndex):
                 self._index = index
 
-            def on_created(self, event):
-                if event.is_directory:
-                    return
-                self._index._incremental_add(event.src_path)
-
-            def on_deleted(self, event):
-                self._index._incremental_remove(event.src_path)
-
-            def on_moved(self, event):
-                self._index._incremental_remove(event.src_path)
-                if not event.is_directory:
-                    self._index._incremental_add(event.dest_path)
-
-            def on_modified(self, event):
-                if event.is_directory:
-                    return
-                self._index._incremental_update(event.src_path)
+            def on_any_event(self, event):
+                self._index._handle_watch_event(event)
 
         try:
             self._observer = Observer()
             handler = _IndexEventHandler(self)
+            scheduled, failed = [], []
 
             for root in roots:
                 if root.exists() and root.is_dir():
                     try:
                         self._observer.schedule(handler, str(root), recursive=True)
+                        scheduled.append(str(root))
                     except Exception as e:
+                        failed.append(str(root))
                         log("FileIndex", f"Watcher failed to schedule {root}: {e}")
+                else:
+                    failed.append(str(root))
+
+            with self._watch_lock:
+                self._watch_roots, self._watch_failures = scheduled, failed
+            if not scheduled:
+                return
 
             self._observer.daemon = True
             self._observer.start()
@@ -731,9 +888,12 @@ class FileIndex:
 
             conn = self._get_conn()
             conn.execute(
-                "INSERT OR REPLACE INTO files "
+                "INSERT INTO files "
                 "(path, name, extension, size, modified, created, is_dir, root_priority, indexed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET name=excluded.name, "
+                "extension=excluded.extension, size=excluded.size, modified=excluded.modified, "
+                "created=excluded.created, is_dir=excluded.is_dir, indexed_at=excluded.indexed_at",
                 (
                     str(p),
                     p.name,
@@ -758,6 +918,63 @@ class FileIndex:
             conn.commit()
         except Exception:
             pass
+
+    def _incremental_subtree(self, source: str, destination: str | None = None) -> None:
+        """Repair indexed descendants without walking or mutating the filesystem.
+
+        Use a separate connection: commits from other users of the shared
+        connection must not split this transaction or interfere with rollback.
+        """
+        if self._closed:
+            return
+        src = str(Path(source))
+        prefix = src.rstrip(os.sep) + os.sep
+        dst = str(Path(destination)) if destination else None
+        if dst == src:
+            return
+        if dst and os.path.normcase(dst).startswith(os.path.normcase(prefix)):
+            log("FileIndex", "Subtree repair refused an overlapping destination")
+            return
+        scope = (src, len(prefix), prefix)
+        conn = None
+        try:
+            with self._lock:
+                self._get_conn()  # Ensure the schema exists before opening the writer.
+                conn = sqlite3.connect(str(self._db_path), timeout=5)
+                # Replacement conflicts must fire FTS delete triggers as well.
+                conn.execute("PRAGMA recursive_triggers=ON")
+                with conn:
+                    if dst is None:
+                        conn.execute(
+                            "DELETE FROM files WHERE path = ? COLLATE NOCASE "
+                            "OR substr(path, 1, ?) = ? COLLATE NOCASE",
+                            scope,
+                        )
+                        conn.execute(
+                            "DELETE FROM opened_paths WHERE path = ? COLLATE NOCASE "
+                            "OR substr(path, 1, ?) = ? COLLATE NOCASE",
+                            scope,
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE OR REPLACE files SET "
+                            "path = ? || substr(path, ?), "
+                            "name = CASE WHEN path = ? COLLATE NOCASE THEN ? ELSE name END, "
+                            "indexed_at = ? WHERE path = ? COLLATE NOCASE "
+                            "OR substr(path, 1, ?) = ? COLLATE NOCASE",
+                            (dst, len(src) + 1, src, Path(dst).name, time.time(), *scope),
+                        )
+                        conn.execute(
+                            "UPDATE OR REPLACE opened_paths SET path = ? || substr(path, ?) "
+                            "WHERE path = ? COLLATE NOCASE "
+                            "OR substr(path, 1, ?) = ? COLLATE NOCASE",
+                            (dst, len(src) + 1, *scope),
+                        )
+        except Exception as exc:
+            log("FileIndex", f"Subtree index repair failed: {type(exc).__name__}")
+        finally:
+            if conn is not None:
+                conn.close()
 
     def _incremental_update(self, path_str: str) -> None:
         """Update metadata for a single file (size, mtime)."""

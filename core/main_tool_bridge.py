@@ -79,7 +79,14 @@ def _build_suggested_confirmation_question(result: ToolResult) -> str:
             return f"Sir, do you want me to forget memory {cat}/{key}? Should I proceed?"
 
     if tool == "file_controller":
-        file_action = data.get("action", "")
+        file_action = str(data.get("action", "")).strip().lower()
+        if file_action == "rename":
+            from core.file_arguments import rename_source_label
+
+            source = _safe_preview_value("path", rename_source_label(data))
+            destination = _safe_preview_value("new_name", data.get("new_name", ""))
+            if source and destination:
+                return f"Sir, rename '{source}' to '{destination}' in the same folder? Should I proceed?"
         name = data.get("name", data.get("path", ""))
         safe_name = _safe_preview_value("name", name)
         if file_action and safe_name:

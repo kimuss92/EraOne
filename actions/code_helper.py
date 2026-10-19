@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import subprocess
@@ -18,8 +17,9 @@ GEMINI_MODEL = "gemini-3.8-flash"
 
 
 def get_api_key() -> str:
-    with open(API_CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    from core.protected_config import read_config
+
+    return read_config(API_CONFIG_PATH)["gemini_api_key"]
 
 
 def _get_gemini(model: str = GEMINI_MODEL):

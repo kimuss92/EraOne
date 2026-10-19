@@ -72,6 +72,30 @@ def test_health_is_public_and_identifies_eraone(server):
     assert "token" not in json.dumps(data).lower()
 
 
+def test_edit_opens_exact_source_in_editor_and_records_recent_file(server, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.hud import api, recent_files
+    from core.win_subprocess import NO_WINDOW
+
+    target = tmp_path / "new source file.py"
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    editor = tmp_path / "Code.exe"
+    monkeypatch.setattr(api, "_published_path", lambda raw: str(target))
+    monkeypatch.setattr(api, "_code_editor", lambda path: editor)
+    monkeypatch.setattr(recent_files, "PATH", tmp_path / "recent.json")
+    launch = Mock()
+    monkeypatch.setattr(api.subprocess, "Popen", launch)
+    code, payload = post(
+        server, "/api/reveal", {"path": str(target), "mode": "edit"}, server.session_token
+    )
+    assert code == 200 and payload["action"] == "open"
+    launch.assert_called_once_with(
+        [str(editor), "--reuse-window", str(target)], creationflags=NO_WINDOW
+    )
+    assert recent_files.snapshot() == [str(target)]
+
+
 def test_api_needs_the_session_token(server):
     assert get(server, "/api/status")[0] == 401
     assert get(server, "/api/status", token="wrong")[0] == 401

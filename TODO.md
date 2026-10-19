@@ -7,6 +7,25 @@ Companion files: `handoff.md` (what was done and how it was verified),
 Rule for this board: an item moves to **Done** only when something *ran* and
 proved it. "Written" is not "done".
 
+**Latest (2026-10-18, Claude):** Phase 9–11 audit against the live log. Open-by-name
+repair (bare `desktop` no longer glued to the filename; `%TEMP%` debris no longer
+outranks real files) and `python tools/era_observe.py --since last-start` for the
+Phase 11 observation window. Default-tier gate 8,073 passed / 4 skipped; Phase 10
+suites 708 passed. **Restart owed to load these edits.** Re-ask Era to open a
+report by bare filename as FILE-1 evidence.
+
+**Checkpoint before that (2026-10-18):** follow-up to owner reporting complete silence:
+response-delivery recovery and native interruption capture repair loaded; Era
+is connected and answering again (PID 24028). 570 affected/protected tests plus
+eight manifest cases passed. #47 repeated conversation/listening acceptance is
+next; #46 speech/glasses and #43 separate approval/cancellation remain open.
+The [establishment checklist](docs/era-enhancement/ESTABLISHMENT_CHECKLIST.md)
+indexes pass criteria, failure follow-ups and rechecks across all phases.
+Phase 10's existing local learning/recovery was audited; optional Jev remains
+unconfigured. Phase 11 current-machine verification/formatting cleanup passed;
+fresh setup, sustained use and physical acceptance remain open. #19–23 are
+improvement themes to revisit against evidence; #44 visual polish stays paused.
+
 ---
 
 ## ✅ Done
@@ -53,29 +72,36 @@ proved it. "Written" is not "done".
 | 38 | **Karim's 2026-10-09 decisions applied** | 2, 9 | Gemini is the first-run voice default (switch persists); `config/voice.json` = `fish_audio` for testing. `claude_cli` aliases ask OmniRoute `era-gateway` first, fall back to the subscription accounts; live-verified `era.reason` → `claude-sonnet-5` via member `cc` |
 | 41 | **Session 3 / Phase 2a: voice cascade bounded + chaos-tested** | 2, 6 | Fish hang **45.0 → 3.0 s** (`stall_timeout_s`; 2 s false-tripped 1/32 live). Reported failures fall through <1 s (18 chaos tests on a loopback fake Fish). Piper-also-down → text only, one HUD line. `voice.fallback/unavailable/restored` events. Piper is the offline floor (Kokoro removed 2026-09-16). 517 voice tests pass; full suite owed with Era stopped |
 | 42 | **Kokoro George on the GPU: fast local voice + `kokoro_audio` mode** | 2, 6 | CPU Kokoro ~1x realtime (dead end), CUDA ~10x: first audio **329-634 ms** through `SpeechOut`. Runtime + model in `D:\Kokoro` (outside Era's Python and Voicebox). Local chain Fish → Kokoro → Piper; "switch to kokoro" waits for the load, never lands on a cold voice. Live test 2026-10-10 found it on CPU (Era's Python has a CPU onnxruntime) + glued words (transcript chunks stripped): both fixed. Full suite **6,225 passed, 0 failed**; a test leak into the real voice.json fixed with a conftest guard. Owed: Era restart + second live listen |
+| 35b | Current full Windows gate verified (October 18) | 10, 1 | `era_gate.py --all` passed: 7,971 passed / 4 skipped, root lint/format/manifest/Doctor pass, gate 976.9s. After a final default-input guard, 334 affected/protected cases and invariants passed again; full suite not repeated for that last guard. Evidence: `docs/era-enhancement/STABILITY_RELEASE_2026-10-18.md`. Earlier Linux-only verification debt superseded by this Windows run. |
 ---
 
 ## 🔴 In progress
 
 | # | Item | Objective | Notes |
 |---|------|-----------|-------|
+| 48 | **Design proposed; implementation pending:** Chief of Staff reliability | Prefix / truth / recovery / lifecycle | October 18 source audit finds live audio bypassing optional attention, silent automatic reconnect continuation, and minimize gated on success text rather than sustained playback. Proposed boundary enforcement, fresh evidence, coordinated bounded recovery and verified candidates for safe relaunch: `docs/era-enhancement/CHIEF_OF_STAFF_DESIGN_2026-10-18.md`. Existing five suites: 191 passed / 2 warnings; no new behavior or live acceptance claimed. Resolve strict silence versus immediate reconnect notice and approve design before implementation. Owed: cross-channel prefix rejection, real interrupted conversation without replay, stable Spotify-before-minimize, Crew/Hermes/audio fault injection and staged relaunch/rollback with zero paid fallback. |
+| 47 | **Repair loaded; live reply observed:** Era ignoring user | Speech / recovery | Separate delivery deadline survives wire activity/partial transcripts/empty turns; native server interruption releases half-duplex capture immediately. Unresponsive recovery starts fresh without action replay, preserving mute/standby and tools/CodeMode budgets. 570 affected/protected tests and 8 manifest cases pass. PID 24028 accepted owner speech and completed a reply with playback evidence; latest owner command "Stand by now" honored (final state standby/connected). Still owed: audible correctness and repeated normal/interrupted conversation, isolated typed check and real failure recovery while speaking. See `docs/era-enhancement/RESPONSE_RECOVERY_2026-10-18.md`. |
+| 46 | **Software verified; owner feedback owed:** cut-off speech / Star Glasses | Audio / stability | Output-tail completion/renewal, bounded healthy capture reuse and default-input guard tested. Optional HUD tones switched off. Full Windows baseline 7,971 passed / 4 skipped; 36 readiness gates passed; final guard followed by 334 protected/affected cases. Native six leases used one stream; 619.4s live observation showed three real session rotations/reuses, one initial input open and no error-level events. Still owed: actual complete phrases, beep/reconnect behavior, real provider-renewal listening and hotplug. See `docs/era-enhancement/STABILITY_RELEASE_2026-10-18.md` and `docs/era-enhancement/SPEECH_GLASSES_TROUBLESHOOTING.md`. |
+| 45 | **Loaded; live acceptance partial:** October 18 repairs | Audio / routing | Normal supervisor restart loaded COM observer, typed path guard, desktop favorite/all-output state and speech/capture repairs. PID 26640 connected; original standby, glasses voice and PC media preference verified; optional HUD sounds off. Short post-start watch had no error-level/output/awareness faults. Real hotplug, successful exact-action rename and audible favorite remain #43/#46. Latest owner device choices always win. See `docs/era-enhancement/STABILITY_RELEASE_2026-10-18.md`. |
+| 44 | **Live** cinematic HUD acceptance in the existing Edge app window | HUD | **Follow-up to owner's no-animation/slow report:** Ctrl+R; choose Animations on if off. Windows reduced motion no longer locks the HUD toggle or overrides an explicit choice. Live-server Edge sample: idle callbacks 480→73/4s with motion off, full Eclipse 30fps; 33 interaction checks pass with native OS reduced still enabled. **October 18 recheck:** separate live Edge session confirms animated core pixels, full-motion reload persistence, all ten position/resize controls and requested corner panels; three Node checks pass. Still owed: visible boot/Eclipse/panel effects and sustained responsiveness in owner's actual window, physical voice navigation; quiet-cue listening only if the owner re-enables optional HUD sounds (off Oct 18 for beep investigation). Short samples do not prove whole-app CPU/GPU. See `docs/era-enhancement/CINEMATIC_HUD_FOLLOWUP_2026-10-16.md`. Claude's #43 remains separate and owed. |
+| 43 | **Partially verified live** Claude's 2026-10-16 fixes | 3, 4 | Oct 16: owner heard combined pending/media reply; both tools observed. Oct 18: armed action named; row cleared after recorded voice approval, but rename failed on model arguments. Later cancellation/badge feedback does not prove a clean cancelled-action test. New voice-to-glasses request matches opened stream; media preference is PC speakers. Verified favorite Spotify URI now saved; fresh-process desktop-only playback changed to matching song with audio on remembered PC speakers in 3,194ms (earlier search 30 s). **Restart now completed; still owed as owner feedback:** favorite via live voice and audible correctness; successful exact-action execution and isolated cancellation; Liked Songs/Release Radar; hardware speech/echo acceptance. Criteria/evidence: `docs/era-enhancement/OPERATIONAL_RELIABILITY_2026-10-18.md` and `docs/era-enhancement/SPOTIFY_SPEED_2026-10-18.md`. Empty pending state must come from `scheduled_task(pending)` / PendingConfirmationStore. |
 | 39 | **Live** Gemini-independence test | 2, 6 | Mid-conversation, block Gemini (or pull the network) for 30 s: Era announces once, keeps answering in en/fr, runs one tool through the gate, returns to Gemini within ~60 s. `logs/era.log` should show `llm.omniroute.answered` while degraded, and `[TTS] say:` lines must contain no notes or paths |
 | 40 | ✅ **Decided 2026-10-10: Fish = English only, current JARVIS voice; `fish_voices` left empty (floor kept for a future en/fr/ar clone)** · was: Pick Era's multilingual voice | 2 | Listen to `runtime/voice_samples/` (5 voices × en/fr/ar/Tunisian). Either set `"fish_voices": {"fr": id, "ar": id}` in `config/voice.json`, or record ~30 s each of en/fr/ar in one voice and clone it (`core/tts_fish.create_voice_model`) for one voice in every language |
-| 37b | **Live** Fish-mode voice test | 2 | `config/voice.json` is `fish_audio`. Owed: a few spoken turns — first audio should feel ~1 s faster than before, and a Fish failure must fall back to Gemini audibly (never silent). Check `logs/era.log` `turn.latency.playback_ms` |
+| 37b | **Deferred** Fish-mode listening acceptance | 2 | Current owner-selected mode is Gemini native audio; do not switch it merely to close this historical test. If the owner selects Fish later, listen to several turns and its audible fallback, recording `turn.latency.playback_ms`. October 10's Fish/English voice decision remains historical, not the current default. |
 | 7b | **Live** proof of the failover | 9 | Unit tests use fakes. Needs the primary account actually driven to its limit — acceptance item 2; no unit test can claim it. |
 | 17b | **Acceptance point 1 fired LIVE 2026-09-29 15:45** | 8 | `relaunch.requested source="self_improve"` is in `logs/era_lifecycle.jsonl`. The path is real. It exposed 4 defects, **all four now fixed and gated (24–27)**. Not closed until a live run logs `relaunch.performed` with `forced: false`. |
 | 30b | **Live** proof of memory recall | 11 | Acceptance point 4 is *"tell her Monday, ask Friday after restarts"*. Saving, persistence and paraphrase recall each verify (9/12, 0/8 noise), but the acceptance test is a **user** doing it across days. Needs Ollama up for the semantic half; it degrades to lexical silently if not. |
 | 31b | **Live** proof of the truthful self-model | 3, 4 | Acceptance point 3 is closed when Karim asks *"what can you actually do?"* and she answers from `capability_check`, **including declining something absent**. The mechanism removes the means to invent; it cannot force the model to call the tool. |
-| 35b | **Windows `era_gate.py --all` owed for 34 + 35** | 10, 1 | This session ran on **Linux**, and Era is a Windows program. Targeted verification is green (53 in the changed file; 928 passed / 15 skipped across what this container can collect) and the gate's 8 reds were each reproduced on a **clean stash**, so none is mine — five `test_file_candidates` Windows-path cases, `test_local_fallback` (local models), a `test_protocol_one` frame, and `test_ads_dispatch::test_route_order_is_each_profile_direct_then_the_gateway`. `era_doctor` reads NOT READY here for 3 environmental errors only (no `.claude-freelance`, no OneDrive vault). What is left is ONE full Windows run: the per-test ceiling touches all 5,300 tests, and only that run shows none sits between 20s and 120s where 928 cannot see it. |
+
 
 ---
 
 ## ⬜ Next (ordered)
 
-All four defects from the 2026-09-29 live test (24–27) are fixed and gated, and
-**#15 (memory + RAG) and #16 (runtime grounding) are built and measured** —
-evidence in `handoff.md`. **#17 (the Claude bridge, item 32), #17c and #18 are now
-done too** — so the next unstarted item is **#19, the intelligent fallback protocol**.
+Historical foundation items 15–18 are built; the October 18 audit also found
+existing local learning, bounded recovery and supervision. The themes below
+remain improvement candidates for observed gaps, not instructions to rebuild
+those systems. Read the current stability report and user feedback first.
 
 Two of those four were misdiagnosed on this board until the logged tool
 arguments were replayed against the running code — do that first, every time.

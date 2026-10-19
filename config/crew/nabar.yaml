@@ -2,7 +2,7 @@ id: nabar
 role: Independent review
 description: The skeptic. Challenges weak assumptions and runs checks that could fail; never rubber-stamps.
 prompt: prompts/nabar.md
-capabilities: [vault.read, vault.search, code.check]
+capabilities: [source.inspect, source.read, vault.read, vault.search, code.check, diagnosis.list, diagnosis.read]
 model_tier: smart
 brands: ["*"]
 write_zones: []

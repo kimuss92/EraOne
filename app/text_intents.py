@@ -462,6 +462,32 @@ def _extract_raw_path(text: str) -> str | None:
     return None
 
 
+def _is_path_open_request(text: str, raw_path: str) -> bool:
+    """Allow the direct opener only for an explicit, standalone open request.
+
+    A path attached to rename/delete/edit is a tool argument, not permission to
+    open it. Compound requests also need the normal dispatcher and its gates.
+    """
+    before, found, after = text.partition(raw_path)
+    if not found or not re.fullmatch(r'\s*"?[.!?]?\s*', after):
+        return False
+    opener = re.fullmatch(
+        r"\s*(?:era\s*[,;:]?\s*)?(?:please\s+)?"
+        r"(?:(?:can|could|would)\s+you\s+)?"
+        r"(?:open|show|reveal|browse|explore|launch|start)\s+(?:me\s+)?"
+        r'(?:(?:the\s+)?(?:file|folder|directory)\s+)?"?\s*',
+        before,
+        re.IGNORECASE,
+    )
+    compound = re.search(
+        r"\b(?:and|then|before|after)\s+(?:rename|delete|remove|move|copy|overwrite|"
+        r"write|edit|create|run|send|upload|share|execute)\b",
+        raw_path,
+        re.IGNORECASE,
+    )
+    return opener is not None and compound is None
+
+
 # Verbs that make a path an explicit instruction rather than a bare paste
 # ("open D:\\foo", "delete D:\\foo"). Kept intentionally small — this only
 # needs to catch the common commands, not every synonym; anything murkier

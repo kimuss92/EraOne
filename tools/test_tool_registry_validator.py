@@ -511,3 +511,6 @@ if fail_count == 0:
 else:
     print("Some tests FAILED.")
 print(f"{'=' * 40}")
+
+if __name__ == "__main__":
+    raise SystemExit(1 if fail_count else 0)

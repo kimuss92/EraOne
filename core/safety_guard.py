@@ -238,6 +238,25 @@ def classify_action(
     # content, so it is staged (the user is shown the diff) and needs their own yes.
     # Every other action word is not on the surface at all — there is no delete, and no
     # confirm/reject — so it is BLOCKED outright instead of being guessed at.
+    if tool == "code_mode":
+        return {
+            "risk_level": LOW,
+            "requires_confirmation": False,
+            "reason": "Mode status/explicit user entry; generated changes retain exact approval",
+        }
+    if tool == "telegram_call":
+        return {
+            "risk_level": LOW,
+            "requires_confirmation": False,
+            "reason": "Owner-bound Telegram call control; account and readiness are enforced by the call service",
+        }
+    if tool == "crew" and action == "verify_candidate":
+        # Runs a crew candidate's own (model-written) tests on this machine.
+        return {
+            "risk_level": MEDIUM,
+            "requires_confirmation": True,
+            "reason": "Runs a crew candidate's verification, including its own tests",
+        }
     if tool == "crew":
         # Explicit, not the unclassified-defaults-to-LOW fallthrough. A crew request cannot
         # itself change anything that needs approval: a replace it proposes only ARMS the

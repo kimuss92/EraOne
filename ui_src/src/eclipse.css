@@ -1,0 +1,426 @@
+/* ERA ONE — "Eclipse" theme layer (2026-10-15), loaded after index.css.
+   Look: the two Dribbble references the user picked — deep-space navy, hairline
+   luminous panels, electric-blue identity (#0F34B8 → #64CBEE), pink-gold and
+   violet accents for the tool constellation.
+   Performance rules kept: only transform/opacity animate; no new blur layers;
+   decorative motion is disabled by data-motion='reduced'. The two colour
+   channels survive: --accent (identity, from the viewer's preset via
+   lib/appearance.ts) and --state (real agent state, set on .hud-root). */
+
+@property --boot { syntax: '<number>'; inherits: true; initial-value: 0; }
+
+/* ── HUD scale (Customize → HUD scale). Zoom keeps every layout ratio. ── */
+.hud-root {
+  zoom: var(--ui-scale, 1);
+  width: calc(100vw / var(--ui-scale, 1)) !important;
+  height: calc(100vh / var(--ui-scale, 1)) !important;
+}
+
+/* ── Dark tokens ─────────────────────────────────────────────────────── */
+:root:not([data-theme='light']) {
+  --bg: #010208;
+  --panel: rgba(7, 11, 28, var(--panel-alpha, 0.78));
+  --panel-solid: #070b1d;
+  --drawer: rgba(5, 8, 22, 0.97);
+  --line: rgba(118, 150, 255, 0.11);
+  --line-2: rgba(118, 150, 255, 0.22);
+  --text-1: #e6ecff;
+  --text-2: #a5b0d2;
+  --text-3: #7c88ad;
+  --field: rgba(120, 150, 255, 0.04);
+  --hover: rgba(110, 150, 255, 0.09);
+  --veil: rgba(1, 2, 10, 0.74);
+  --grid: rgba(140, 170, 255, 0.09);
+  --era-blue: #8fd3ff;
+  --you: #ece2cf;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+:root:not([data-theme='light']) {
+  & .hud-root, & .cockpit-mode {
+    background:
+      radial-gradient(ellipse 60% 55% at 50% 46%, rgba(4, 13, 91, 0.42), transparent 70%),
+      radial-gradient(ellipse 45% 40% at 86% 78%, rgba(60, 20, 110, 0.18), transparent 70%),
+      radial-gradient(ellipse 40% 35% at 8% 18%, rgba(13, 69, 86, 0.16), transparent 70%),
+      #010208;
+  }
+  & .hud-grid, & .cockpit-mode .hud-grid {
+    background-image: radial-gradient(var(--grid) 1px, transparent 1.3px);
+    background-size: 26px 26px;
+    opacity: 1;
+    mask-image: radial-gradient(ellipse 70% 65% at 50% 48%, #000 20%, transparent 85%);
+  }
+  & .hud-vignette {
+    background: radial-gradient(ellipse at 50% 45%, hsl(var(--sh) var(--ss) 45% / 0.08), transparent 52%),
+      radial-gradient(ellipse at center, transparent 55%, var(--veil) 100%);
+  }
+  & .hud-header {
+    background: linear-gradient(180deg, rgba(4, 7, 22, 0.9), rgba(4, 7, 22, 0.55));
+    border-bottom-color: transparent;
+    box-shadow: 0 1px 0 rgba(118, 150, 255, 0.08), 0 12px 30px -20px hsl(var(--ah) 90% 50% / 0.35);
+  }
+
+  /* panels: hairline glass-free surfaces with a luminous top seam + corner bracket */
+  & .era-widget:not(.era-widget-core) {
+    --widget-glow: var(--wc);
+    border: 1px solid color-mix(in srgb, var(--wc) 20%, transparent);
+    background:
+      radial-gradient(120% 70% at 0% 0%, color-mix(in srgb, var(--wc) 11%, transparent), transparent 60%),
+      linear-gradient(162deg, rgba(14, 19, 46, var(--panel-alpha, 0.78)), rgba(4, 6, 18, var(--panel-alpha, 0.78)) 72%);
+    box-shadow: inset 0 1px 0 rgba(200, 215, 255, 0.05), 0 12px 32px rgba(0, 0, 0, 0.38);
+  }
+  & .era-widget:not(.era-widget-core)::before {
+    left: 16px; width: 44px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--widget-glow), transparent);
+    box-shadow: 0 0 12px var(--widget-glow);
+  }
+  & .era-free-layout .era-widget:not(.era-widget-core):hover { border-color: color-mix(in srgb, var(--wc) 42%, transparent); }
+  & .era-widget-head { border-bottom-color: color-mix(in srgb, var(--wc) 10%, transparent); }
+  & .era-widget-grip { color: #aeb9de; letter-spacing: 0.14em; text-transform: uppercase; font-size: 9px; }
+
+
+  & .era-workspace-actions button, & .era-widget-picker button {
+    border-color: rgba(130, 160, 255, 0.16); background: rgba(110, 140, 255, 0.04); color: #b7c2e4;
+  }
+  & .era-workspace-actions button:hover { background: rgba(110, 140, 255, 0.12); border-color: rgba(140, 175, 255, 0.4); }
+  & .era-workspace-actions button.selected { color: hsl(var(--ah) 95% 80%); border-color: hsl(var(--ah) 90% 70% / 0.5); background: hsl(var(--ah) 90% 60% / 0.12); }
+
+  & .era-view-nav { border-bottom-color: rgba(118, 150, 255, 0.07); }
+  & .era-view-nav button { border-color: transparent; background: transparent; font: 500 10px var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: #8d98bd; position: relative; }
+  & .era-view-nav button[aria-pressed='true'] { color: #eef2ff; background: hsl(var(--ah) 90% 60% / 0.1); border-color: hsl(var(--ah) 90% 70% / 0.28); }
+  & .era-view-nav button[aria-pressed='true']::after {
+    content: ''; position: absolute; left: 20%; right: 20%; bottom: -1px; height: 1px;
+    background: hsl(var(--ah) 95% 72%); box-shadow: 0 0 8px hsl(var(--ah) 95% 65%);
+  }
+
+  & .cmd-bar {
+    background: linear-gradient(180deg, rgba(12, 18, 46, 0.85), rgba(5, 8, 22, 0.9));
+    border-color: rgba(130, 160, 255, 0.18);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 10px 40px -12px hsl(var(--ah) 90% 50% / 0.45);
+  }
+  & .cmd-bar:focus-within { border-color: hsl(var(--ah) 90% 70% / 0.55); }
+  & .era-state-heading .state-label { text-shadow: 0 0 22px var(--state-glow), 0 0 2px var(--state-glow); }
+  & .era-widget-resize { color: #9fc4ff; background: rgba(12, 18, 46, 0.92); }
+}
+
+/* corner bracket — a static detail, zero animation cost */
+.era-widget:not(.era-widget-core)::after {
+  content: ''; position: absolute; right: 7px; bottom: 7px; width: 7px; height: 7px; pointer-events: none;
+  border-right: 1px solid var(--widget-glow); border-bottom: 1px solid var(--widget-glow); opacity: 0.45;
+}
+.era-widget-resize { z-index: 4; border-radius: 8px 0 12px 0; }
+
+/* staggered arrival: each panel fades up once, in reading order */
+[data-motion='full'] .era-free-layout .era-widget:not(.era-widget-core) { animation: era-panel-rise 620ms cubic-bezier(.16, 1, .3, 1) backwards; }
+[data-motion='full'] .era-free-layout .era-widget:nth-child(2) { animation-delay: 60ms; }
+[data-motion='full'] .era-free-layout .era-widget:nth-child(3) { animation-delay: 120ms; }
+[data-motion='full'] .era-free-layout .era-widget:nth-child(4) { animation-delay: 180ms; }
+[data-motion='full'] .era-free-layout .era-widget:nth-child(5) { animation-delay: 240ms; }
+[data-motion='full'] .era-free-layout .era-widget:nth-child(6) { animation-delay: 300ms; }
+[data-motion='full'] .era-free-layout .era-widget:nth-child(n+7) { animation-delay: 360ms; }
+@keyframes era-panel-rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+
+/* ── Customize panel ─────────────────────────────────────────────────── */
+.era-unified .era-workspace-bar { position: relative; }
+.era-look-panel {
+  position: absolute; top: 36px; right: 0; z-index: 26; width: min(310px, 92vw);
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px;
+  border: 1px solid var(--accent-line); border-radius: 14px; background: var(--panel-solid);
+  box-shadow: var(--shadow), 0 0 40px -10px hsl(var(--ah) 90% 50% / 0.35);
+  animation: era-look-in 220ms cubic-bezier(.16, 1, .3, 1) both;
+}
+.era-look-panel > header { display: flex; align-items: center; gap: 4px; }
+.era-look-panel > header .era-eyebrow { flex: 1; }
+.era-look-panel > header button { padding: 4px; border-radius: 6px; color: var(--text-2); }
+.era-look-panel > header button:hover { background: var(--hover); color: var(--text-1); }
+.era-look-panel svg { width: 13px; height: 13px; }
+.era-look-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.era-look-presets button {
+  display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 7px 2px; border-radius: 9px;
+  border: 1px solid var(--line); font: 9px var(--font-mono); color: var(--text-2); letter-spacing: .06em;
+}
+.era-look-presets button i { width: 18px; height: 18px; border-radius: 50%; background: radial-gradient(circle at 50% 70%, #000 52%, transparent 54%), var(--swatch); box-shadow: 0 0 10px var(--swatch); }
+.era-look-presets button[aria-checked='true'] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text-1); }
+.era-look-slider { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-2); }
+.era-look-slider > span { display: flex; justify-content: space-between; }
+.era-look-slider b { font: 400 10px var(--font-mono); color: var(--text-3); }
+.era-look-slider input { width: 100%; accent-color: var(--accent); height: 14px; }
+.era-look-seg { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); }
+.era-look-seg > span { flex: 1; }
+.era-look-seg button { padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; font: 9px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); }
+.era-look-seg button[aria-checked='true'] { color: var(--text-1); border-color: var(--accent-line); background: var(--accent-soft); }
+.era-look-toggle { position: relative; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-2); cursor: pointer; }
+.era-look-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.era-look-toggle i { width: 28px; height: 16px; border-radius: 99px; background: var(--line-2); position: relative; transition: background .2s; }
+.era-look-toggle i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-2); transition: transform .2s, background .2s; }
+.era-look-toggle input:checked + i { background: hsl(var(--ah) 90% 55% / 0.55); }
+.era-look-toggle input:checked + i::after { transform: translateX(12px); background: #fff; }
+.era-look-toggle input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 2px; }
+.era-look-hint { margin: 2px 0 0; font-size: 10px; color: var(--text-3); }
+.era-look-hint b { color: var(--text-2); font-weight: 500; }
+@keyframes era-look-in { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+
+/* ── Telemetry graph ─────────────────────────────────────────────────── */
+.era-telemetry { display: flex; flex-direction: column; gap: 6px; }
+.era-telemetry-legend { display: flex; align-items: center; gap: 10px; font: 9px var(--font-mono); letter-spacing: .08em; color: var(--text-3); }
+.era-telemetry-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.era-telemetry-legend i { width: 6px; height: 6px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 6px var(--dot); }
+.era-telemetry-legend b { font-weight: 400; color: var(--text-1); }
+.era-telemetry-legend em { margin-left: auto; font-style: normal; }
+.era-telemetry-plot { position: relative; height: clamp(46px, 7vh, 84px); border-radius: 6px; background: linear-gradient(180deg, transparent, rgba(110, 150, 255, 0.03)); }
+.era-telemetry-plot canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* ── Boot: the eclipse ignites with real readiness ───────────────────── */
+.era-boot {
+  transition: opacity 420ms ease-out;
+  background: radial-gradient(ellipse 55% 50% at 50% 40%, #071466 0%, #020414 55%, #000 100%);
+  color: #e6ecff;
+}
+.era-boot-eclipse { position: relative; width: 156px; height: 156px; margin: 0 auto 34px; }
+.era-boot-eclipse b {
+  position: absolute; inset: 10px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 78%, #10308f 0%, #020516 46%, #000 64%);
+}
+.era-boot-eclipse i:nth-child(1) {
+  position: absolute; inset: 8px; border-radius: 50%;
+  border: 2px solid rgba(170, 210, 255, calc(.2 + .75 * var(--boot)));
+  box-shadow: 0 0 calc(8px + 46px * var(--boot)) rgba(60, 120, 255, calc(.25 + .55 * var(--boot))),
+    inset 0 0 22px rgba(100, 170, 255, calc(.15 + .35 * var(--boot)));
+  transition: border-color 700ms ease-out, box-shadow 700ms ease-out;
+}
+.era-boot-eclipse i:nth-child(2) {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from -90deg, #a8d8ff calc(var(--boot) * 360deg), rgba(120, 150, 255, .1) 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+}
+.era-boot-eclipse i:nth-child(3) {
+  position: absolute; inset: -14px; border-radius: 50%;
+  border-top: 1px solid rgba(170, 210, 255, .7); border-right: 1px solid rgba(170, 210, 255, .15);
+}
+.era-boot h1 { color: #f2f5ff; }
+.era-boot ul { border-color: rgba(130, 160, 255, .14); }
+.era-boot li { color: #8f9cc4; }
+.era-boot li span { color: #7c88ad; }
+.era-boot li span.is-ready { color: #8fd3ff; text-shadow: 0 0 8px #3c7dff; }
+.era-boot-progress { width: 62%; height: 2px; margin: 20px auto 0; overflow: hidden; border-radius: 2px; background: rgba(120, 150, 255, .14); }
+.era-boot-progress span { display: block; height: 100%; width: 100%; transform-origin: left; transform: scaleX(var(--boot)); transition: transform 700ms cubic-bezier(.16, 1, .3, 1); background: linear-gradient(90deg, #2747d9, #8fd3ff); box-shadow: 0 0 12px #5b8cff; }
+[data-motion='full'] .era-boot-eclipse i:nth-child(3) { animation: era-boot-spin 2.6s linear infinite; }
+[data-motion='full'] .era-boot-eclipse b { animation: era-boot-breathe 3.2s ease-in-out infinite; }
+[data-motion='full'] .era-boot h1 { animation: era-boot-title 1.4s cubic-bezier(.16, 1, .3, 1) both; }
+[data-motion='full'] .era-boot li { animation: era-boot-line 520ms ease-out both; animation-delay: calc(300ms + var(--i) * 110ms); }
+@keyframes era-boot-spin { to { transform: rotate(360deg); } }
+@keyframes era-boot-breathe { 0%, 100% { transform: scale(1); opacity: .92; } 50% { transform: scale(1.025); opacity: 1; } }
+@keyframes era-boot-title { from { opacity: 0; letter-spacing: .7em; } to { opacity: 1; letter-spacing: .32em; } }
+@keyframes era-boot-line { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+[data-motion='reduced'] .era-look-panel,
+[data-motion='reduced'] .era-free-layout .era-widget { animation: none !important; }
+[data-motion='reduced'] .era-boot-eclipse *, [data-motion='reduced'] .era-boot h1, [data-motion='reduced'] .era-boot li { animation: none !important; }
+
+/* ── 2026-10-15 polish (user requests) ───────────────────────────────── */
+
+/* Each panel has its own colour, all drawn from the eclipse palette, so a
+   panel is recognisable at a glance. --wc tints its seam, border, corner
+   bracket, header icon and bars. Semantic colours (ok/warn/bad) never change. */
+.era-widget { --wc: hsl(var(--ah) 90% 68%); }
+.era-widget-activity { --wc: #5b8cff; }
+.era-widget-schedule { --wc: #f4a6b8; }
+.era-widget-memory { --wc: #b08cff; }
+.era-widget-system { --wc: #5fd0f0; }
+.era-widget-weather { --wc: #f6c47a; }
+.era-widget-calls { --wc: #ff9f80; }
+.era-widget-context { --wc: #d68cf0; }
+.era-widget-sources { --wc: #8ea2ff; }
+.era-widget-awareness { --wc: #45e0c0; }
+.era-widget-grip > svg { color: var(--wc); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--wc) 60%, transparent)); }
+.era-widget-body .bar-fill:not(.bar-warn):not(.bar-bad) { background: linear-gradient(90deg, color-mix(in srgb, var(--wc) 45%, #1b2a7a), var(--wc)); }
+[data-theme='light'] .era-widget:not(.era-widget-core) { border-color: color-mix(in srgb, var(--wc) 35%, #8ba2c544); }
+
+/* Conversation: free text over the sphere, no box. The top edge fades out. */
+.era-free-layout .transcript, [data-theme='light'] .era-free-layout .transcript { border: 0; background: none; box-shadow: none; }
+.era-free-layout .transcript-scroll {
+  mask-image: linear-gradient(transparent, #000 26%, #000);
+  -webkit-mask-image: linear-gradient(transparent, #000 26%, #000);
+}
+:root:not([data-theme='light']) .era-free-layout .tr-text { text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.8); }
+.era-free-layout .transcript-tools { opacity: .45; transition: opacity .2s; }
+.era-free-layout .transcript:hover .transcript-tools, .era-free-layout .transcript:focus-within .transcript-tools { opacity: 1; }
+
+/* Time & weather on one line */
+.era-weather-clock { display: flex; align-items: center; gap: 14px; height: 100%; padding: 6px 12px; }
+.era-weather-clock .era-local-clock { flex-direction: column; align-items: flex-start; gap: 1px; margin: 0; flex-shrink: 0; }
+.era-weather-clock .era-local-clock > span { text-transform: uppercase; letter-spacing: .12em; }
+.era-weather-inline { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; padding-left: 14px; border-left: 1px solid color-mix(in srgb, var(--wc) 25%, transparent); }
+.era-weather-inline b { font: 300 24px var(--font-mono); color: var(--text-1); letter-spacing: -.06em; }
+.era-weather-inline > span { display: flex; flex-direction: column; overflow: hidden; }
+.era-weather-inline em { font-style: normal; font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.era-weather-inline small { font: 9px var(--font-mono); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: capitalize; }
+.era-unified .era-weather-clock .era-local-clock { flex-wrap: nowrap; }
+
+/* Running task: hairline track, glowing head, light sweep; comet when unmeasured */
+.task-progress { --tc: var(--wc, #5b8cff); margin: 10px 12px 0; padding: 9px 11px 8px; flex-shrink: 0; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--tc) 22%, transparent);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--tc) 10%, transparent), transparent 70%); }
+.tp-top { display: flex; align-items: center; gap: 8px; }
+.tp-pulse { position: relative; width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--tc); box-shadow: 0 0 8px var(--tc); }
+.tp-pulse::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 1px solid var(--tc); opacity: 0; }
+.task-progress-name { flex: 1; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--text-1); }
+.tp-value { font: 500 10px var(--font-mono); letter-spacing: .1em; color: color-mix(in srgb, var(--tc) 70%, #fff); font-variant-numeric: tabular-nums; }
+.tp-track { position: relative; height: 4px; margin: 9px 0 6px; border-radius: 4px; overflow: hidden;
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--tc) 22%, transparent) 0 2px, transparent 2px 9px), color-mix(in srgb, var(--tc) 8%, transparent); }
+.tp-track:has(.tp-head) { overflow: visible; }
+.tp-fill { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; transform-origin: left; transform: scaleX(var(--p));
+  transition: transform .8s cubic-bezier(.16, 1, .3, 1); background: linear-gradient(90deg, color-mix(in srgb, var(--tc) 30%, #10184a), var(--tc)); box-shadow: 0 0 10px color-mix(in srgb, var(--tc) 55%, transparent); }
+.tp-fill::after { content: ''; position: absolute; inset: 0; width: 30%; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent); transform: translateX(-120%); }
+.tp-head { position: absolute; inset: 0; pointer-events: none; transform: translateX(calc(var(--p) * 100%)); transition: transform .8s cubic-bezier(.16, 1, .3, 1); }
+.tp-head i { position: absolute; left: -5px; top: -3px; width: 10px; height: 10px; border-radius: 50%; background: #fff; box-shadow: 0 0 6px #fff, 0 0 14px var(--tc), 0 0 26px var(--tc); }
+.tp-comet { position: absolute; top: 0; bottom: 0; left: 0; width: 34%; border-radius: inherit; background: linear-gradient(90deg, transparent, var(--tc) 70%, #fff); box-shadow: 0 0 12px var(--tc); transform: translateX(-100%); }
+.tp-phase { margin: 0; font: 9px var(--font-mono); letter-spacing: .06em; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-progress-stale { opacity: .6; }
+[data-motion='full'] .task-progress:not(.task-progress-stale) .tp-pulse::after { animation: tp-ping 1.8s ease-out infinite; }
+[data-motion='full'] .task-progress:not(.task-progress-stale) .tp-fill::after { animation: tp-sweep 2.4s ease-in-out infinite; }
+[data-motion='full'] .task-progress:not(.task-progress-stale) .tp-comet { animation: tp-comet 1.9s cubic-bezier(.45, 0, .25, 1) infinite; }
+.task-progress-stale .tp-comet { transform: translateX(100%); }
+@keyframes tp-ping { from { opacity: .8; transform: scale(.6); } to { opacity: 0; transform: scale(1.8); } }
+@keyframes tp-sweep { from { transform: translateX(-120%); } 70%, to { transform: translateX(380%); } }
+@keyframes tp-comet { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+
+/* Notifications: small, see-through, and every one leaves after 15 s.
+   No backdrop blur — it would re-blur the animating sphere every frame. */
+.notice-rail { width: min(330px, calc(100vw - 32px)); }
+/* below the view tabs, so tab labels never show through a see-through notice */
+.cockpit-mode .notice-rail { top: calc(var(--header-h) + 50px); }
+.notice-ok { --nc: var(--ok); } .notice-info { --nc: var(--accent); } .notice-warn { --nc: var(--warn); } .notice-bad { --nc: var(--bad); }
+.notice {
+  position: relative; overflow: hidden; gap: 8px; padding: 6px 8px 7px 10px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--nc) 30%, transparent); border-left-width: 1px;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--nc) 12%, transparent), color-mix(in srgb, var(--panel-solid) 38%, transparent));
+  box-shadow: none;
+}
+.notice:hover, .notice:focus-within { background: linear-gradient(100deg, color-mix(in srgb, var(--nc) 16%, transparent), color-mix(in srgb, var(--panel-solid) 82%, transparent)); }
+:root:not([data-theme='light']) .notice p, :root:not([data-theme='light']) .notice-kind { text-shadow: 0 1px 6px rgba(0, 0, 0, .9); }
+.notice .notice-kind { font-size: 9px; }
+.notice .notice-msg { -webkit-line-clamp: 1; font-size: 11px; }
+.notice .notice-close { width: 20px; height: 20px; }
+.notice-timer { position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--nc); box-shadow: 0 0 6px var(--nc); opacity: .75;
+  transform-origin: left; animation: notice-countdown var(--ttl, 15s) linear forwards; }
+.notice.is-held .notice-timer { animation-play-state: paused; }
+@keyframes notice-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+/* the countdown is a timer, not decoration: it keeps its real length when the OS asks for reduced motion */
+@media (prefers-reduced-motion: reduce) { .notice-timer { animation-duration: var(--ttl, 15s) !important; } }
+
+/* Use the whole screen: the command bar floats over the bottom of the centre
+   column, so the side panels run to the bottom edge instead of stopping above
+   an empty strip. The sphere stage keeps room for it. Narrower windows keep
+   the stacked bar: half the width is too tight for its buttons there. */
+@media (min-width: 1200px) {
+  .cockpit-mode .era-cmd-dock { position: absolute; left: 25%; right: calc(25% + 10px); bottom: 0; padding-top: 0; }
+  .cockpit-mode .era-widget-core .era-core-stage { padding-bottom: 62px; }
+}
+
+/* Conversation colours follow the Customize preset (--ah): Era speaks in the
+   theme hue with a glowing label; your words take its complement, in italics. */
+.era-free-layout .tr-agent .tr-who { color: hsl(var(--ah) 95% 74%); text-shadow: 0 0 10px hsl(var(--ah) 95% 60% / .55); }
+.era-free-layout .tr-agent .tr-text { color: hsl(var(--ah) 75% 88%); }
+.era-free-layout .tr-user .tr-who { color: hsl(calc(var(--ah) + 180) 50% 72%); }
+.era-free-layout .tr-user .tr-text { color: hsl(calc(var(--ah) + 180) 32% 85%); font-style: italic; }
+[data-theme='light'] .era-free-layout .tr-agent .tr-who { color: hsl(var(--ah) 80% 38%); text-shadow: none; }
+[data-theme='light'] .era-free-layout .tr-agent .tr-text { color: hsl(var(--ah) 70% 26%); }
+[data-theme='light'] .era-free-layout .tr-user .tr-who { color: hsl(calc(var(--ah) + 180) 50% 34%); }
+[data-theme='light'] .era-free-layout .tr-user .tr-text { color: hsl(calc(var(--ah) + 180) 35% 28%); }
+
+/* Every control inside a panel answers the pointer in that panel's colour. */
+.era-widget-body button, .era-widget-body [role='button'], .era-peek-button { transition: color .15s, background-color .15s, border-color .15s, box-shadow .15s; }
+.era-widget-body button:not(:disabled):hover, .era-widget-body [role='button']:hover, .era-widget-body button:focus-visible {
+  color: var(--wc); border-color: color-mix(in srgb, var(--wc) 55%, transparent);
+  background-color: color-mix(in srgb, var(--wc) 13%, transparent); box-shadow: 0 0 14px -6px var(--wc);
+}
+.era-widget .era-peek-button:hover, .era-widget-controls button:hover { color: var(--wc); }
+
+/* Running task: Cancel on the status line (red on hover — it stops work) */
+.tool-status-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-left: 34px; min-width: 0; }
+.tool-cancel { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 2px 8px; border-radius: 6px;
+  border: 1px solid var(--line-2); font: 500 10px var(--font-mono); letter-spacing: .06em; color: var(--text-2); }
+.era-widget-body .tool-cancel:hover, .tool-cancel:hover { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, transparent); background-color: color-mix(in srgb, var(--bad) 12%, transparent); box-shadow: none; }
+.tp-top .tool-cancel { margin-left: 2px; padding: 1px 7px; }
+
+/* Result pop-up: compact and see-through so the sphere stays visible; it
+   firms up only while you read it (hover / focus). Leaves after 15 s. */
+.era-result-surface {
+  top: 13%; left: 33%; width: 34%; max-height: 46%; border-radius: 12px;
+  border-color: hsl(var(--ah) 90% 70% / 0.28);
+  background: linear-gradient(160deg, hsl(var(--ah) 70% 20% / 0.32), rgba(3, 5, 16, 0.42));
+  box-shadow: 0 0 40px -18px hsl(var(--ah) 90% 60% / 0.6);
+  transition: background .2s;
+}
+.era-result-surface:hover, .era-result-surface:focus-within { background: linear-gradient(160deg, hsl(var(--ah) 70% 18% / 0.7), rgba(3, 5, 16, 0.9)); }
+.era-result-surface > header { padding: 8px 11px; border-bottom-color: hsl(var(--ah) 90% 70% / 0.12); }
+.era-result-surface footer { padding: 5px 11px; border-top-color: hsl(var(--ah) 90% 70% / 0.1); }
+:root:not([data-theme='light']) .era-result-content { text-shadow: 0 1px 6px rgba(0, 0, 0, .85); }
+@media (max-width: 800px) { .era-result-surface { left: 3%; width: 94%; } }
+
+/* Header: status blocks centred; the wordmark moved above the agent state. */
+@media (min-width: 1200px) {
+  .hud-header-centered { display: grid; grid-template-columns: 1fr auto 1fr; }
+}
+.hud-header-centered .hud-header-left { justify-self: start; }
+.hud-header-centered .hud-header-center { justify-self: center; }
+.hud-header-centered .hud-header-right { justify-self: end; }
+.hud-header-centered > .flex-1 { display: none; }
+
+@font-face {
+  font-family: 'Orbitron Variable';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('@fontsource-variable/orbitron/files/orbitron-latin-wght-normal.woff2') format('woff2-variations');
+}
+.era-wordmark {
+  display: flex; align-items: center; gap: .55em; margin-bottom: 6px;
+  font: 600 22px 'Orbitron Variable', var(--font-sans); letter-spacing: .32em; padding-left: .32em;
+  background: linear-gradient(180deg, #ffffff 10%, hsl(var(--ah) 95% 78%) 95%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 14px hsl(var(--ah) 95% 60% / 0.45));
+}
+.era-wordmark i { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--ah) 95% 72%); box-shadow: 0 0 10px hsl(var(--ah) 95% 65%); }
+[data-theme='light'] .era-wordmark { background: linear-gradient(180deg, #0d1a40, hsl(var(--ah) 80% 38%)); -webkit-background-clip: text; background-clip: text; filter: none; }
+
+/* System awareness: live audio in / out */
+.era-awareness-facts > .era-audio-route { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; }
+.era-audio-route > span { display: inline-flex; align-items: center; gap: 5px; }
+.era-audio-route svg { width: 11px; height: 11px; color: var(--wc); }
+.era-audio-route b { text-align: right; min-width: 0; }
+.era-audio-route em { font: normal 8px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--wc); opacity: .8; }
+
+/* The dot between ERA and ONE breathes in the live STATE colour, at a pace
+   set by the state (slow at rest, quicker while working). Replaces the small
+   state dot that sat above the wordmark. */
+[data-motion] .era-state-heading::before { display: none; }
+.era-wordmark i {
+  background: hsl(var(--sh) var(--ss) 70%);
+  box-shadow: 0 0 10px hsl(var(--sh) var(--ss) 62%), 0 0 22px hsl(var(--sh) var(--ss) 55% / .5);
+  transition: background .6s, box-shadow .6s;
+  --pulse: 3.6s;
+}
+.era-wordmark:is([data-state='listening'], [data-state='wake_detected'], [data-state='transcribing']) i { --pulse: 2.2s; }
+.era-wordmark:is([data-state='routing'], [data-state='thinking'], [data-state='tool_running'], [data-state='synthesizing']) i { --pulse: 1.7s; }
+.era-wordmark[data-state='speaking'] i { --pulse: 1.4s; }
+.era-wordmark:is([data-state='error'], [data-state='awaiting_approval']) i { --pulse: 1.5s; }
+.era-wordmark:is([data-state='standby'], [data-state='offline']) i { --pulse: 6s; }
+[data-motion='full'] .era-wordmark i { animation: era-dot-pulse var(--pulse) ease-in-out infinite; }
+@keyframes era-dot-pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.35); opacity: 1; } }
+
+/* Conversation: one modern face for both speakers, no italics. */
+@font-face {
+  font-family: 'Outfit Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('@fontsource-variable/outfit/files/outfit-latin-wght-normal.woff2') format('woff2-variations');
+}
+.era-free-layout .tr-text, .era-free-layout .tr-user .tr-text { font-family: 'Outfit Variable', var(--font-sans); font-style: normal; font-weight: 400; font-size: 14.5px; letter-spacing: .01em; }
+.era-free-layout .tr-who { font: 600 9px 'Outfit Variable', var(--font-sans); letter-spacing: .22em; text-transform: uppercase; }
+
+/* Borderless window: the empty left of the header is a full-height drag strip. */
+.hud-header-centered .hud-header-left { align-self: stretch; justify-self: stretch; }
+

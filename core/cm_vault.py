@@ -454,6 +454,23 @@ def _trim_note(body: str) -> str:
     )
 
 
+def brief_block(note: VaultNote) -> str:
+    """Keep rules inline; long working plans are discoverable, bounded previews."""
+    if note.note_type == "plan" and len(note.body) > 1200:
+        preview = note.body[:1000]
+        boundary = preview.rfind("\n\n")
+        if boundary >= 500:
+            preview = preview[:boundary]
+        body = (
+            preview.rstrip() + f"\n\n[Working-plan preview; full source: {note.rel}. "
+            "Read this file before using or changing plan details. The omitted "
+            "content remains in the vault; do not guess at it.]"
+        )
+    else:
+        body = _trim_note(note.body)
+    return f"----- {note.folder}/{note.title} -----\n{body}\n"
+
+
 def render_vault_context(
     brand_key: str,
     aliases: list[str] | None = None,
@@ -478,8 +495,7 @@ def render_vault_context(
     chunks: list[str] = []
     used = 0
     for note in notes:
-        body = _trim_note(note.body)
-        block = f"----- {note.folder}/{note.title} -----\n{body}\n"
+        block = brief_block(note)
         if used + len(block) > _MAX_BRIEF_CHARS:
             continue
         chunks.append(block)

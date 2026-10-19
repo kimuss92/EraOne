@@ -59,6 +59,7 @@ from app.hud.bus_const import (
 )
 from app.hud.bus_legacy import LegacyObserverMixin, ReadSideMixin
 from app.hud.bus_tools import ToolEventsMixin
+from core.speech_frames import SpeechPhrase
 
 
 class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin):
@@ -91,7 +92,45 @@ class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin)
         self._approval: dict | None = None
         self._state: tuple[str, str] = ("offline", "Starting")
         self._model: dict | None = None
+        self._telegram_call: dict | None = None
         self._catalog: dict | None = None
+        self._media_observation: dict = {
+            "revision": 0,
+            "health": "unavailable",
+            "observedAt": 0.0,
+            "sessions": [],
+        }
+        self._browser_media_observation: dict = {"revision": 0, "sessions": []}
+        self._foreground_observation: dict = {
+            "revision": 0,
+            "health": "unavailable",
+            "foreground": None,
+        }
+        self._process_observation: dict = {
+            "revision": 0,
+            "health": "unavailable",
+            "processes": [],
+            "coverage": "none",
+        }
+        self._network_observation: dict = {
+            "revision": 0,
+            "health": "unavailable",
+            "interfaces": [],
+            "internet": "unknown",
+        }
+        self._file_observation: dict = {
+            "revision": 0,
+            "health": "unavailable",
+            "changes": [],
+            "roots": [],
+        }
+        self._device_observation: dict = {
+            "revision": 0,
+            "health": "unavailable",
+            "endpoints": [],
+            "coverage": "none",
+        }
+        self._widget_layout_observation = None
 
         # current turn
         self._transcript = {"user": "", "userFinal": False, "response": "", "responding": False}
@@ -154,6 +193,26 @@ class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin)
     def recent_events(self, limit: int = 100) -> list[dict]:
         with self._lock:
             return list(self._events)[-limit:]
+
+    def telegram_call_observed(self, status: dict) -> None:
+        """Publish call-local state and captions without changing local voice state."""
+        from copy import deepcopy
+
+        try:
+            with self._lock:
+                previous = self._telegram_call
+                if previous:
+                    if previous.get("instanceId") != status.get("instanceId"):
+                        if status.get("revision") != 1:
+                            return
+                    elif status.get("revision", 0) <= previous.get("revision", 0):
+                        return
+                self._telegram_call = deepcopy(status)
+                self._emit(
+                    "telegram.call.status", buffer=False, metadata={"call": deepcopy(status)}
+                )
+        except Exception:
+            pass
 
     def _ensure_timer(self) -> None:
         if self._timer is not None and self._timer.is_alive():
@@ -281,6 +340,115 @@ class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin)
                 self._poke()
         except Exception:
             pass
+
+    def media_observed(self, observation: dict, *, changed: bool = True) -> None:
+        """Read-only OS evidence; isolated from agent speech/standby state."""
+        from copy import deepcopy
+
+        with self._lock:
+            self._media_observation = deepcopy(observation)
+            self._emit(
+                "system.media.observed",
+                metadata={"media": deepcopy(observation), "changed": changed},
+            )
+
+    def browser_media_observed(self, observation: dict, *, changed: bool = True) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._browser_media_observation = deepcopy(observation)
+            self._emit(
+                "system.browser.media.observed",
+                metadata={"media": deepcopy(observation), "changed": changed},
+            )
+
+    def foreground_observed(self, observation: dict, *, changed: bool = True) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._foreground_observation = deepcopy(observation)
+            self._emit(
+                "system.foreground.observed",
+                metadata={"foreground": deepcopy(observation), "changed": changed},
+            )
+
+    def processes_observed(self, observation: dict, *, changed: bool = True) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._process_observation = deepcopy(observation)
+            self._emit(
+                "system.processes.observed",
+                metadata={"processes": deepcopy(observation), "changed": changed},
+            )
+
+    def network_observed(self, observation: dict, *, changed: bool = True) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._network_observation = deepcopy(observation)
+            self._emit(
+                "system.network.observed",
+                metadata={"network": deepcopy(observation), "changed": changed},
+            )
+
+    def files_observed(self, observation: dict, *, changed: bool = True) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._file_observation = deepcopy(observation)
+            self._emit(
+                "system.files.observed",
+                metadata={"files": deepcopy(observation), "changed": changed},
+            )
+
+    def devices_observed(self, observation: dict, *, changed: bool = True) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._device_observation = deepcopy(observation)
+            self._emit(
+                "system.devices.observed",
+                metadata={"devices": deepcopy(observation), "changed": changed},
+            )
+
+    def focus_view(self, view: str) -> dict:
+        """Request an allowlisted HUD view without touching persisted layout."""
+        from app.hud.views import resolve
+
+        view = resolve(view)
+        with self._lock:
+            self._emit("hud.view.focus", metadata={"view": view})
+            active = [
+                row["activity"]
+                for row in self._tools.values()
+                if row["status"] in {"running", "queued", "awaiting"}
+                and row["tool"] != "visual_engine"
+            ]
+        message = "View request sent to connected HUDs"
+        if view == "activity":
+            from agent.task_queue import get_queue
+
+            jobs = get_queue().get_all_statuses()
+            active += [
+                str(row.get("goal", "Background task"))
+                for row in jobs
+                if row.get("status") in {"running", "pending", "awaiting_approval"}
+            ]
+            active = list(dict.fromkeys(active))
+            message = (
+                "No tasks are running."
+                if not active
+                else f"{len(active)} active tasks: " + "; ".join(active[:5])
+            )
+        return {"success": True, "view": view, "message": message}
+
+    def widget_layout_observed(self, layout: dict) -> None:
+        from copy import deepcopy
+
+        with self._lock:
+            self._widget_layout_observation = deepcopy(layout)
+            self._emit("hud.layout.updated", metadata={"layout": layout})
 
     def wake_detected(self) -> None:
         try:
@@ -434,7 +602,7 @@ class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin)
         except Exception:
             pass
 
-    def response_delta(self, chunk: str) -> None:
+    def response_delta(self, chunk: str, *, verbatim: bool = False) -> None:
         try:
             with self._lock:
                 if not chunk:
@@ -446,12 +614,37 @@ class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin)
                 if self._turn_t0 is not None and not self._ttft_seen:
                     self._ttft_seen = True
                     self._record_latency("ttftMs", (now - self._turn_t0) * 1000)
-                resp = (self._transcript["response"] + " " + chunk).strip()
+                resp = (
+                    self._transcript["response"] + chunk
+                    if verbatim
+                    else (self._transcript["response"] + " " + chunk).strip()
+                )
                 self._transcript["response"] = resp[-MAX_RESPONSE_CHARS:]
                 if not self._speaking:
                     self._set_phase("synthesizing", "Preparing response")
-                self._emit("agent.response.delta", buffer=False, message=chunk)
+                self._emit(
+                    "agent.response.delta",
+                    buffer=False,
+                    message=chunk,
+                    **({"metadata": {"verbatim": True}} if verbatim else {}),
+                )
                 self._poke()
+        except Exception:
+            pass
+
+    def speech_caption(self, phrase: SpeechPhrase, state: str) -> None:
+        """Device-write evidence for a local TTS phrase, never synthesis arrival."""
+        try:
+            with self._lock:
+                caption = {
+                    "id": phrase.id,
+                    "text": phrase.text,
+                    "engine": phrase.engine,
+                    "state": state,
+                    "at": time.time(),
+                }
+                self._transcript["caption"] = caption
+                self._emit("tts.phrase." + state, message=phrase.text, metadata=caption)
         except Exception:
             pass
 
@@ -491,6 +684,7 @@ class HudBus(ApprovalMixin, ToolEventsMixin, LegacyObserverMixin, ReadSideMixin)
                 self._turn_done_at = None
                 self._set_transient("interrupted", "Interrupted")
                 self._emit("tts.interrupted", label="Interrupted", metadata={"source": source})
+                self._transcript.pop("caption", None)
                 self._poke()
         except Exception:
             pass

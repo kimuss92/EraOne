@@ -1,0 +1,14 @@
+........................................................................ [ 14%]
+........................................................................ [ 29%]
+........................................................................ [ 44%]
+........................................................................ [ 58%]
+........................................................................ [ 73%]
+........................................................................ [ 88%]
+..........................................................               [100%]
+============================== warnings summary ===============================
+tools/test_model_reply_ownership.py::test_real_receive_disconnect_reports_pending_remote_and_resets_owner
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+490 passed, 1 warning in 21.43s

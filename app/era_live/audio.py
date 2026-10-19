@@ -5,6 +5,7 @@ drop logger. Operates purely on self.* state defined by EraLive.__init__.
 """
 
 import asyncio
+import collections
 import time
 import traceback
 
@@ -13,6 +14,7 @@ import sounddevice as sd
 from google.genai import types
 
 from app.audio_config import CHANNELS, CHUNK_SIZE, RECEIVE_SAMPLE_RATE, SEND_SAMPLE_RATE
+from app.codemode_runtime import owns_reply as codemode_owns_reply
 from app.era_live.audio_output import ResilientOutputStream
 from app.era_live.claude_voice import claude_voice_order
 from app.hud.events import hud
@@ -31,6 +33,21 @@ from app.text_intents import (
 from core import voice_input
 from core.logger import log_crash, log_event, main_logger
 from core.mic_mute import is_mic_off_order
+from core.model_reply import (
+    active_model_owner,
+    completed_model_owner,
+    report_model_uncertainty,
+    send_model_text,
+)
+from core.speech_frames import (
+    NativeSpeechCheckpoint,
+    NativeSpeechEnd,
+    NativeSpeechFrame,
+    NativeSpeechTurn,
+    SpeechEnd,
+    SpeechFrame,
+    SpeechPhrase,
+)
 from core.vad import fade_out_pcm
 from core.voice_mode import MODE_GEMINI_AUDIO, MODE_KOKORO_AUDIO, VOICE_CFG
 
@@ -87,6 +104,11 @@ def _latency_mark(host, name: str, *args) -> None:
 
 
 class AudioIOMixin:
+    def _owned_speech_event(self, phrase, status: str) -> None:
+        bridge = getattr(self, "_telegram_speech", None)
+        if bridge is not None:
+            bridge.event(phrase, status)
+
     def _log_turn_latency(self) -> None:
         """Emit this turn's latency breakdown as one log line, then always reset.
 
@@ -169,6 +191,23 @@ class AudioIOMixin:
         buf = list(getattr(self, "_cloud_audio_buffer", None) or [])
         self._clear_cloud_audio_buffer()
         return buf
+
+    def _tts_partial_failure(self, reason: str) -> None:
+        """Report an incomplete spoken turn without replaying its earlier words."""
+        log_event(
+            main_logger,
+            "voice.reply.incomplete",
+            "WARNING",
+            reason=reason,
+            whole_turn_replay_suppressed=True,
+        )
+        try:
+            self.ui.write_log(
+                "SYS: My voice stopped before the reply finished. The text is available here; "
+                "ask me to continue if you need the rest spoken."
+            )
+        except Exception:
+            pass
 
     def _tts_fallback(self, reason: str = "", held_audio: list[bytes] | None = None) -> None:
         """PRIMARY TTS failed -> finish this turn with Gemini's own audio.
@@ -276,6 +315,10 @@ class AudioIOMixin:
         No-op unless Era is actually speaking, so a late or duplicate schedule
         cannot wedge her out of a turn she already finished.
         """
+        from core.codemode import get_codemode
+
+        if get_codemode().enabled:
+            get_codemode()._speech_muted = True
         with self._speaking_lock:
             if not self._is_speaking:
                 return
@@ -352,17 +395,13 @@ class AudioIOMixin:
             except Exception as gate_err:  # fail closed, never kill the session
                 self._log_audio_drop(f"speaker gate unavailable: {gate_err}")
                 continue
-            # ── Attention gate: only speech meant for Era (core/attention.py) ──
-            # After the voiceprint check: past the conversation window, an
-            # utterance must start with her name; a phone call or room chat is
-            # replaced by silence. Fail-open by design.
-            gate = self._attention_gate()
-            keep_open = self._attention_keep_open()
+            # No optional attention/media gate: the user wants Gemini to hear
+            # complete requests directly, including while media is playing.
+            # The explicitly toggleable security lock above is currently OFF.
             for frame in frames:
-                for out in gate.feed(frame, keep_open=keep_open):
-                    self._note_sent_voice(out)
-                    blob = types.Blob(data=out, mime_type=msg["mime_type"])
-                    await self.session.send_realtime_input(audio=blob)
+                self._note_sent_voice(frame)
+                blob = types.Blob(data=frame, mime_type=msg["mime_type"])
+                await self.session.send_realtime_input(audio=blob)
 
     def _note_sent_voice(self, frame: bytes) -> None:
         """Evidence for core/live_health.py that the user spoke into a listening
@@ -503,7 +542,23 @@ class AudioIOMixin:
             gate = self._voice_gate = UtteranceGate(
                 get_verifier(), on_event=_report, followup_allowed=_followup_allowed
             )
+        gate.configure_input(bool(getattr(self, "_wearable_input_active", False)))
         return gate
+
+    def _media_voice_frames(self, frame: bytes) -> list[bytes]:
+        from core.media_voice_gate import MediaVoiceGate
+        from core.speaker_recognition import get_verifier
+
+        # The global security gate already verifies every utterance when enabled.
+        if get_verifier().enabled:
+            return [frame]
+        gate = getattr(self, "_media_voice_filter", None)
+        if gate is None:
+            gate = self._media_voice_filter = MediaVoiceGate(
+                recognizer_factory=getattr(self._attention_gate(), "_make_rec", None)
+            )
+        gate.configure_input(bool(getattr(self, "_wearable_input_active", False)))
+        return gate.feed(frame)
 
     async def _listen_audio(self):
         print("[era] [MIC] Mic started")
@@ -511,14 +566,90 @@ class AudioIOMixin:
         # Capture THIS connection's queues. A late PortAudio callback must not
         # put old speech into a replacement session's queue.
         outgoing = self.out_queue
+        interruption_audio = collections.deque(maxlen=12)  # Keep onset + speech confirmation.
+        wearable_gain = False
+        levels = {"frames": 0, "rms_sum": 0.0, "rms_peak": 0.0, "zero_sum": 0.0, "paths": {}}
+        last_level_log = time.monotonic()
 
         def enqueue(queue, item):
             if queue is not None and not queue.full():
                 queue.put_nowait(item)
 
+        def interrupt_and_forward(frames):
+            # A late callback cannot unmute or send into a replacement session.
+            if (
+                self.out_queue is not outgoing
+                or self._go_away_event.is_set()
+                or self._standby_active
+                or not self._browser_mic_active
+                or getattr(self, "_mic_muted", False)
+                or self.ui.muted
+            ):
+                return
+            with self._speaking_lock:
+                if not self._is_speaking:
+                    return
+            self.trigger_barge_in()
+            for frame in frames:
+                enqueue(
+                    outgoing, {"data": frame, "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}"}
+                )
+
         def callback(indata, frames, time_info, status):
+            nonlocal last_level_log
+            if (
+                self.out_queue is not outgoing
+                or self._go_away_event.is_set()
+                or self._shutdown_requested
+            ):
+                return  # a retiring connection owns neither capture nor wake input
             with self._speaking_lock:
                 era_speaking = self._is_speaking
+            # Gain applies to this verified physical input only, before detection
+            # and forwarding, including the local standby wake recognizer.
+            data = indata.tobytes()
+            if wearable_gain:
+                from core.audio_pcm import amplify_input_pcm
+
+                data = amplify_input_pcm(data)
+            try:
+                level = float(np.sqrt(np.mean(np.square(indata, dtype=np.float32)))) / 32768.0
+                path = (
+                    "standby"
+                    if self._standby_active
+                    else "muted"
+                    if getattr(self, "_mic_muted", False)
+                    or self.ui.muted
+                    or not self._browser_mic_active
+                    else "speaking"
+                    if era_speaking
+                    else "echo_hold"
+                    if self._listening_state().echo_hold_active()
+                    else "capture"
+                )
+                levels["frames"] += 1
+                levels["rms_sum"] += level
+                levels["rms_peak"] = max(levels["rms_peak"], level)
+                levels["paths"][path] = levels["paths"].get(path, 0) + 1
+                # Exact-zero samples are a Bluetooth hands-free dropout (or the
+                # glasses' own noise gate). Logged so a weak-link complaint
+                # ("works only near the computer") shows up in era.log.
+                levels["zero_sum"] += float(np.count_nonzero(indata == 0)) / max(1, indata.size)
+                now = time.monotonic()
+                if now - last_level_log >= 10.0:
+                    log_event(
+                        main_logger,
+                        "voice.input.level",
+                        "INFO",
+                        rms_mean=round(levels["rms_sum"] / levels["frames"], 5),
+                        rms_peak=round(levels["rms_peak"], 5),
+                        zero_frac=round(levels["zero_sum"] / levels["frames"], 3),
+                        paths=dict(levels["paths"]),
+                    )
+                    levels.update(frames=0, rms_sum=0.0, rms_peak=0.0, zero_sum=0.0, paths={})
+                    last_level_log = now
+            except Exception:
+                pass
 
             # HUD mic level: the real RMS of this block (~15 Hz, one per block),
             # only while the mic is genuinely open — a hard-off or voice-muted
@@ -532,6 +663,7 @@ class AudioIOMixin:
 
             # ----- Handle standby mode: route mic to Vosk or drop -----
             if self._standby_active:
+                interruption_audio.clear()
                 # Respect an explicit mic-off toggle even in standby. If
                 # the user turned the mic OFF, Era must be fully deaf — no
                 # wake detection either. Without this gate a "mic Off"
@@ -540,7 +672,6 @@ class AudioIOMixin:
                 if not self._browser_mic_active:
                     return
                 if self._wake_queue is not None:
-                    data = indata.tobytes()
                     try:
                         loop.call_soon_threadsafe(enqueue, self._wake_queue, data)
                     except RuntimeError:
@@ -559,6 +690,7 @@ class AudioIOMixin:
             # Era speaks (her own "Microphone off." must not be decoded, and a
             # muted mic must never barge in). See core/mic_mute.py.
             if getattr(self, "_mic_muted", False):
+                interruption_audio.clear()
                 if self._browser_mic_active and not era_speaking:
                     self._feed_unmute_audio(loop, indata.tobytes())
                 return
@@ -582,22 +714,28 @@ class AudioIOMixin:
                     and not self.ui.muted
                 ):
                     try:
-                        if det.feed(indata.tobytes()):
-                            loop.call_soon_threadsafe(self.trigger_barge_in)
+                        interruption_audio.append(data)
+                        if det.feed(data):
+                            prefix = tuple(interruption_audio)
+                            interruption_audio.clear()
+                            loop.call_soon_threadsafe(interrupt_and_forward, prefix)
                     except Exception:
                         pass
+                else:
+                    interruption_audio.clear()
                 return
             # -----------------------------------------------------
+            interruption_audio.clear()
 
             # Echo hold: Era's last words are still leaving the speakers (device
             # buffer, Bluetooth, room reverb) right after she stops; Gemini used to
             # hear them and answer herself. See core/attention.py.
-            if self._listening_state().echo_hold_active():
-                return
+            # No post-reply listening hold. Playback echo is handled by the
+            # interruption detector while Era speaks, not by dropping the next
+            # user request for a fixed time after every reply.
 
             # Normal operation: send audio to Gemini only if not muted
             if not self.ui.muted and self._browser_mic_active:
-                data = indata.tobytes()
                 try:
                     # Thread-safe try-push without exploding if the loop lags
                     loop.call_soon_threadsafe(
@@ -619,21 +757,51 @@ class AudioIOMixin:
                 # fail-closed gate then turned every utterance into silence and
                 # Era answered "<no speech detected>". See core/voice_input.py.
                 mic_index = voice_input.resolve_input_index(sd)
-                with sd.InputStream(
+                wearable_gain = False
+                self._wearable_input_active = False
+                detector = getattr(self, "_barge_in", None)
+                if detector is not None:
+                    detector.configure_input("")
+                from app.era_live.audio_capture import capture_cache
+
+                cache = capture_cache(self, sd.InputStream)
+                with cache.lease(
+                    callback,
+                    owner=self,
                     samplerate=SEND_SAMPLE_RATE,
                     channels=CHANNELS,
                     dtype="int16",
                     blocksize=CHUNK_SIZE,
                     device=mic_index,
-                    callback=callback,
                 ) as stream:
+                    try:
+                        actual = sd.query_devices(mic_index, "input")
+                        name = str(actual["name"])
+                        voice_input.note_active_input(mic_index, name, owner=cache)
+                        detector = getattr(self, "_barge_in", None)
+                        if detector is not None:
+                            wearable_gain = detector.configure_input(name)
+                            self._wearable_input_active = wearable_gain
+                        log_event(
+                            main_logger,
+                            "voice.input.reused" if cache.reused else "voice.input.opened",
+                            "INFO",
+                            device=name,
+                            index=mic_index,
+                            sample_rate=SEND_SAMPLE_RATE,
+                            input_gain=8.0 if wearable_gain else 1.0,
+                            interruption_floor=getattr(detector, "amplitude_threshold", None),
+                        )
+                    except Exception:
+                        pass
                     print(f"[era] [MIC] Mic stream open ({voice_input.status(sd)})")
                     retry_delay = 1.0
                     while not self._go_away_event.is_set() and not self._shutdown_requested:
                         if getattr(stream, "active", True) is False:
                             raise sd.PortAudioError("Microphone stream became inactive")
                         await asyncio.sleep(0.1)
-            except (sd.PortAudioError, OSError) as e:
+            except (sd.PortAudioError, OSError, ValueError) as e:
+                voice_input.clear_active_input()
                 # A missing/unplugged mic is local. Keep the Live connection and
                 # typed commands working while retrying just the input device.
                 print(f"[era] [MIC] Device unavailable; retrying in {retry_delay:.0f}s: {e}")
@@ -649,6 +817,11 @@ class AudioIOMixin:
     async def _receive_audio(self):
         print("[era] [RECV] Recv started")
         out_buf, in_buf = [], []
+        speech_attempted = False
+        speech_turn_owner = None
+        speech_delivery_owned = False
+        native_attempted = False
+        native_turn = None
         # A partial utterance left by a dropped session must not linger as "what the
         # user is saying now" — the approval gates read it (tool_dispatch).
         self._inflight_user_text = ""
@@ -755,12 +928,29 @@ class AudioIOMixin:
                         # the primary backend cannot synthesize, _tts_fallback
                         # flushes this buffer so the user hears the reply in
                         # Gemini's voice instead of hearing nothing at all.
-                        if self._cm_handoff_active():
+                        if codemode_owns_reply() or self._cm_handoff_active():
                             pass
                         elif VOICE_CFG.synthesizes_from_transcript():
                             self._buffer_cloud_audio(response.data)
                         else:
-                            self.audio_in_queue.put_nowait(response.data)
+                            if not native_attempted:
+                                native_attempted = True
+                                owner = active_model_owner(self)
+                                prepare = getattr(self, "_prepare_owned_speech", None)
+                                if (
+                                    owner is not None
+                                    and owner.source == "telegram"
+                                    and callable(prepare)
+                                ):
+                                    if prepare(owner, reuse=True):
+                                        native_turn = NativeSpeechTurn(owner)
+                                        speech_delivery_owned = True
+                            chunk = (
+                                NativeSpeechFrame(response.data, native_turn)
+                                if native_turn
+                                else response.data
+                            )
+                            self.audio_in_queue.put_nowait(chunk)
 
                     if response.server_content:
                         sc = response.server_content
@@ -780,8 +970,17 @@ class AudioIOMixin:
                             self._barge_in_requested = True
                             hud.barge_in("model")
                             self._flush_audio_in_queue()
+                            # Release half-duplex capture immediately, just as
+                            # local trigger_barge_in does. A missing/delayed
+                            # turn_complete must not leave the mic gated as
+                            # "Era speaking" after the server stopped her.
+                            self.set_speaking(False)
 
-                        if sc.output_transcription and sc.output_transcription.text:
+                        if (
+                            sc.output_transcription
+                            and sc.output_transcription.text
+                            and not codemode_owns_reply()
+                        ):
                             txt = _clean_transcript(sc.output_transcription.text)
                             if txt:
                                 out_buf.append(txt)
@@ -791,6 +990,18 @@ class AudioIOMixin:
                                 if hasattr(self, "live_health"):
                                     self.live_health.note_reply()  # a spoken transcript is an answer
                                 hud.response_delta(txt)
+                                if (
+                                    native_turn is not None
+                                    and not native_turn.failed
+                                    and active_model_owner(self) == native_turn.owner
+                                    and not self._barge_in_requested
+                                    and txt.endswith((".", "!", "?", "。", "！", "？"))
+                                ):
+                                    self.audio_in_queue.put_nowait(
+                                        NativeSpeechCheckpoint(
+                                            native_turn, " ".join(out_buf).strip()
+                                        )
+                                    )
                                 # ── fish_audio: the TRANSCRIPT is the speech ──
                                 # Gemini's own audio was discarded above, so this
                                 # text is what Era actually says. It streams
@@ -808,11 +1019,25 @@ class AudioIOMixin:
                                     and not self._cm_handoff_active()
                                     and not self._barge_in_requested
                                 ):
+                                    if not speech_attempted:
+                                        speech_attempted = True
+                                        owner = active_model_owner(self)
+                                        prepare = getattr(self, "_prepare_owned_speech", None)
+                                        if (
+                                            owner is not None
+                                            and owner.source == "telegram"
+                                            and callable(prepare)
+                                        ):
+                                            if prepare(owner, reuse=True):
+                                                speech_turn_owner = owner
+                                                speech_delivery_owned = True
                                     # The UN-stripped chunk: its edge spaces are
                                     # the word breaks (see _clean_stream_chunk).
-                                    self.speech_out.feed(
-                                        _clean_stream_chunk(sc.output_transcription.text)
-                                    )
+                                    delta = _clean_stream_chunk(sc.output_transcription.text)
+                                    if speech_turn_owner is not None:
+                                        self.speech_out.feed(delta, owner=speech_turn_owner)
+                                    else:
+                                        self.speech_out.feed(delta)
                             elif (
                                 VOICE_CFG.synthesizes_from_transcript()
                                 and not self._cm_handoff_active()
@@ -833,6 +1058,19 @@ class AudioIOMixin:
                                 self._user_spoke_since_drop = True
                                 _latency_mark(self, "note_user_delta")
                                 if not in_buf:
+                                    self._live_cancel_applied = False
+                                    # A real spoken request supersedes a remote
+                                    # reply; never mirror the room conversation.
+                                    from core.input_envelope import InputEnvelope
+
+                                    owner = InputEnvelope.create(txt, "voice")
+                                    accept = getattr(self, "_accept_input", None)
+                                    if callable(accept):
+                                        accept(owner)
+                                    else:
+                                        bridge = getattr(self, "_telegram_speech", None)
+                                        if bridge is not None:
+                                            bridge.select(owner)
                                     # When the user STARTED saying it: a gate asking
                                     # "said after the task parked?" must not see a
                                     # sentence begun before it as said "now".
@@ -841,6 +1079,12 @@ class AudioIOMixin:
                                 in_buf.append(txt)
                                 self._last_user_text = txt
                                 self._inflight_user_text = " ".join(in_buf)
+                                try:
+                                    listening = getattr(self, "_listening_state", None)
+                                    if callable(listening):
+                                        listening().note_transcript(self._inflight_user_text)
+                                except Exception:
+                                    pass
                                 hud.transcript_partial(self._inflight_user_text)
                                 # ── "abort mission", MID-TURN ──
                                 # Checked here, on the partial transcript,
@@ -874,6 +1118,15 @@ class AudioIOMixin:
                         ):
                             hud.user_speech_finished(" ".join(in_buf))
                             _latency_mark(self, "note_user_finished")
+                            from app.codemode_runtime import route as route_codemode
+                            from core.input_envelope import InputEnvelope
+
+                            code_text = " ".join(in_buf)
+                            code_owner = InputEnvelope.create(code_text, "voice")
+                            if route_codemode(self, code_text, code_owner):
+                                self._input_envelope = code_owner
+                                in_buf.clear()
+                                continue
 
                         # ── The model finished the ANSWER ──
                         # Distinct from turn_complete, which also fires when the
@@ -887,13 +1140,17 @@ class AudioIOMixin:
                             self.live_turn.note_generation_complete()
 
                         if sc.turn_complete:
+                            if codemode_owns_reply():
+                                out_buf.clear()
+                                if not in_buf:
+                                    continue
                             if hasattr(self, "live_health"):
                                 self.live_health.note_reply()  # the turn ended: it responded
                             # A turn boundary always clears the barge-in latch, so
                             # a cut-off turn cannot leave Era's voice gated off for
                             # the next reply.
                             self._barge_in_requested = False
-                            if VOICE_CFG.uses_speech_out():
+                            if VOICE_CFG.uses_speech_out() and not codemode_owns_reply():
                                 # Gemini has finished TALKING, but Era has not
                                 # finished SPEAKING — sentences are still being
                                 # synthesized. Setting _turn_done_event here
@@ -907,12 +1164,28 @@ class AudioIOMixin:
                                 # must still find its fallback (2026-10-07: it
                                 # was cleared here and the reply went silent).
                                 self.speech_out.end_turn(held_audio=self._take_cloud_audio_buffer())
-                            elif self._turn_done_event:
+                            elif self._turn_done_event and not codemode_owns_reply():
                                 self._turn_done_event.set()
 
                             full_in = " ".join(in_buf).strip()
                             self._inflight_user_text = ""
                             if full_in:
+                                from app.codemode_runtime import route as route_codemode
+                                from core.input_envelope import InputEnvelope
+
+                                code_owner = InputEnvelope.create(full_in, "voice")
+                                if route_codemode(self, full_in, code_owner):
+                                    self._input_envelope = code_owner
+                                    in_buf.clear()
+                                    out_buf.clear()
+                                    continue
+                            if full_in:
+                                from app.manual_presence import handle_presence_order
+
+                                presence_reply = handle_presence_order(full_in)
+                                if presence_reply is not None:
+                                    self.ui.write_log(f"SYS: {presence_reply}")
+                                    self.speak_dispatched(presence_reply)
                                 self._note_user_utterance(
                                     full_in, said_at=getattr(self, "_inflight_started_at", None)
                                 )
@@ -945,6 +1218,11 @@ class AudioIOMixin:
                                     self, "_mic_muted", False
                                 ):
                                     self.mute_microphone("voice")
+                                # Persist the same explicit preference as text
+                                # and backup voice; never infer it from silence.
+                                getattr(self, "_handle_auto_standby_order", lambda text: None)(
+                                    full_in
+                                )
                                 # "switch to Claude" / "use your backup brain":
                                 # deterministic, never left to the model. The
                                 # call site was lost in merge 6f0c327.
@@ -966,10 +1244,10 @@ class AudioIOMixin:
                                         turn = self.turn_memory.take()
                                         if turn is not None and self.session is not None:
                                             try:
-                                                await self.session.send_realtime_input(
-                                                    text=build_resume_note(
-                                                        turn.spoken, turn.remainder
-                                                    )
+                                                await send_model_text(
+                                                    self,
+                                                    build_resume_note(turn.spoken, turn.remainder),
+                                                    internal=True,
                                                 )
                                             except Exception as _rz_err:
                                                 print(f"[era] [WARN] resume skipped: {_rz_err}")
@@ -1017,6 +1295,22 @@ class AudioIOMixin:
                                 self._last_user_text = ""
 
                             full_out = " ".join(out_buf).strip()
+                            tracker = getattr(self, "_model_reply_ownership", None)
+                            if tracker is not None and getattr(response, "tool_call", None):
+                                tracker.note_tools()
+                            reply_owner = completed_model_owner(self, full_out)
+                            if native_turn is not None:
+                                if not full_out or reply_owner != native_turn.owner:
+                                    native_turn.failed = True
+                                    bridge = getattr(self, "_telegram_speech", None)
+                                    if (
+                                        bridge is not None
+                                        and bridge.pending_owner == native_turn.owner
+                                    ):
+                                        bridge.select(None, reason="model_attribution_uncertain")
+                                self.audio_in_queue.put_nowait(
+                                    NativeSpeechEnd(native_turn, full_out)
+                                )
                             if full_out or full_in:
                                 hud.response_completed(full_out)
                             if full_out:
@@ -1032,7 +1326,14 @@ class AudioIOMixin:
                                 # Mirror the same line the UI shows back to the
                                 # chat, so an order given from another network is
                                 # answered there instead of aloud in an empty room.
-                                if self._tg_reply_pending:
+                                if not speech_delivery_owned and (
+                                    (reply_owner is not None and reply_owner.source == "telegram")
+                                    or (
+                                        not hasattr(self, "_input_envelope")
+                                        and tracker is None
+                                        and self._tg_reply_pending
+                                    )
+                                ):
                                     _tg_notify(full_out)
                             # ── Conversation continuity ──
                             # Keep the exchange so it survives the NEXT session
@@ -1088,8 +1389,10 @@ class AudioIOMixin:
                                 ):
                                     self.turn_memory.mark_offered()
                                     try:
-                                        await self.session.send_realtime_input(
-                                            text=build_resume_offer_note(pend.spoken)
+                                        await send_model_text(
+                                            self,
+                                            build_resume_offer_note(pend.spoken),
+                                            internal=True,
                                         )
                                     except Exception as _of_err:
                                         print(f"[era] [WARN] resume offer skipped: {_of_err}")
@@ -1114,9 +1417,17 @@ class AudioIOMixin:
                             self._clear_cloud_audio_buffer()
                             self._maybe_restore_primary_tts()
                             out_buf = []
+                            speech_attempted = False
+                            speech_turn_owner = None
+                            speech_delivery_owned = False
+                            native_attempted = False
+                            native_turn = None
 
                     # --- HANDLE TOOL CALLS ---
                     if response.tool_call and response.tool_call.function_calls:
+                        tracker = getattr(self, "_model_reply_ownership", None)
+                        if tracker is not None:
+                            tracker.note_tools()
                         if hasattr(self, "live_health"):
                             self.live_health.note_reply()  # a tool call is an answer too
                         # One response per call, always — see ToolBatchMixin.
@@ -1177,6 +1488,14 @@ class AudioIOMixin:
                 log_crash(main_logger, "receive_audio", type(e), e, e.__traceback__)
             raise
 
+        finally:
+            tracker = getattr(self, "_model_reply_ownership", None)
+            if tracker is not None:
+                latest = getattr(self, "_input_envelope", None)
+                if tracker.remote_pending and latest is not None and latest.source == "telegram":
+                    report_model_uncertainty(self, "session_closed")
+                tracker.reset()
+
     async def _play_audio(self):
         print("[era] [PLAY] Play started")
 
@@ -1196,16 +1515,18 @@ class AudioIOMixin:
         RECLAIM_CHECK_INTERVAL_S = 1.5
         last_reclaim_check = 0.0
         reclaim_probe = None
+        reclaim_generation = None
         # Separate, throttled probe for the "connected after startup, invisible to
         # PortAudio" case, which the reclaim above cannot fix (there is no index to
         # reopen onto). Runs regardless of on_fallback, off the event loop.
         last_reenum_check = 0.0
         reenum_probe = None
+        reenum_generation = None
         try:
             from core import voice_output as _vo
 
-            output_device = _vo.resolve_output_index()
             route_generation = _vo.generation()
+            output_device = _vo.resolve_output_index()
             if output_device is not None:
                 print(f"[era] [PLAY] Routing speech to device {output_device}")
         except Exception as _dev_err:
@@ -1236,11 +1557,32 @@ class AudioIOMixin:
                         name = str(sd.query_devices(device)["name"])
                     except Exception:
                         name = ""
-                _vo2.note_active_route(device, fallback=on_fallback, name=name)
+                _vo2.note_active_route(
+                    device, fallback=on_fallback, name=name, route_generation=route_generation
+                )
+                pin = _vo2.get_pin()
+                log_event(
+                    main_logger,
+                    "audio.output.route_observed",
+                    "INFO",
+                    opened=str(device),
+                    opened_name=name,
+                    requested_name=(pin or {}).get("name"),
+                    requested_id=(pin or {}).get("id"),
+                    fallback=on_fallback,
+                    route_generation=route_generation,
+                )
             except Exception:
                 pass
 
-        output = ResilientOutputStream(_open_stream, output_device, on_open=_report_route)
+        def _clear_route() -> None:
+            from core import voice_output
+
+            voice_output.clear_active_route()
+
+        output = ResilientOutputStream(
+            _open_stream, output_device, on_open=_report_route, on_close=_clear_route
+        )
         output.open()
 
         import numpy as _np
@@ -1251,6 +1593,9 @@ class AudioIOMixin:
         # interruption rather than every idle loop.
         last_chunk = b""
         barge_faded = False
+        caption_phrase_id = None
+        caption_failed = False
+        active_caption = None
 
         # EQUALIZER BANDS — the sphere reacts to Era's voice as a spectrum, not
         # just a level, so we hand the UI per-band energies alongside the RMS.
@@ -1317,6 +1662,9 @@ class AudioIOMixin:
                     current_gen = _vo.generation()
                     if current_gen != route_generation:
                         route_generation = current_gen
+                        if reclaim_probe is not None:
+                            reclaim_probe.cancel()
+                            reclaim_probe = None
                         output.set_preferred_device(_vo.resolve_output_index())
                     # While playing on the fallback device, keep asking whether
                     # the CHOSEN one is back. Nothing fails while the fallback
@@ -1329,25 +1677,26 @@ class AudioIOMixin:
                     # speaker: the cure would stutter the very audio it exists
                     # to route. So it is fired as a background task and the
                     # result is collected on a later iteration.
-                    elif output.on_fallback:
+                    elif output.on_fallback or output.preferred_device is None:
                         _now = time.time()
                         if (
                             reclaim_probe is None
                             and _now - last_reclaim_check >= RECLAIM_CHECK_INTERVAL_S
                         ):
                             last_reclaim_check = _now
+                            reclaim_generation = current_gen
                             reclaim_probe = asyncio.create_task(
-                                asyncio.to_thread(_vo.pinned_device_connected)
+                                asyncio.to_thread(_vo.resolve_output_index)
                             )
                         if reclaim_probe is not None and reclaim_probe.done():
-                            came_back = False
+                            returned_device = None
                             try:
-                                came_back = bool(reclaim_probe.result())
+                                returned_device = reclaim_probe.result()
                             except Exception as _probe_err:
                                 print(f"[era] [PLAY] reclaim probe failed: {_probe_err}")
                             reclaim_probe = None
-                            if came_back:
-                                output.reclaim_preferred()
+                            if reclaim_generation == _vo.generation():
+                                output.reclaim_resolved(returned_device)
                     elif reclaim_probe is not None:
                         # Back on the chosen device by another route; the answer
                         # in flight is stale.
@@ -1379,9 +1728,15 @@ class AudioIOMixin:
                         >= VOICE_REENUM_MIN_INTERVAL_S
                     ):
                         last_reenum_check = _now
-                        reenum_probe = asyncio.create_task(
-                            asyncio.to_thread(_vo.needs_reenumeration)
-                        )
+                        reenum_generation = _vo.generation()
+                        invalid_device = output.requires_device_refresh
+
+                        def _needs_device_refresh(invalid=invalid_device, routing=_vo):
+                            return routing.needs_reenumeration() or (
+                                invalid and routing.pinned_device_connected()
+                            )
+
+                        reenum_probe = asyncio.create_task(asyncio.to_thread(_needs_device_refresh))
                     if reenum_probe is not None and reenum_probe.done():
                         needs = False
                         try:
@@ -1389,8 +1744,15 @@ class AudioIOMixin:
                         except Exception as _re_err:
                             print(f"[era] [PLAY] re-enum probe failed: {_re_err}")
                         reenum_probe = None
-                        if needs and getattr(self, "_renewal_deadline", None) is None:
+                        if (
+                            needs
+                            and reenum_generation == _vo.generation()
+                            and getattr(self, "_renewal_deadline", None) is None
+                            and _vo.claim_reenumeration_retry()
+                        ):
                             self._voice_reroute_requested_at = time.time()
+                            self._voice_device_refresh_required = output.requires_device_refresh
+                            self._voice_device_refresh_generation = reenum_generation
                             try:
                                 self.session_manager.prepare_reconnect()
                             except Exception as _pr_err:
@@ -1441,13 +1803,60 @@ class AudioIOMixin:
                         self._turn_done_event
                         and self._turn_done_event.is_set()
                         and self.audio_in_queue.empty()
+                        and not output.playback_pending
                     ):
                         _set_speaking(False)
                         self._turn_done_event.clear()
                         _emit_amplitude(0.0)  # settle the sphere when Era goes quiet
                     continue
+                if isinstance(chunk, NativeSpeechCheckpoint):
+                    turn = chunk.turn
+                    bridge = getattr(self, "_telegram_speech", None)
+                    if bridge is not None and not turn.failed and chunk.audio_bytes > 0:
+                        if turn.played_bytes >= chunk.audio_bytes:
+                            delta = turn.text_delta(chunk.text)
+                            phrase = SpeechPhrase(
+                                f"gemini-{turn.owner.id}-{len(chunk.text)}",
+                                delta or "",
+                                "gemini",
+                                turn.owner,
+                            )
+                            if delta is None:
+                                bridge.event(phrase, "failed")
+                            elif delta:
+                                bridge.event(phrase, "started")
+                    continue
+                if isinstance(chunk, NativeSpeechEnd):
+                    turn = chunk.turn
+                    bridge = getattr(self, "_telegram_speech", None)
+                    if bridge is not None:
+                        phrase = SpeechPhrase(
+                            f"gemini-{turn.owner.id}", chunk.text, "gemini", turn.owner
+                        )
+                        if (
+                            not turn.failed
+                            and turn.queued_bytes > 0
+                            and turn.played_bytes == turn.queued_bytes
+                        ):
+                            delta = turn.text_delta(chunk.text)
+                            if delta is None:
+                                bridge.event(phrase, "failed")
+                            else:
+                                if delta:
+                                    bridge.event(
+                                        SpeechPhrase(phrase.id, delta, "gemini", turn.owner),
+                                        "started",
+                                    )
+                                bridge.end(turn.owner)
+                        else:
+                            bridge.event(phrase, "failed")
+                    continue
+                if isinstance(chunk, SpeechEnd):
+                    bridge = getattr(self, "_telegram_speech", None)
+                    if bridge is not None:
+                        bridge.end(chunk.owner)
+                    continue
                 _set_speaking(True)
-                last_chunk = chunk  # remembered so a barge-in can fade its tail
 
                 # Drive the UI sphere from Era's *own* voice: overall level plus
                 # an 8-band spectrum of the same PCM chunk, so the sphere can
@@ -1497,7 +1906,32 @@ class AudioIOMixin:
                         pass
                     last_amp_emit = now
 
-                await output.write(chunk)
+                if isinstance(chunk, SpeechFrame) and chunk.phrase.id != caption_phrase_id:
+                    caption_phrase_id = chunk.phrase.id
+                    caption_failed = False
+                if not await output.write(chunk):
+                    if isinstance(chunk, NativeSpeechFrame):
+                        chunk.turn.failed = True
+                    # The queue drained, but no device accepted this frame.
+                    # Do not turn dropped PCM into playback/recovery evidence.
+                    last_chunk = b""
+                    if isinstance(chunk, SpeechFrame) and not caption_failed:
+                        caption_failed = True
+                        hud.speech_caption(chunk.phrase, "failed")
+                        AudioIOMixin._owned_speech_event(self, chunk.phrase, "failed")
+                        active_caption = None
+                    continue
+                if isinstance(chunk, NativeSpeechFrame):
+                    chunk.turn.played_bytes += len(chunk)
+                last_chunk = chunk  # only fade a tail that actually reached output
+                if isinstance(chunk, SpeechFrame) and not caption_failed:
+                    if chunk.first:
+                        hud.speech_caption(chunk.phrase, "started")
+                        AudioIOMixin._owned_speech_event(self, chunk.phrase, "started")
+                        active_caption = chunk.phrase
+                    if chunk.last:
+                        hud.speech_caption(chunk.phrase, "completed")
+                        active_caption = None
                 # Bytes the speaker actually consumed. This is the only evidence
                 # the user HEARD the answer — a finished transcript proves the
                 # model spoke, not that anything came out. decide_recovery()
@@ -1511,6 +1945,9 @@ class AudioIOMixin:
                 # kill it. Diagnostics are never load-bearing.
                 try:
                     self.live_turn.note_audio_played(len(chunk))
+                    health = getattr(self, "live_health", None)
+                    if health is not None:
+                        health.note_delivered()
                 except Exception:
                     pass
                 # First byte the user actually HEARD — the latency headline is
@@ -1520,6 +1957,12 @@ class AudioIOMixin:
             print(f"[era] [ERROR] Play: {e}")
             raise
         finally:
+            if active_caption is not None:
+                hud.speech_caption(active_caption, "interrupted")
+                AudioIOMixin._owned_speech_event(self, active_caption, "interrupted")
+            bridge = getattr(self, "_telegram_speech", None)
+            if bridge is not None:
+                bridge.select(None)
             _set_speaking(False)
             _emit_amplitude(0.0)
             # An in-flight device probe must not outlive the loop that owns it:

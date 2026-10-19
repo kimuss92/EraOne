@@ -45,7 +45,8 @@ _TASK_NOUN = r"(?:task|job|one|thing|action|search|command|request)"
 _CANCEL_BODY = (
     rf"(?:cancel|stop|drop|abandon|scrap|forget)\s+(?:that|this|it)(?:\s+{_TASK_NOUN})?",
     rf"(?:cancel|stop|drop|abandon)\s+(?:the|that|this)\s+{_TASK_NOUN}",
-    r"(?:cancel|stop)\s+what\s+you(?:'re|\s+are)\s+doing",
+    r"(?:cancel|stop)\s+(?:(?:the|my|current|running|live|active|activity)\s+)*task",
+    r"(?:cancel|stop)\s+what\s+you(?:'re|\s+are)\s+doing(?:\s+(?:right\s+)?now)?",
     r"(?:annule|arr[eê]te)\s+(?:[çc]a|cette\s+t[âa]che)",
     r"laisse\s+tomber\s+[çc]a",
 )
@@ -106,6 +107,32 @@ def is_cancel_task_order(text: str, wake_words: Iterable[str] = ()) -> bool:
     if not t or _reserved(t, wake_words):
         return False
     return _cancel_pattern(_words(wake_words)).match(t) is not None
+
+
+def is_spoken_cancel_task_order(text: str, wake_words: Iterable[str] = ()) -> bool:
+    """Accept an explicit cancel sentence inside a growing voice transcript.
+
+    Keep quoted examples and commands belonging to power/confirmation flows
+    out of this lane. No keyword matching inside arbitrary sentences.
+    """
+    unquoted = re.sub(r'"[^"\n]*"|“[^”\n]*”', "", text or "")
+    return any(
+        is_cancel_task_order(sentence, wake_words) for sentence in re.split(r"[.!?\n]+", unquoted)
+    )
+
+
+def is_cancel_all_live_order(text: str) -> bool:
+    unquoted = re.sub(r'"[^"\n]*"|“[^”\n]*”', "", text or "")
+    return any(
+        re.fullmatch(
+            r"\W*(?:(?:era(?:\s+one)?|please|okay|ok)\W+)*(?:cancel|stop)\s+"
+            r"(?:(?:all|every)(?:\s+(?:the|my))?\s+(?:(?:running|live|active|current)\s+)*(?:tasks?|jobs?)"
+            r"|(?:the\s+)?(?:running|live|active)\s+tasks)\W*",
+            sentence,
+            re.I,
+        )
+        for sentence in re.split(r"[.!?\n]+", unquoted)
+    )
 
 
 def correction_target(text: str, wake_words: Iterable[str] = ()) -> str | None:

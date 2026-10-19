@@ -74,9 +74,18 @@ async def test_blocked_tool_is_suppressed_while_ask_active():
 
 async def test_allowlisted_tool_still_runs_while_ask_active():
     era = _make_era(_ask())
+    era._recent_user_texts = [(time.time(), "enter standby")]
     result = await era._execute_tool_raw("enter_standby", {})
     assert "waiting for their answer" not in result.lower()
     assert era._standby_called is True  # allow-list escape hatch works
+
+
+async def test_allowlist_does_not_authorize_an_unsolicited_state_change():
+    era = _make_era(_ask())
+    result = await era._execute_tool_raw("enter_standby", {})
+    assert "nobody asked" in result.lower()
+    assert era._standby_called is False
+    assert era._pending_cm_ask_active() is True
 
 
 # (The "expired ask no longer blocks tools" case is covered by

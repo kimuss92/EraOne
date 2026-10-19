@@ -132,9 +132,60 @@ def test_stdio_log_masks_secrets_and_classifies_lines(tmp_path):
     assert "device lost" in err and "web_search" not in err
 
 
-def test_stdio_log_rotates_without_raising(tmp_path):
+def test_stdio_log_rotates_without_raising(tmp_path, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    # Windows readers can briefly prevent a rename. Advance the writer's retry
+    # clock rather than requiring a size bound during its documented backoff.
+    clock = [time.monotonic()]
+    monkeypatch.setattr(stdio_log, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     w = stdio_log.RotatingWriter(tmp_path / "x.log", max_bytes=200, backups=2)
-    for i in range(50):
-        w.write(f"line {i:04d} " + "x" * 40 + "\n")
-    assert (tmp_path / "x.log.1").exists()
-    assert (tmp_path / "x.log").stat().st_size < 400
+    try:
+        for i in range(50):
+            w.write(f"line {i:04d} " + "x" * 40 + "\n")
+        deadline = time.monotonic() + 2
+        while (tmp_path / "x.log").stat().st_size >= 400 and time.monotonic() < deadline:
+            time.sleep(0.02)
+            clock[0] += 61
+            w.write("retry after rotation cooldown\n")
+        assert (tmp_path / "x.log.1").exists()
+        assert (tmp_path / "x.log").stat().st_size < 400
+    finally:
+        if w._fh is not None:
+            w._fh.close()
+
+
+def test_stdio_rotation_preserves_writes_and_recovers_after_sharing_violation(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    clock = [100.0]
+    monkeypatch.setattr(stdio_log, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    real_replace = os.replace
+    attempts = []
+
+    def replace(source, target):
+        attempts.append(source)
+        if len(attempts) == 1:
+            raise PermissionError("simulated Windows sharing violation")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(stdio_log.os, "replace", replace)
+    path = tmp_path / "retry.log"
+    writer = stdio_log.RotatingWriter(path, max_bytes=10, backups=1)
+    try:
+        writer.write("first-long-line\n")
+        writer.write("during-lock\n")
+        writer.write("during-backoff\n")
+        assert len(attempts) == 1
+        assert "during-lock" in path.read_text()
+        clock[0] += 61
+        writer.write("after\n")
+        assert len(attempts) == 2
+        assert "during-backoff" in (tmp_path / "retry.log.1").read_text()
+        assert path.read_text().strip() == "after"
+    finally:
+        if writer._fh is not None:
+            writer._fh.close()

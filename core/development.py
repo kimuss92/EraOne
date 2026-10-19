@@ -26,6 +26,66 @@ ROOT = Path(__file__).resolve().parent.parent
 JOBS = ROOT / "runtime" / "development"
 _lock = threading.RLock()
 _active = None
+_cancel_events: dict[str, threading.Event] = {}
+# Crew candidates parked until the user's yes (core/development_submission). Held
+# state lives in memory only, so one still recorded after a restart is stale.
+_held_ids: set[str] = set()
+# The verifier runs candidate tests as the user. It gets the OS basics Python needs
+# (APPDATA: user site-packages) and Era's own non-secret ERA_*/PYTHON* settings —
+# never a credential-shaped variable. Files on disk are NOT protected by this; the
+# crew's real gate is the user's yes before verification (development_submission).
+_VERIFIER_ENV = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+        "LANG",
+        "HOME",
+        "USERNAME",  # getpass.getuser() raises on Windows without it
+        "USERDOMAIN",
+        "COMPUTERNAME",
+        "ALLUSERSPROFILE",
+        "COMMONPROGRAMFILES",
+        "PSMODULEPATH",
+        "CUDA_PATH",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+    }
+)
+_VERIFIER_PREFIXES = ("ERA_", "PYTHON", "PYTEST_")
+_SECRET_NAME = re.compile(
+    r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|AUTH|COOKIE|SESSION|BEARER|PRIVATE", re.IGNORECASE
+)
+
+
+def _verifier_env(stage: Path) -> dict:
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if (name.upper() in _VERIFIER_ENV or name.upper().startswith(_VERIFIER_PREFIXES))
+        and not _SECRET_NAME.search(name)
+    }
+    env["ERA_DEVELOPMENT_STAGE"] = str(stage)
+    env["ERA_SELF_IMPROVE_VERIFYING"] = "1"
+    return env
+
+
 _ALLOWED = {
     "app",
     "actions",
@@ -38,6 +98,7 @@ _ALLOWED = {
     "utils",
     "windows",
     "src",
+    "crew",
 }
 _SUFFIXES = {".py", ".tsx", ".ts", ".css"}
 
@@ -56,6 +117,7 @@ def _path(rel: str, root: Path | None = None) -> Path:
     if (
         not isinstance(rel, str)
         or "\\" in rel
+        or ":" in rel
         or any(part in {"", ".", ".."} for part in rel.split("/"))
         or parsed.is_absolute()
         or any(part in {"..", "."} or part.startswith(".") for part in parsed.parts)
@@ -63,13 +125,22 @@ def _path(rel: str, root: Path | None = None) -> Path:
         or parsed.parts[0] not in _ALLOWED
     ):
         raise ValueError("Change path must be an allowed repository source path")
-    if parsed.suffix not in _SUFFIXES or rel in SAFETY_CRITICAL:
+    protected = {path.casefold() for path in SAFETY_CRITICAL}
+    if parsed.suffix not in _SUFFIXES or rel.casefold() in protected:
         raise ValueError("Protected source or unsupported file type")
     if parsed.parts[0] == "ui_src" and parsed.parts[1] != "src":
         raise ValueError("Only ui_src/src presentation code may be generated")
     target = root / rel
     if not target.resolve().is_relative_to(root.resolve()):
         raise ValueError("Path escapes repository")
+    if any(
+        root.joinpath(*parsed.parts[:i]).is_symlink()
+        or root.joinpath(*parsed.parts[:i]).is_junction()
+        for i in range(1, len(parsed.parts) + 1)
+    ):
+        raise ValueError("Linked source paths cannot be changed")
+    if target.resolve().relative_to(root.resolve()).as_posix().casefold() in protected:
+        raise ValueError("Protected source alias")
     return target
 
 
@@ -89,6 +160,9 @@ def _read(job_id: str) -> dict:
 def _save(job: dict) -> None:
     # Unique temp files plus one process lock prevent UI/worker save races.
     with _lock:
+        event = _cancel_events.get(job["id"])
+        if event is not None and event.is_set():
+            job.update(state="cancelled", approval="", phase="Cancelled; live source unchanged")
         folder = JOBS / job["id"]
         folder.mkdir(parents=True, exist_ok=True)
         job["updated_at"] = time.time()
@@ -99,7 +173,9 @@ def _save(job: dict) -> None:
                 json.dump(job, stream, ensure_ascii=False)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(name, folder / "job.json")
+            from memory.safe_store import _replace
+
+            _replace(name, folder / "job.json")
         finally:
             Path(name).unlink(missing_ok=True)
     from app.hud.events import hud
@@ -200,6 +276,17 @@ def list_jobs() -> list[dict]:
                             )
                         except (OSError, ValueError) as exc:
                             record.update(state="recovery_required", error=str(exc))
+                        _save(record)
+                    if (
+                        record.get("state") == "held_for_verification"
+                        and record.get("id") not in _held_ids
+                    ):
+                        record.update(
+                            state="failed",
+                            progress=100,
+                            error="This crew candidate was never approved for verification "
+                            "before Era restarted; nothing ran. Ask the crew to stage it again.",
+                        )
                         _save(record)
                     if (
                         record.get("state") in {"planning", "verifying", "repairing"}
@@ -394,6 +481,7 @@ def _copy_source(destination: Path) -> None:
             and source.suffix != ".py"
             and rel.as_posix()
             not in {"config/llm.yaml", "config/api_keys.example.json", "config/autopilot.json"}
+            and rel.parts[:2] != ("config", "crew")
         ):
             continue
         if source.stat().st_size > 2_000_000:
@@ -439,6 +527,94 @@ def _failure_hint(exc: Exception) -> str:
     if any(word in lowered for word in ("budget", "429", "quota", "rate_limit")):
         return f"Development capacity unavailable: {message}. Retry after capacity returns; no live files changed."
     return f"{type(exc).__name__}: {message}"
+
+
+# ── Reporting the outcome ────────────────────────────────────────────────────
+# A job used to end by saving a file: Era said "started in staging" once and
+# never again, so a verified change waited for approval unannounced. The outcome
+# now goes to the durable outbox (core/report_outbox.py) and the live Era is
+# nudged to speak it; if no session is live it is spoken on the next one.
+_REPORT_STATES = {"awaiting_approval", "failed", "recovery_required"}
+_notifier = None  # set by the running Era: a no-arg callable that flushes the outbox
+
+
+def set_notifier(callback) -> None:
+    global _notifier
+    _notifier = callback
+
+
+def _first_sentence(text: str, limit: int) -> str:
+    text = " ".join(str(text or "").split())
+    # Spoken, not read: a module or path ("core.audio_devices", "app/x.py") is noise.
+    text = re.sub(r"\b[A-Za-z_]+(?:[./\\][A-Za-z_]+)+\b", "the code", text)
+    cut = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    return (cut if len(cut) <= limit else cut[: limit - 1].rstrip() + "…").strip()
+
+
+def report_text(job: dict) -> str:
+    """What Era says about a finished job: outcome, what it is, what to do next.
+
+    Plain speech only (no ids, paths or JSON), per the prompt's spoken-words rule.
+    """
+    what = _first_sentence(job.get("request", ""), 160) or "your development request"
+    state = job.get("state")
+    if state == "awaiting_approval":
+        count = len(job.get("files") or [])
+        checks = (job.get("checks") or {}).get("passed")
+        summary = _first_sentence(job.get("plan", ""), 240)
+        return (
+            f"Sir, the development task is finished and verified: {what} "
+            + (f"What it does: {summary} " if summary else "")
+            + f"It changes {count} file{'s' if count != 1 else ''}"
+            + (" and every check passed. " if checks else ". ")
+            + "It needs your approval: open the Development tab in the HUD, review the "
+            "changes, then approve or reject it. Nothing is live until you approve."
+        )
+    if state == "recovery_required":
+        return (
+            f"Sir, the development task hit a problem that needs your attention: {what} "
+            f"{_first_sentence(job.get('error', ''), 200)} Please check the Development tab."
+        )
+    error = _first_sentence(job.get("error", ""), 220) or "it did not finish"
+    return (
+        f"Sir, the development task failed: {what} Reason: {error} "
+        "The live code was not changed. Tell me to retry it, or to drop it."
+    )
+
+
+def report_finished(job: dict) -> None:
+    """Queue this job's outcome and wake the speaker. Never raises."""
+    try:
+        if job.get("state") not in _REPORT_STATES:
+            return
+        from core import report_outbox
+
+        report_outbox.enqueue(
+            f"development:{job['id']}:{job['state']}", report_text(job), "development"
+        )
+        if _notifier is not None:
+            _notifier()
+    except Exception as exc:  # noqa: BLE001 - a worker thread must not die reporting
+        print(f"[DEV] could not queue the outcome report: {type(exc).__name__}: {exc}")
+
+
+def reconcile_reports(max_age_s: float = 48 * 3600) -> int:
+    """Queue outcomes of jobs that ended while Era was not running (or before this
+    existed). Keyed, so nothing already reported is repeated."""
+    queued = 0
+    try:
+        from core import report_outbox
+
+        cutoff = time.time() - max_age_s
+        for job in list_jobs():
+            if job.get("state") in _REPORT_STATES and (job.get("updated_at") or 0) >= cutoff:
+                if report_outbox.enqueue(
+                    f"development:{job['id']}:{job['state']}", report_text(job), "development"
+                ):
+                    queued += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DEV] report reconcile skipped: {type(exc).__name__}: {exc}")
+    return queued
 
 
 def _worker(job: dict, paths: list[str]) -> None:
@@ -516,11 +692,16 @@ def _worker(job: dict, paths: list[str]) -> None:
     finally:
         with _lock:
             _active = None
+        report_finished(job)
 
 
 def retry(job_id: str) -> dict:
     with _lock:
         job = _read(job_id)
+        if job.get("source") == "codemode":
+            raise ValueError(
+                "Retry this request inside CodeMode to retain its pinned subscription session"
+            )
         if job.get("state") != "failed":
             raise ValueError("Only failed development can be retried")
         # New job, new source snapshot, new approval. No action is replayed.
@@ -556,6 +737,10 @@ def _run_verifier(command, stage, env, job):
     observer = threading.Thread(target=observe, daemon=True, name="EraVerificationProgress")
     observer.start()
     try:
+        if job.get("source") == "codemode":
+            from core.codemode_process import run_verifier
+
+            return run_verifier(command, stage, env, _cancel_events[job["id"]])
         return subprocess.run(
             command,
             cwd=stage,
@@ -571,6 +756,7 @@ def _run_verifier(command, stage, env, job):
 
 
 def prepare(job: dict, plan: dict) -> dict:
+    _check_cancel(job)
     files, tests = plan.get("files"), plan.get("tests")
     if (
         not isinstance(files, list)
@@ -602,16 +788,23 @@ def prepare(job: dict, plan: dict) -> dict:
     if stage.exists():
         shutil.rmtree(stage)
     _copy_source(stage)
+    _check_cancel(job)
     # Save candidate inputs outside the clone so the worker cannot confuse them
     # with already-applied source. Capture originals for stale-source protection.
     job["files"] = []
     for rel, content in contents.items():
         live = _path(rel)
+        base = _hash(live)
+        expected = job.get("expected_bases")
+        if expected is not None and (rel not in expected or expected[rel] != base):
+            raise ValueError(f"Source changed; read {rel} again before submitting")
         before = live.read_text(encoding="utf-8") if live.exists() else ""
+        if _hash(live) != base:
+            raise ValueError(f"Source changed while reading {rel}")
         job["files"].append(
             {
                 "path": rel,
-                "base": _hash(live),
+                "base": base,
                 "candidate": hashlib.sha256(content.encode()).hexdigest(),
                 "new": not live.exists(),
                 "diff": "\n".join(
@@ -631,15 +824,14 @@ def prepare(job: dict, plan: dict) -> dict:
     _save(job)
     payload = {"files": contents, "tests": tests, "reload": job["reload"]}
     (folder / "candidate.json").write_text(json.dumps(payload), encoding="utf-8")
-    env = dict(os.environ)
-    env["ERA_DEVELOPMENT_STAGE"] = str(stage)
-    env["ERA_SELF_IMPROVE_VERIFYING"] = "1"
+    env = _verifier_env(stage)
     completed = _run_verifier(
         [sys.executable, "tools/era_development_worker.py", str(folder / "candidate.json")],
         stage,
         env,
         job,
     )
+    _check_cancel(job)
     (folder / "verification.txt").write_text(
         completed.stdout + "\n" + completed.stderr, encoding="utf-8"
     )
@@ -697,6 +889,10 @@ def activate(job_id: str, approval: str, *, confirmed: bool = False) -> dict:
         raise ValueError("Explicit final approval required")
     with _lock:
         job = _read(job_id)
+        if job.get("source") == "codemode":
+            from core.codemode import get_codemode
+
+            get_codemode().authorize(job)
         fingerprint = hashlib.sha256(json.dumps(job["files"], sort_keys=True).encode()).hexdigest()
         if (
             job["state"] != "awaiting_approval"
@@ -744,7 +940,8 @@ def activate(job_id: str, approval: str, *, confirmed: bool = False) -> dict:
                         ROOT / item["path"]
                         for item in job["files"]
                         if re.fullmatch(r"features/[a-zA-Z0-9_]+\.py", item["path"])
-                    ]
+                    ],
+                    approved={item["path"]: item["candidate"] for item in job["files"]},
                 )
             refresh_manifest([])
             job["requires_restart"] = any(
@@ -789,5 +986,24 @@ def reject(job_id: str) -> dict:
         if job["state"] != "awaiting_approval":
             raise ValueError("Only a pending candidate can be rejected")
         job["state"] = "rejected"
+        _save(job)
+        return job
+
+
+def _check_cancel(job):
+    event = _cancel_events.get(job["id"])
+    if event is not None and event.is_set():
+        raise ValueError("Development verification cancelled")
+
+
+def cancel(job_id: str) -> dict:
+    with _lock:
+        job = _read(job_id)
+        if job["state"] in {"activated", "activating", "recovery_required"}:
+            raise ValueError("Activation already started; cancellation cannot undo it")
+        event = _cancel_events.get(job_id)
+        if event is not None:
+            event.set()
+        job.update(state="cancelled", approval="", phase="Cancelled; live source unchanged")
         _save(job)
         return job

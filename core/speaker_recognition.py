@@ -163,7 +163,11 @@ def voiced_segment(samples: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.nd
     loud = float(np.percentile(rms, 90))
     # min(): a clip that is speech end-to-end has a high "floor"; capping at a
     # quarter of the loud level keeps it instead of discarding every frame.
-    keep = rms > max(0.01, min(floor * 2.5, loud * 0.25))
+    # A fixed .01 floor discarded an entire softly spoken glasses utterance
+    # before identity scoring. Adapt to the voiced level while retaining a
+    # .001 noise floor; the identity threshold is independent and unchanged.
+    minimum = min(0.01, max(0.001, loud * 0.20))
+    keep = rms > max(minimum, min(floor * 2.5, loud * 0.25))
     return frames[keep].reshape(-1)
 
 

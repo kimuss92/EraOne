@@ -1,0 +1,20 @@
+FF                                                                       [100%]
+================================== FAILURES ===================================
+_______ test_reused_confirmation_id_still_resolves_only_its_owning_job ________
+tools\test_approval_lifecycle.py:162: in test_reused_confirmation_id_still_resolves_only_its_owning_job
+    assert queue.get_status(ids[0])["status"] == "awaiting_approval"
+E   AssertionError: assert 'failed' == 'awaiting_approval'
+E     
+E     - awaiting_approval
+E     + failed
+---------------------------- Captured stdout call -----------------------------
+[TaskQueue] \U0001f4e5 Task queued: [e92b352db01a49f3b83ac1d2de7c39b4]\n[TaskQueue] \U0001f4e5 Task queued: [9cdeadf606304608ad22daae7852135b]\n[TaskQueue] Task e92b352db01a49f3b83ac1d2de7c39b4 failed: Second action failed
+_________ test_old_timer_cannot_reschedule_replacement_with_reused_id _________
+tools\test_approval_lifecycle.py:175: in test_old_timer_cannot_reschedule_replacement_with_reused_id
+    assert store._expiry_timer is replacement_timer
+E   assert <Timer(Thread-5, started daemon 7272)> is <Timer(Thread-4, started daemon 27708)>
+E    +  where <Timer(Thread-5, started daemon 7272)> = <core.pending_confirmation.PendingConfirmationStore object at 0x0000020579DD2D50>._expiry_timer
+=========================== short test summary info ===========================
+FAILED tools/test_approval_lifecycle.py::test_reused_confirmation_id_still_resolves_only_its_owning_job
+FAILED tools/test_approval_lifecycle.py::test_old_timer_cannot_reschedule_replacement_with_reused_id
+2 failed in 0.50s

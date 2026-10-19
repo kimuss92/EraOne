@@ -99,10 +99,13 @@ def audio_output() -> dict:
 
         route = voice_output.active_route() or {}
         pin = voice_output.get_pin() or {}
+        current = route.get("generation") == voice_output.generation()
         return {
-            "device": route.get("name") or pin.get("device") or "System default",
+            "device": (route.get("name") or None) if current else None,
+            "requested_device": pin.get("name"),
+            "routing_verified": voice_output.route_matches_pin(pin or None),
             "pinned": bool(pin),
-            "fallback": bool(route.get("fallback")),
+            "fallback": bool(route.get("fallback")) if current else False,
         }
     except Exception:
         return {"device": None, "pinned": False, "fallback": False}
@@ -152,6 +155,8 @@ def integrations() -> list[dict]:
 
 
 def capabilities() -> dict:
+    from app.hud.views import snapshot as view_registry
+
     try:
         from app.tool_declarations import TOOL_DECLARATIONS
     except Exception:
@@ -173,6 +178,7 @@ def capabilities() -> dict:
         "tools": tools,
         "skills": [{"id": k, "tools": v, "count": len(v)} for k, v in sorted(groups.items())],
         "integrations": integrations(),
+        "hud_views": view_registry(),
     }
 
 
@@ -246,10 +252,15 @@ def _voice_lock() -> bool | None:
 
 
 def diagnostics(server: Any, engine: Any) -> dict:
+    from core.tool_health import snapshot as tool_health
+    from crew.reliability import snapshot as crew_health
+
     return {
         "status": status(server, engine),
         "latency": hud.latency(),
         "failures": hud.failures(),
+        "toolHealth": tool_health(),
+        "crewHealth": crew_health(),
         "recentEvents": hud.recent_events(60),
         "websocket": {"clients": server.client_count() if hasattr(server, "client_count") else 0},
         "process": {"pid": os.getpid(), "python": platform.python_version(), "os": os_name()},

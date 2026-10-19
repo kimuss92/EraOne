@@ -13,9 +13,7 @@ extend-exclude = [
     ".claude-flow",
     # Point-in-time copies of project files kept because there is no VCS here.
     # Linting them doubles every count and invites "fixing" a frozen snapshot.
-    ".phase1_backups",
-    ".phase5_backups",
-    ".phase6_backups",
+    ".phase*_backups",
     # Throwaway patch drafts, never imported (they reference `self` at module level).
     "scratchpad",
     # Vendored skill/plugin scripts — not ours to restyle.

@@ -1,0 +1,7 @@
+Native inventory health: degraded
+Coverage: window-events+reconciliation
+Observed instances: 282
+Omitted: 2
+Unverified birth times: 1
+Clean stop: True
+Worker stopped: True

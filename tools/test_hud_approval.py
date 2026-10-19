@@ -90,6 +90,9 @@ def test_confirming_clears_the_approval(bus, store):
 def test_a_resolution_on_another_path_is_picked_up_by_the_recheck(bus, store, monkeypatch):
     monkeypatch.setattr(bus_approval, "APPROVAL_RECHECK_S", 0.05)
     arm(bus, store)
+    # The store listener normally settles this at once; detach it to prove the
+    # recheck still catches a resolution on its own (the fallback path).
+    bus._confirmation_unsubscribe()
     store.clear()  # e.g. expired, or cancelled by the agent executor — no tool event here
     with bus._lock:
         bus._approval["_next"] = time.monotonic()  # due now
@@ -99,6 +102,43 @@ def test_a_resolution_on_another_path_is_picked_up_by_the_recheck(bus, store, mo
         time.sleep(0.02)
     assert bus.state()["state"] != "awaiting_approval"
     assert events(bus, "approval.resolved")
+
+
+def _row(bus, tool):
+    return next(r for r in bus._tools.values() if r["tool"] == tool)
+
+
+@pytest.mark.parametrize(
+    ("resolve", "status"),
+    [
+        (lambda s: s.confirm("", allow_sole=True), "success"),
+        (lambda s: s.cancel(s.peek().confirmation_id), "cancelled"),
+        (lambda s: s.clear(), "cancelled"),
+    ],
+)
+def test_a_resolved_confirmation_settles_its_needs_approval_row(bus, store, resolve, status):
+    """2026-10-16: the 'waive close confirmation' row kept NEEDS APPROVAL forever."""
+    arm(bus, store)
+    assert _row(bus, "computer_settings")["status"] == "awaiting"
+    resolve(store)  # store listener fires at once — no recheck wait
+    assert _row(bus, "computer_settings")["status"] == status
+    assert bus.state()["state"] != "awaiting_approval"
+
+
+def test_an_expired_confirmation_settles_its_row_as_expired(bus, store):
+    arm(bus, store)
+    with store._lock:
+        store._pending.expires_at = time.time() - 1
+    assert store.peek() is None  # expiry fires the listener
+    row = _row(bus, "computer_settings")
+    assert row["status"] == "cancelled" and "expired" in row["summary"].lower()
+
+
+def test_the_live_row_is_not_settled_while_its_confirmation_is_armed(bus, store):
+    arm(bus, store)
+    cid = bus.tool_started(None, "weather_report", {"city": "Tunis"})
+    bus.tool_finished(cid, "weather_report", {}, ToolResult(success=True, message="sunny"))
+    assert _row(bus, "computer_settings")["status"] == "awaiting"
 
 
 def test_the_users_spoken_answer_still_shows_as_live_speech(bus, store):

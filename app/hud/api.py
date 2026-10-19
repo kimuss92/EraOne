@@ -24,6 +24,7 @@ from aiohttp import web
 
 from app.hud import schedule_view, settings, shortcuts, status
 from app.hud.events import hud
+from core.win_subprocess import NO_WINDOW
 
 _MAX_TEXT = 8000
 
@@ -49,6 +50,7 @@ class HudApi:
         r.add_get("/api/health", self.health)
         r.add_get("/api/status", self.get_status)
         r.add_get("/api/system", self.system)
+        r.add_get("/api/audio", self.audio)
         r.add_get("/api/capabilities", self.capabilities)
         r.add_get("/api/conversation", self.conversation)
         r.add_get("/api/activity", self.activity)
@@ -59,6 +61,8 @@ class HudApi:
         r.add_get("/api/memory", self.memory)
         r.add_get("/api/memory/search", self.memory_search)
         r.add_get("/api/settings", self.get_settings)
+        r.add_get("/api/layout", self.get_layout)
+        r.add_post("/api/layout", self.post_layout)
         r.add_post("/api/settings", self.post_settings)
         r.add_get("/api/weather", self.weather)
         r.add_get("/api/schedule", self.schedule)
@@ -66,9 +70,13 @@ class HudApi:
         r.add_get("/api/visual", self.visual)
         r.add_post("/api/visual", self.visual_update)
         r.add_get("/api/development", self.development)
+        r.add_get("/api/codemode", self.codemode)
+        r.add_get("/api/codemode/source", self.codemode_source)
+        r.add_get("/api/recent-files", self.recent_files)
         r.add_post("/api/development", self.development_action)
         r.add_get("/api/diagnostics", self.diagnostics)
         r.add_post("/api/message", self.message)
+        r.add_post("/api/approval", self.approval)
         r.add_post("/api/interrupt", self.interrupt)
         r.add_post("/api/tasks/cancel", self.cancel_task)
         r.add_post("/api/voice/start", self.voice_start)
@@ -77,6 +85,40 @@ class HudApi:
         r.add_post("/api/shutdown", self.shutdown)
         r.add_post("/api/restart", self.restart)
         r.add_post("/api/reveal", self.reveal)
+        r.add_post("/api/window", self.window)
+
+    async def get_layout(self, request: web.Request) -> web.Response:
+        from app.hud.layout import get_widget_layout
+
+        return web.json_response(await asyncio.to_thread(lambda: get_widget_layout().snapshot()))
+
+    async def post_layout(self, request: web.Request) -> web.Response:
+        from app.hud.layout import LayoutConflict, get_widget_layout
+
+        body = await _json_body(request)
+        if set(body) - {
+            "revision",
+            "widget",
+            "visible",
+            "before",
+            "view",
+            "placement",
+            "reorder_only",
+        }:
+            raise web.HTTPBadRequest(text="Unknown layout fields")
+        try:
+            layout = await asyncio.to_thread(
+                lambda: get_widget_layout().apply(
+                    body.get("revision"), **{k: v for k, v in body.items() if k != "revision"}
+                )
+            )
+            return web.json_response(layout)
+        except LayoutConflict:
+            return web.json_response(
+                {"error": "layout_conflict", "layout": get_widget_layout().snapshot()}, status=409
+            )
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
 
     def _call(self, fn: Any, *args: Any) -> bool:
         if fn is None:
@@ -99,6 +141,20 @@ class HudApi:
 
     async def system(self, _r: web.Request):
         return web.json_response({"metrics": self.s.system_metrics(), "os": status.os_name()})
+
+    async def window(self, r: web.Request):
+        from app.hud import window_frame
+
+        try:
+            out = await asyncio.to_thread(window_frame.apply, await _json_body(r))
+        except window_frame.WindowError as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=409)
+        return web.json_response(out)
+
+    async def audio(self, _r: web.Request):
+        from app.hud import audio_route
+
+        return web.json_response(await asyncio.to_thread(audio_route.snapshot))
 
     async def capabilities(self, _r: web.Request):
         return web.json_response(await asyncio.to_thread(status.capabilities), dumps=_dumps)
@@ -163,6 +219,9 @@ class HudApi:
         from core import visual_engine
 
         data = await asyncio.to_thread(visual_engine.snapshot)
+        from app.hud.views import snapshot as view_registry
+
+        data["views"] = view_registry()
         from app.websocket_server import DIST_INDEX
 
         data["bundle"] = await asyncio.to_thread(
@@ -184,6 +243,38 @@ class HudApi:
         except (ValueError, TypeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
+    async def codemode(self, _r: web.Request):
+        from core.codemode import get_codemode
+
+        return web.json_response(get_codemode().snapshot())
+
+    async def codemode_source(self, r: web.Request):
+        """Bounded, redacted source review using the existing project source scope."""
+        from core.codemode import get_codemode
+        from crew import source
+
+        if not get_codemode().enabled:
+            return web.json_response({"error": "Enter CodeMode to review source"}, status=409)
+        try:
+            result = await asyncio.to_thread(
+                source.read,
+                {
+                    "path": r.query.get("path", ""),
+                    "start_line": int(r.query.get("start_line", "1")),
+                    "limit": 250,
+                },
+            )
+            if not result.success:
+                return web.json_response({"error": result.message}, status=404)
+            return web.json_response(result.data, headers={"Cache-Control": "no-store"})
+        except (ValueError, OSError, UnicodeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def recent_files(self, _r: web.Request):
+        from app.hud.recent_files import snapshot
+
+        return web.json_response({"files": await asyncio.to_thread(snapshot)})
+
     async def development(self, _r: web.Request):
         from core import development
 
@@ -197,6 +288,13 @@ class HudApi:
             self._need_engine()
         try:
             if body.get("action") == "propose":
+                from core.codemode import get_codemode
+
+                if get_codemode().enabled:
+                    text = body.get("request", "")
+                    if not isinstance(text, str) or not text.strip() or len(text) > _MAX_TEXT:
+                        raise ValueError("A bounded coding request is required")
+                    return web.json_response({"accepted": self._call(self.s._on_command, text)})
                 result = await asyncio.to_thread(development.propose, body.get("request", ""))
             elif body.get("action") == "approve":
                 result = await asyncio.to_thread(
@@ -284,6 +382,23 @@ class HudApi:
         self._need_engine()
         return web.json_response({"accepted": self._call(self.s._on_command, text.strip())})
 
+    async def approval(self, r: web.Request):
+        body = await _json_body(r)
+        cid, created_at, decision = body.get("id"), body.get("createdAt"), body.get("decision")
+        if (
+            not isinstance(cid, str)
+            or not cid
+            or len(cid) > 128
+            or type(created_at) not in (int, float)
+            or decision not in ("approve", "cancel")
+        ):
+            return web.json_response(
+                {"error": "An exact approval id, createdAt and decision are required"}, status=400
+            )
+        callback = getattr(self.s, "_on_approval", None)
+        accepted = bool(callback and callback(cid, created_at, decision))
+        return web.json_response({"accepted": accepted}, status=200 if accepted else 409)
+
     async def interrupt(self, _r: web.Request):
         self._need_engine()
         return web.json_response({"accepted": self._call(self.s._on_interrupt)})
@@ -360,17 +475,59 @@ class HudApi:
         if target is None:
             return web.json_response({"error": "file not found"}, status=404)
         opened = body.get("mode") == "open" and (_safe_folder(target) or _safe_to_open(target))
+        editor = _code_editor(target) if body.get("mode") == "edit" else None
         if sys.platform == "win32":
             # Quoted by hand: Explorer splits its OWN command line on commas, and
             # list2cmdline only quotes on whitespace. '"' cannot occur in a
             # Windows file name, so the quotes cannot be broken out of.
-            if opened and target.is_dir():
+            if editor:
+                subprocess.Popen(
+                    [str(editor), "--reuse-window", str(target)], creationflags=NO_WINDOW
+                )
+                opened = True
+            elif opened and target.is_dir():
                 subprocess.Popen(f'explorer "{target}"')
             elif opened:
                 await asyncio.to_thread(os.startfile, str(target))  # noqa: S606
             else:
                 subprocess.Popen(f'explorer /select,"{target}"')
+        from app.hud.recent_files import record
+
+        await asyncio.to_thread(record, target)
         return web.json_response({"accepted": True, "action": "open" if opened else "reveal"})
+
+
+def _code_editor(path: Path) -> Path | None:
+    if path.suffix.lower() not in {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".md",
+        ".css",
+        ".html",
+        ".rs",
+        ".go",
+        ".java",
+        ".cpp",
+        ".c",
+        ".cs",
+        ".sh",
+    }:
+        return None
+    for base in (
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs",
+        Path(os.environ.get("PROGRAMFILES", "C:/Program Files")),
+    ):
+        editor = base / "Microsoft VS Code/Code.exe"
+        if editor.is_file():
+            return editor
+    return None
 
 
 # The ONLY types "open" hands to their default app: inert documents and media.
@@ -447,6 +604,11 @@ def _published_paths() -> set[str]:
 
     def walk(v: Any) -> None:
         if isinstance(v, str):
+            # Structured path values have no surrounding prose/quotes. Preserve
+            # spaces so a generated file such as C:\My Files\report.txt opens
+            # as the exact published file rather than a truncated prefix.
+            if re.fullmatch(r"[A-Za-z]:[\\/][^\r\n\"'`<>|]+", v):
+                found.add(_norm(v))
             tokens(v)
         elif isinstance(v, dict):
             if v.get("role") == "user":
@@ -457,6 +619,8 @@ def _published_paths() -> set[str]:
             for x in v:
                 walk(x)
 
+    from app.hud.recent_files import snapshot as recent_files
+
     sources = (
         lambda: hud.conversation(400),
         hud.activity,
@@ -464,6 +628,7 @@ def _published_paths() -> set[str]:
         hud.approval_public,
         hud.failures,
         schedule_view.snapshot,
+        recent_files,
     )
     for src in sources:
         try:

@@ -137,6 +137,13 @@ def _widget(raw) -> dict:
 
 
 def apply(command: dict) -> dict:
+    # Navigation is ephemeral: no scene write, layout mutation or machine action.
+    if isinstance(command, dict) and command.get("action") == "focus":
+        if set(command) != {"action", "view"}:
+            raise ValueError("Focus requires only action and view")
+        from app.hud.events import hud
+
+        return hud.focus_view(command["view"])
     if not isinstance(command, dict) or set(command) - {
         "action",
         "widget",

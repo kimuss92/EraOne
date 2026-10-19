@@ -33,6 +33,7 @@ import mimetypes
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import requests
@@ -97,6 +98,116 @@ def _url(method: str) -> str:
 
 
 # ── outbound ─────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ReplyDeliveryResult:
+    """Sanitized outcome for owned replies; unknown sends must not be repeated."""
+
+    status: str
+    reason: str = ""
+    retry_after: float = 0.0
+    message_id: int | None = None
+
+
+def send_reply_update(method: str, payload: dict) -> ReplyDeliveryResult:
+    """Single attempt on an isolated connection; never retry an ambiguous send.
+
+    Call from the delivery worker, not the audio loop. This path deliberately
+    does not share or reset the legacy sender/poller's sessions.
+    """
+    if method not in ("sendMessageDraft", "sendMessage"):
+        raise ValueError("Unsupported reply delivery method")
+    if not enabled():
+        return ReplyDeliveryResult("failed", "not_configured")
+    # Owned conversational replies may only target the configured owner.
+    if str(payload.get("chat_id", "")).strip() != _chat_id():
+        return ReplyDeliveryResult("failed", "unauthorized_destination")
+    return _deliver_update(method, payload)
+
+
+def authorized_callback(callback: dict) -> bool:
+    """Approval buttons are private-owner only, including the actual sender."""
+    owner = _chat_id()
+    if not isinstance(callback, dict):
+        return False
+    message = callback.get("message") or {}
+    if not isinstance(message, dict):
+        return False
+    chat = message.get("chat") or {}
+    sender = callback.get("from") or {}
+    if not isinstance(chat, dict) or not isinstance(sender, dict):
+        return False
+    return bool(
+        owner.isdecimal()
+        and int(owner) > 0
+        and chat.get("type") == "private"
+        and str(chat.get("id", "")) == owner
+        and str(sender.get("id", "")) == owner
+        and not sender.get("is_bot", False)
+        and isinstance(message.get("date"), int)
+        and not isinstance(message.get("date"), bool)
+        and message["date"] > 0
+        and isinstance(callback.get("id"), str)
+        and bool(callback["id"])
+        and isinstance(message.get("message_id"), int)
+        and not isinstance(message.get("message_id"), bool)
+    )
+
+
+def send_approval_update(method: str, payload: dict, *, callback: dict | None = None):
+    """Restricted approval transport; no automatic retries or token-bearing errors."""
+    if not enabled():
+        return ReplyDeliveryResult("failed", "not_configured")
+    if method == "answerCallbackQuery":
+        if (
+            not callback
+            or not authorized_callback(callback)
+            or (payload.get("callback_query_id") != callback.get("id"))
+        ):
+            return ReplyDeliveryResult("failed", "unauthorized_callback")
+    elif method in ("sendMessage", "editMessageText", "editMessageReplyMarkup"):
+        if (
+            not _chat_id().isdecimal()
+            or int(_chat_id()) <= 0
+            or (str(payload.get("chat_id", "")) != _chat_id())
+        ):
+            return ReplyDeliveryResult("failed", "unauthorized_destination")
+    else:
+        raise ValueError("Unsupported approval delivery method")
+    return _deliver_update(method, payload)
+
+
+def _deliver_update(method: str, payload: dict) -> ReplyDeliveryResult:
+    try:
+        with requests.Session() as session:
+            response = session.post(_url(method), json=payload, timeout=_SEND_TIMEOUTS)
+        data = response.json()
+    except (requests.RequestException, ValueError):
+        # Exception strings can include the authenticated URL. Do not log them.
+        return ReplyDeliveryResult("unknown", "network_or_acknowledgement")
+    if not isinstance(data, dict):
+        return ReplyDeliveryResult("unknown", "invalid_acknowledgement")
+    if response.status_code == 200 and data.get("ok") is True:
+        if (
+            method in ("sendMessageDraft", "answerCallbackQuery", "editMessageReplyMarkup")
+            and data.get("result") is True
+        ):
+            return ReplyDeliveryResult("sent")
+        result = data.get("result")
+        message_id = result.get("message_id") if isinstance(result, dict) else None
+        if isinstance(message_id, int) and not isinstance(message_id, bool):
+            return ReplyDeliveryResult("sent", message_id=message_id)
+        return ReplyDeliveryResult("unknown", "invalid_acknowledgement")
+    if response.status_code == 429:
+        parameters = data.get("parameters")
+        delay = parameters.get("retry_after") if isinstance(parameters, dict) else None
+        if isinstance(delay, int) and not isinstance(delay, bool) and delay > 0:
+            return ReplyDeliveryResult("limited", "flood_control", float(delay))
+        return ReplyDeliveryResult("failed", "invalid_flood_control")
+    if method == "sendMessageDraft" and response.status_code in (400, 404):
+        return ReplyDeliveryResult("unsupported", "draft_unavailable")
+    return ReplyDeliveryResult("failed", f"http_{response.status_code}")
 
 
 def _reset_send_session() -> None:
@@ -418,7 +529,9 @@ def _handle_voice_message(msg: dict, on_command) -> None:
         send_message(f"That failed on my side: {e}")
 
 
-def poll_forever(on_command, *, stop_event: threading.Event | None = None) -> None:
+def poll_forever(
+    on_command, *, stop_event: threading.Event | None = None, on_callback=None
+) -> None:
     """Block forever, handing each authorized message text to `on_command`.
 
     Runs on its own daemon thread. Never raises: a network blip must not kill Era's
@@ -457,7 +570,13 @@ def poll_forever(on_command, *, stop_event: threading.Event | None = None) -> No
             try:
                 r = poll_session.get(
                     _url("getUpdates"),
-                    params={"offset": offset, "timeout": _POLL_TIMEOUT_S},
+                    params={
+                        "offset": offset,
+                        "timeout": _POLL_TIMEOUT_S,
+                        "allowed_updates": json.dumps(
+                            ["message", "edited_message", "callback_query"]
+                        ),
+                    },
                     timeout=_POLL_TIMEOUTS,
                 )
             except (requests.Timeout, requests.ConnectionError) as e:
@@ -507,6 +626,15 @@ def poll_forever(on_command, *, stop_event: threading.Event | None = None) -> No
                 # it forever and a stranger's message wedges the queue permanently.
                 offset = max(offset, int(update.get("update_id", 0)) + 1)
 
+                if "callback_query" in update:
+                    callback = update["callback_query"]
+                    if isinstance(callback, dict) and authorized_callback(callback) and on_callback:
+                        try:
+                            on_callback(callback)
+                        except Exception as exc:
+                            print(f"[TG] approval callback failed: {type(exc).__name__}")
+                    continue
+
                 ok, msg = _authorized(update)
                 if not ok:
                     # Deliberately silent: no reply, no message text logged.
@@ -514,6 +642,29 @@ def poll_forever(on_command, *, stop_event: threading.Event | None = None) -> No
                     continue
 
                 text = (msg.get("text") or "").strip()
+
+                from core.home_presence import presence_intent
+
+                if (
+                    msg.get("location") is not None
+                    or presence_intent(text) is not None
+                    or text.lower()
+                    in {"/sethome", "/presence", "/forgethome", "/autocalls on", "/autocalls off"}
+                ):
+                    try:
+                        from core.home_presence import get_home_presence
+
+                        handled, reply = get_home_presence().handle(msg, _chat_id())
+                        if reply:
+                            send_message(reply)
+                        if handled or msg.get("location") is not None:
+                            continue
+                    except Exception as exc:
+                        print(f"[TG] presence update failed: {type(exc).__name__}")
+                        send_message(
+                            "I couldn't update home presence. Automatic calls need a verified fresh location; please try again."
+                        )
+                        continue
 
                 if not text and _voice_payload(msg) is not None:
                     # A voice note becomes TEXT here and then travels the ordinary
@@ -555,11 +706,17 @@ def poll_forever(on_command, *, stop_event: threading.Event | None = None) -> No
             backoff = min(backoff * 2, 60.0)
 
 
-def start(on_command) -> threading.Thread | None:
+def start(on_command, *, on_callback=None) -> threading.Thread | None:
     """Spawn the poller on a daemon thread. Returns None when not configured."""
     if not enabled():
         return None
-    t = threading.Thread(target=poll_forever, args=(on_command,), name="era-telegram", daemon=True)
+    t = threading.Thread(
+        target=poll_forever,
+        args=(on_command,),
+        kwargs={"on_callback": on_callback},
+        name="era-telegram",
+        daemon=True,
+    )
     t.start()
     return t
 

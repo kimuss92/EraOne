@@ -77,9 +77,34 @@ def _leads_with(message: str, markers: tuple[str, ...]) -> bool:
 def verify_open_app(result: ToolResult, parameters: dict) -> ToolResult:
     if not result.success:
         return result
-    result.verified = True
     result.verifier_name = "open_app"
-    result.verification_message = "Application launched successfully."
+    if looks_like_failure(result.message):
+        return _mark_failed(result, "open_app", "Application launcher reported failure.")
+    from actions.open_app import _find_launch_window
+
+    app_name = str(parameters.get("app_name") or "")
+    if not app_name:
+        result.verified = False
+        result.verification_message = "No app identity was supplied for verification."
+        return result
+    # Link hand-off and close requests have separate semantics; no launch proof.
+    if parameters.get("mode") in {
+        "close",
+        "toggle",
+        "toggle_open_close",
+        "open_or_close",
+    } or app_name.startswith(("http://", "https://")):
+        result.verified = False
+        result.verification_message = (
+            "Application launch verification does not apply to this request."
+        )
+        return result
+    result.verified = bool(_find_launch_window(app_name))
+    result.verification_message = (
+        "Application window observed by process identity."
+        if result.verified
+        else "Application window has not been independently confirmed."
+    )
     return result
 
 
@@ -90,11 +115,87 @@ verify_browser_control = _message_verifier(
 )
 
 
-verify_file_controller = _message_verifier(
+_file_message_verifier = _message_verifier(
     "file_controller",
     extra_markers=(),
     ok_message="File operation completed.",
 )
+
+
+def verify_file_controller(result: ToolResult, parameters: dict) -> ToolResult:
+    result = _file_message_verifier(result, parameters)
+    action = parameters.get("action")
+    if not result.success or action not in {
+        "create_file",
+        "write",
+        "delete",
+        "rename",
+        "create_folder",
+        "create_directory",
+        "make_folder",
+        "make_directory",
+        "new_folder",
+        "mkdir",
+    }:
+        return result
+    result.verified = False
+    result.verification_message = (
+        "The file operation returned, but its requested postcondition is not confirmed."
+    )
+    if "path" not in parameters:
+        return result
+    from pathlib import Path
+
+    from actions.file_controller import _ensure_openable_extension, _resolve_path
+
+    target = _resolve_path(parameters["path"])
+    name = parameters.get("name") or ""
+    if name:
+        target /= name
+    if name and action in {"create_file", "write"}:
+        target = _ensure_openable_extension(target)
+
+    def present(path: Path) -> bool:
+        try:
+            path.lstat()
+            return True
+        except FileNotFoundError:
+            return False
+
+    try:
+        if action == "delete":
+            observed = not present(target)
+        elif action == "rename":
+            if not parameters.get("new_name"):
+                return result
+            observed = not present(target) and present(target.parent / parameters["new_name"])
+        elif action in {"create_file", "write"}:
+            content = parameters.get("content", "")
+            if (
+                not isinstance(content, str)
+                or parameters.get("append")
+                or len(content.encode("utf-8")) > 1048576
+            ):
+                return result
+            info = target.lstat()
+            if info.st_size > 2097152 or target.is_symlink():
+                return result
+            observed = target.is_file() and target.read_text(encoding="utf-8") == content.replace(
+                "\r\n", "\n"
+            )
+        else:
+            observed = target.is_dir()
+    except (OSError, ValueError, UnicodeError):
+        return result
+    if not observed:
+        return _mark_failed(
+            result,
+            "file_controller",
+            "Requested file postcondition was not observed; no retry or mutation was performed.",
+        )
+    result.verified = True
+    result.verification_message = "Requested file postcondition independently observed."
+    return result
 
 
 verify_send_message = _message_verifier(

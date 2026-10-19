@@ -163,3 +163,39 @@ def test_skip_credits_uses_the_verified_path():
     assert player_api.build_player_script("skip_credits") == player_api.build_player_script(
         "next_episode"
     )
+
+
+@pytest.mark.parametrize("paused,expected_calls", [(True, 1), (False, 0)])
+def test_post_skip_play_is_idempotent_and_verifies_native_state(paused, expected_calls):
+    async def body(page):
+        await page.evaluate(
+            """paused => {
+            window.paused = paused; window.playCalls = 0;
+            window.replacementPlayer = { seek() {}, getPaused: () => window.paused,
+                play() { window.playCalls++; window.paused = false; } };
+            const api = netflix.appContext.state.playerApp.getAPI();
+            api.videoPlayer.getVideoPlayerBySessionId = () => window.replacementPlayer;
+            netflix.appContext.state.playerApp.getAPI = () => api;
+        }""",
+            paused,
+        )
+        result = await page.evaluate("(() => { " + player_api.resume_after_skip_script() + " })()")
+        return result, await page.evaluate("window.playCalls")
+
+    assert _run(_player_html(api_works=True, button=None, key_n=False), body) == (
+        True,
+        expected_calls,
+    )
+
+
+def test_post_skip_refused_play_reports_failure():
+    async def body(page):
+        await page.evaluate("""() => {
+            const p = { seek() {}, getPaused: () => true, play() { throw new Error('refused'); } };
+            const api = netflix.appContext.state.playerApp.getAPI();
+            api.videoPlayer.getVideoPlayerBySessionId = () => p;
+            netflix.appContext.state.playerApp.getAPI = () => api;
+        }""")
+        return await page.evaluate("(() => { " + player_api.resume_after_skip_script() + " })()")
+
+    assert not _run(_player_html(api_works=True, button=None, key_n=False), body)

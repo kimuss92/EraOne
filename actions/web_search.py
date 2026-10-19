@@ -1,12 +1,10 @@
 # web_search.py
-import json
-import time
-
 # FEATURE-INSPIRE BRIDGE (2026-09-14) — allows /inspire from agency. Declared
 # here rather than mid-file: it was appended at the end when the feature landed,
 # but feature_inspire does not import web_search, so there is no circular-import
 # reason to defer it.
 from actions.feature_inspire import inspire as _inspire
+from core.cancel_registry import raise_if_cancelled, sleep_cancellable
 from core.utils import get_base_dir
 
 BASE_DIR = get_base_dir()
@@ -30,12 +28,15 @@ _TRANSIENT_MARKERS = (
     "timeout",
     "timed out",
     "connection",
+    "requesterror",
+    "error sending request",
 )
 
 
 def get_api_key() -> str:
-    with open(API_CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    from core.protected_config import read_config
+
+    return read_config(API_CONFIG_PATH)["gemini_api_key"]
 
 
 def _is_transient(err: Exception) -> bool:
@@ -46,6 +47,7 @@ def _is_transient(err: Exception) -> bool:
 def _gemini_search_once(query: str) -> str:
     from google import genai
 
+    raise_if_cancelled()
     client = genai.Client(api_key=get_api_key())
     response = client.models.generate_content(
         model="gemini-3.8-flash",
@@ -68,14 +70,33 @@ def _gemini_search(query: str) -> str:
     try:
         return _gemini_search_once(query)
     except Exception as e:
+        raise_if_cancelled()
         if not _is_transient(e):
             raise
+        # A spent quota does not come back in 1.5 s: retrying only doubles the wait
+        # before the DuckDuckGo fallback (86 such 429s in the log).
+        if any(m in str(e).lower() for m in ("resource_exhausted", "quota", "latched")):
+            raise
         print(f"[WebSearch] ⏳ Transient Gemini error ({e}) — one retry.")
-        time.sleep(1.5)
+        sleep_cancellable(1.5)
+        raise_if_cancelled()
         return _gemini_search_once(query)
 
 
 def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
+    """Retry transient fallback transport failures once, respecting cancellation."""
+    try:
+        return _ddg_search_once(query, max_results)
+    except Exception as exc:
+        raise_if_cancelled()
+        if not _is_transient(exc):
+            raise
+        sleep_cancellable(1.5)
+        raise_if_cancelled()
+        return _ddg_search_once(query, max_results)
+
+
+def _ddg_search_once(query: str, max_results: int = 6) -> list[dict]:
     from importlib import import_module
 
     # `duckduckgo_search` was renamed to `ddgs`. The legacy package still
@@ -97,6 +118,7 @@ def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
     results = []
     with DDGS() as ddgs:
         for r in ddgs.text(query, max_results=max_results):
+            raise_if_cancelled()
             results.append(
                 {
                     "title": r.get("title", ""),
@@ -128,6 +150,7 @@ def _compare(items: list[str], aspect: str) -> str:
     try:
         return _gemini_search(query)
     except Exception as e:
+        raise_if_cancelled()
         print(f"[WebSearch] ⚠️ Gemini compare failed: {e} — falling back to DDG")
 
     # DDG fallback: fetch results per item and merge
@@ -136,6 +159,7 @@ def _compare(items: list[str], aspect: str) -> str:
         try:
             all_results[item] = _ddg_search(f"{item} {aspect}", max_results=3)
         except Exception:
+            raise_if_cancelled()
             all_results[item] = []
 
     lines = [f"Comparison — {aspect.upper()}", "─" * 40]
@@ -153,6 +177,7 @@ def web_search(
     player=None,
     session_memory=None,
 ) -> str:
+    raise_if_cancelled()
     params = parameters or {}
     query = params.get("query", "").strip()
     mode = params.get("mode", "search").lower().strip()
@@ -183,8 +208,17 @@ def web_search(
             print("[WebSearch] ✅ Gemini OK.")
             return result
         except Exception as e:
+            raise_if_cancelled()
             print(f"[WebSearch] ⚠️ Gemini failed ({e}) — trying DDG...")
-            results = _ddg_search(query)
+            try:
+                results = _ddg_search(query)
+            except Exception as ddg_error:
+                # ddgs raises "No results found." for an empty answer. That is a
+                # finished search with nothing in it, not a broken tool: report it
+                # truthfully instead of "Search failed".
+                if "no results" not in str(ddg_error).lower():
+                    raise
+                results = []
             print(f"[WebSearch] ✅ DDG: {len(results)} result(s).")
             if not results:
                 # Say WHY it came back empty. A bare "no results" reads as "the
@@ -198,6 +232,7 @@ def web_search(
             return _format_ddg(query, results)
 
     except Exception as e:
+        raise_if_cancelled()
         print(f"[WebSearch] ❌ All backends failed: {e}")
         return f"Search failed, sir: {e}"
 

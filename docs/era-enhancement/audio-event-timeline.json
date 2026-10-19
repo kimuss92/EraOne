@@ -1,0 +1,353 @@
+[
+  {
+    "ts": "2026-09-28T11:27:59.367Z",
+    "event": "audio.output.fallback"
+  },
+  {
+    "ts": "2026-09-28T14:52:47.702Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-28T14:55:25.594Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-28T14:57:08.123Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-28T14:58:38.727Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T14:39:10.276Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-09-29T21:19:45.572Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T21:21:26.208Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T21:22:14.397Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T21:23:00.769Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:14:59.617Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:21:55.063Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:25:09.105Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:44:25.045Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:44:45.599Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:45:25.750Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-29T22:46:12.049Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T08:39:15.695Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-09-30T13:51:42.014Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-09-30T13:52:29.179Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T13:53:08.779Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T13:53:44.392Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T13:54:13.434Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T13:54:52.748Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T13:57:31.275Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T13:59:17.629Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T14:35:07.429Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T14:37:32.330Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T14:37:51.089Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-09-30T20:09:18.935Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-02T18:00:26.531Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-03T12:54:11.732Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-03T14:49:45.547Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-04T11:18:27.204Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-04T18:55:42.874Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-04T19:39:01.490Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-05T09:36:26.660Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-05T20:15:36.096Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-06T20:37:45.094Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-06T21:34:51.163Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-07T11:43:41.105Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-07T12:27:09.234Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-07T12:55:07.815Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-07T19:46:51.070Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-08T13:15:34.689Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:15:53.246Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:17:28.588Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:17:44.622Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:20:47.617Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:21:27.960Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:21:43.766Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:22:44.792Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:24:25.029Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:24:56.014Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:26:08.247Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T13:26:49.037Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T15:56:42.908Z",
+    "event": "audio.output.fallback"
+  },
+  {
+    "ts": "2026-10-08T16:07:43.688Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-08T18:26:35.848Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-09T09:59:12.258Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  },
+  {
+    "ts": "2026-10-10T16:47:07.725Z",
+    "event": "engine.reconnect_error",
+    "error_type": "ExceptionGroup",
+    "source": "run_connect_loop"
+  },
+  {
+    "ts": "2026-10-10T19:45:22.528Z",
+    "event": "audio.output.reenum_scheduled",
+    "source": "play_audio"
+  }
+]

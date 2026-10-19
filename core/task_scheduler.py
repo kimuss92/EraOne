@@ -119,6 +119,9 @@ _lock = threading.RLock()
 _scheduler = None
 _executor = None  # (tool, args, task) -> {"success": bool, "message": str}
 _reporter = None  # (text, urgent) -> None
+current_report: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "era_scheduled_report", default=None
+)
 
 
 def set_executor(fn) -> None:
@@ -544,7 +547,11 @@ def _maybe_finish_on_condition(task: dict, run: dict | None) -> None:
     if task.get("notify") != "silent":
         text = f"Scheduled task '{task['name']}' is complete — its condition was met, so it won't run again."
         try:
-            (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, False)
+            token = current_report.set({"task_id": task["id"], "status": "ok"})
+            try:
+                (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, False)
+            finally:
+                current_report.reset(token)
         except Exception as exc:
             print(f"[TASKS] report failed: {exc}")
     _update_status()
@@ -785,7 +792,11 @@ def _record(task_id, status, message, trigger="schedule", safety=None, steps=Non
     text = task_reports.report_text(task, entry)
     if text:
         try:
-            heard = (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, status != "ok")
+            token = current_report.set({"task_id": task_id, "status": status})
+            try:
+                heard = (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, status != "ok")
+            finally:
+                current_report.reset(token)
         except Exception as exc:
             heard = False
             print(f"[TASKS] report failed: {exc}")

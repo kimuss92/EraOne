@@ -329,14 +329,16 @@ def test_a_voice_change_applies_at_once_or_as_soon_as_era_is_idle(monkeypatch):
 
 
 def test_standby_line_is_composed_by_era_under_rules(monkeypatch):
+    import asyncio
+
     import main
 
     notes = []
-    monkeypatch.setattr(main, "submit_coroutine", lambda coro, loop: notes.append(coro))
+    monkeypatch.setattr(main, "submit_coroutine", lambda coro, loop: asyncio.run(coro))
 
     class Session:
-        def send_realtime_input(self, text):
-            return text
+        async def send_realtime_input(self, text):
+            notes.append(text)
 
     eng, _, said = _engine(session=Session())
     eng.brief("You are going into standby now.", fallback="Going quiet, sir.")

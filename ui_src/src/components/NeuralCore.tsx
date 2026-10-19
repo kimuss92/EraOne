@@ -1,51 +1,54 @@
 import { memo, useEffect, useRef } from 'react';
 import { live } from '../lib/store';
+import { look } from '../lib/appearance';
 import type { AgentState } from '../lib/types';
+import { beginFrame, glow } from './core/sprites';
+import { createEclipse } from './core/eclipse';
+import { createConstellation, type CoreNode } from './core/constellation';
+import { canvasInterval } from '../lib/cinematic';
+import { createCanvasLoop } from '../lib/canvasLoop';
 
-// NEURAL CORE — the procedural sphere at the centre of the HUD: a fibonacci
-// point-cloud shell, inner neuron nodes, synapse edges and travelling pulses,
-// now driven by the NORMALIZED agent state (app/hud/events.py) instead of the
-// old four-state activity. Every visual below maps to a real signal:
+// NEURAL CORE — the canvas at the centre of the HUD. Three layers:
+//   • the CONSTELLATION: Era's real tool registry as a node graph (core/constellation.ts)
+//   • the ECLIPSE: Era's voice orb — void, luminous ring, fibres (core/eclipse.ts)
+//   • the inner NETWORK: neurons, synapses and travelling pulses inside the void
+// driven by the NORMALIZED agent state (app/hud/events.py). Every visual maps
+// to a real signal:
 //
-//   listening     inward ripples + brightness from the REAL mic RMS
-//   speaking      the equalizer: 8 band energies of Era's REAL voice audio
-//   tool_running  a directed pulse from the core to the tool's capability node
-//                 and on toward the Live Activity panel (left), per tool start
-//   routing       outward sweeps to the capability nodes
-//   transcribing  a scanning arc; thinking: dense synapse traffic
+//   listening     inward ripples + fibre reach from the REAL mic RMS
+//   speaking      fibres + ring breath from Era's REAL voice audio (8 bands)
+//   tool_running  a beam from the core to the tool's capability node and on
+//                 toward Live Activity; that node + spoke glow while it runs
+//   routing       the ring tilts, traffic bursts out along every spoke
+//   thinking      dense synapse traffic, tilted ring, light streaks
 //   complete / interrupted / wake / error: one-shot rings on entering the state
-//   awaiting_approval: calm core + one slow breathing ring (static when motion
-//                 is reduced) — the question itself is in text below the core
+//   awaiting_approval: calm core + one slow breathing ring
 //
-// Capability nodes come from the backend tool registry (/api/capabilities),
-// so a new skill appears on the ring without a frontend change.
-//
-// PERFORMANCE: dots are pre-rendered glow SPRITES blitted with drawImage (the
-// old per-dot arc+fill was the dominant cost); edges are batched into four
-// alpha buckets = four strokes. Frame rate adapts: 60 fps while something is
-// happening, 30 at rest, 20 asleep/offline, 0 when the tab is hidden. The
-// measured rate is published to live.fps for the diagnostics drawer.
+// PERFORMANCE: everything costly is a cached sprite (core/sprites.ts); strokes
+// are batched. ~450 blits/frame at medium density vs ~1350 for the old
+// 1100-dot sphere. Frame rate adapts: 60 fps while something is happening,
+// 30 at rest, 20 asleep/offline, 0 when the tab is hidden. Measured rate and
+// CPU time go to live.fps / live.frameMs (Diagnostics drawer).
 
 interface Props {
+  hero?: boolean;
+  paused?: boolean;
   state: AgentState;
   hue: number;
   sat: number;
   light: boolean;
-  nodes: string[];
+  nodes: CoreNode[];
+  lastUsed: Record<string, number>;
   activeCategory: string;
   toolPulse: number;
   reducedMotion: boolean;
+  focused: boolean;
 }
 
-interface Tuning {
-  inten: number;
-  rate: number;
-  rot: number;
-  speed: number;
-}
+interface Tuning { inten: number; rate: number; rot: number; speed: number }
 
 const TUNE: Record<AgentState, Tuning> = {
-  idle: { inten: 0.55, rate: 2.5, rot: 0.22, speed: 1 },
+  idle: { inten: 0.55, rate: 2.5, rot: 0.34, speed: 1 },
   wake_detected: { inten: 0.95, rate: 10, rot: 0.5, speed: 1.6 },
   listening: { inten: 0.68, rate: 5, rot: 0.28, speed: 1 },
   transcribing: { inten: 0.8, rate: 9, rot: 0.5, speed: 1.3 },
@@ -58,7 +61,7 @@ const TUNE: Record<AgentState, Tuning> = {
   complete: { inten: 0.8, rate: 4, rot: 0.22, speed: 1 },
   error: { inten: 0.5, rate: 1.5, rot: 0.12, speed: 0.6 },
   offline: { inten: 0.12, rate: 0.3, rot: 0.06, speed: 0.35 },
-  standby: { inten: 0.22, rate: 0.8, rot: 0.08, speed: 0.35 },
+  standby: { inten: 0.22, rate: 0.8, rot: 0.16, speed: 0.35 },
   awaiting_approval: { inten: 0.6, rate: 1.2, rot: 0.1, speed: 0.55 },
 };
 
@@ -67,12 +70,10 @@ const BUSY = new Set<AgentState>([
   'tool_running', 'synthesizing', 'speaking', 'interrupted', 'complete',
 ]);
 
-const CORTEX = 1100;
 const NEURONS = 200;
+const NEURON_COUNT = { low: 110, medium: 170, high: 200 } as const;
 const LINKS = 3;
 const EQ = 8;
-const EQ_DISPLACE = 0.22;
-const SPARK_HUE = 34;
 
 function mulberry32(seed: number) {
   let a = seed;
@@ -84,152 +85,125 @@ function mulberry32(seed: number) {
   };
 }
 
-function geometry() {
+/** Inner network: fibonacci-distributed neurons, each linked to its nearest three. */
+function network() {
   const rnd = mulberry32(1337);
-  const fib = (n: number, off: number, inset: number) => {
-    const x = new Float32Array(n), y = new Float32Array(n), z = new Float32Array(n), band = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const t = (i + off) / n;
-      const th = Math.acos(1 - 2 * t);
-      const ph = (i + off) * Math.PI * (3 - Math.sqrt(5)) + (off > 0.5 ? 1.7 : 0);
-      const r = (1 + (rnd() - 0.5) * 0.03) * inset;
-      x[i] = Math.sin(th) * Math.cos(ph) * r;
-      y[i] = Math.cos(th) * r;
-      z[i] = Math.sin(th) * Math.sin(ph) * r;
-      band[i] = ((Math.cos(th) + 1) / 2) * (EQ - 1);
-    }
-    return { x, y, z, band };
-  };
-  const shell = fib(CORTEX, 0.5, 1);
-  const neu = fib(NEURONS, 0.73, 0.92);
-  const seen = new Set<number>();
-  const ea: number[] = [], eb: number[] = [];
+  const x = new Float32Array(NEURONS), y = new Float32Array(NEURONS), z = new Float32Array(NEURONS);
+  for (let i = 0; i < NEURONS; i++) {
+    const t = (i + 0.73) / NEURONS;
+    const th = Math.acos(1 - 2 * t);
+    const ph = (i + 0.73) * Math.PI * (3 - Math.sqrt(5)) + 1.7;
+    const r = 0.55 + rnd() * 0.45; // a volume, not a shell: the network fills the void
+    x[i] = Math.sin(th) * Math.cos(ph) * r; y[i] = Math.cos(th) * r; z[i] = Math.sin(th) * Math.sin(ph) * r;
+  }
+  const seen = new Set<number>(), ea: number[] = [], eb: number[] = [];
   for (let i = 0; i < NEURONS; i++) {
     const d: [number, number][] = [];
     for (let j = 0; j < NEURONS; j++) {
       if (j === i) continue;
-      const dx = neu.x[i] - neu.x[j], dy = neu.y[i] - neu.y[j], dz = neu.z[i] - neu.z[j];
+      const dx = x[i] - x[j], dy = y[i] - y[j], dz = z[i] - z[j];
       d.push([j, dx * dx + dy * dy + dz * dz]);
     }
     d.sort((p, q) => p[1] - q[1]);
     for (let k = 0; k < LINKS; k++) {
-      const j = d[k][0];
-      const key = i < j ? i * 4096 + j : j * 4096 + i;
+      const j = d[k][0], key = i < j ? i * 4096 + j : j * 4096 + i;
       if (!seen.has(key)) { seen.add(key); ea.push(Math.min(i, j)); eb.push(Math.max(i, j)); }
     }
   }
-  return { shell, neu, ea: Int32Array.from(ea), eb: Int32Array.from(eb) };
-}
-
-const spriteCache = new Map<string, HTMLCanvasElement>();
-function sprite(h: number, s: number, light: boolean, hot = 92): HTMLCanvasElement {
-  const key = `${Math.round(h / 3) * 3}|${Math.round(s / 5) * 5}|${light ? 1 : 0}|${hot}`;
-  let c = spriteCache.get(key);
-  if (c) return c;
-  c = document.createElement('canvas');
-  c.width = c.height = 32;
-  const g = c.getContext('2d')!;
-  const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
-  const l = light ? 32 : 62;
-  grad.addColorStop(0, `hsla(${h}, ${Math.min(100, s + 10)}%, ${light ? 28 : hot}%, 1)`);
-  grad.addColorStop(0.28, `hsla(${h}, ${s}%, ${l}%, 0.85)`);
-  grad.addColorStop(0.55, `hsla(${h}, ${s}%, ${l}%, 0.22)`);
-  grad.addColorStop(1, `hsla(${h}, ${s}%, ${l}%, 0)`);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 32, 32);
-  if (spriteCache.size > 240) spriteCache.clear();
-  spriteCache.set(key, c);
-  return c;
+  return { x, y, z, ea: Int32Array.from(ea), eb: Int32Array.from(eb) };
 }
 
 function NeuralCore(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const p = useRef(props);
+  const syncRef = useRef<(() => void) | null>(null);
   p.current = props;
 
   useEffect(() => {
     const canvas = canvasRef.current!, box = boxRef.current!;
     const ctx = canvas.getContext('2d', { alpha: true })!;
-    const geo = geometry();
-    const nE = geo.ea.length;
+    const net = network();
+    const nE = net.ea.length;
     const pnx = new Float32Array(NEURONS), pny = new Float32Array(NEURONS), pnd = new Float32Array(NEURONS);
-    const MAXP = 44;
+    const MAXP = 36;
     const pEdge = new Int32Array(MAXP), pT = new Float32Array(MAXP), pSpeed = new Float32Array(MAXP);
     const pDir = new Int8Array(MAXP), pLive = new Uint8Array(MAXP);
     const rings: { t: number; kind: 'out' | 'in' | 'burst'; life: number }[] = [];
-    const beams: { t: number; node: number }[] = [];
+    const beams: { t: number; node: string }[] = [];
     const eq = new Float32Array(EQ);
     const rnd = mulberry32(42);
-    let raf = 0, w = 0, h = 0, dpr = 1, last = performance.now(), time = 0;
+    const eclipse = createEclipse(mulberry32(7));
+    const constellation = createConstellation(mulberry32(99));
+    let w = 0, h = 0, dpr = 1, last = performance.now(), time = 0;
+    let refresh = () => {};
     let inten = 0.3, curHue = p.current.hue, curSat = p.current.sat, scale = 1, rotY = 0;
     let lastState: AgentState = p.current.state, lastPulse = p.current.toolPulse;
-    let frames = 0, fpsAt = performance.now(), mic = 0, ripAcc = 0;
+    let frames = 0, fpsAt = performance.now(), mic = 0, ripAcc = 0, focus = 0, hover = 0;
 
     const approach = (c: number, t: number, r: number, dt: number) => c + (t - c) * (1 - Math.exp(-r * dt));
+    const eqAt = (bf: number) => { const i = bf | 0; const a = eq[i] ?? 0; const b = eq[i + 1] ?? a; return a + (b - a) * (bf - i); };
     const resize = () => {
-      const r = box.getBoundingClientRect();
-      dpr = Math.min(window.devicePixelRatio || 1, 1.75);
-      w = r.width; h = r.height;
+      // Layout pixels (unaffected by the HUD-scale zoom); CSS sizes the canvas
+      // element, the bitmap follows the zoomed device pixels (cap 1.75x / 2x).
+      dpr = Math.min(Math.min(window.devicePixelRatio || 1, 1.75) * look.uiScale, 2);
+      w = box.clientWidth; h = box.clientHeight;
       canvas.width = Math.max(1, Math.floor(w * dpr));
       canvas.height = Math.max(1, Math.floor(h * dpr));
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
       last = 0; // resizing cleared the bitmap: draw on the very next frame
+      refresh();
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(box);
 
-    const render = () => {
-      raf = requestAnimationFrame(render);
-      if (document.hidden) return;
+    function render(now: number) {
       const P = p.current;
       const st = P.state;
-      const now = performance.now();
-      const busy = BUSY.has(st) || live.micLevel > 0.02;
-      const interval = st === 'standby' || st === 'offline' ? 50 : busy ? 1000 / 60 : 1000 / 30;
-      if (now - last < interval - 2) return;
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
+      const frameStart = performance.now();
       frames++;
       if (now - fpsAt >= 1000) { live.fps = Math.round((frames * 1000) / (now - fpsAt)); frames = 0; fpsAt = now; }
-      const motion = P.reducedMotion ? 0.4 : 1;
+      beginFrame();
+      const reduced = P.reducedMotion;
+      const motion = reduced ? 0 : look.speed;
+      if (reduced) { beams.length = 0; rings.length = 0; pLive.fill(0); eclipse.clear(); }
       time += dt * motion;
 
       // one-shot effects on entering a state
-      if (st !== lastState) {
+      if (st !== lastState && !reduced) {
         if (st === 'complete') rings.push({ t: 0, kind: 'out', life: 1.2 });
         if (st === 'interrupted') rings.push({ t: 0, kind: 'in', life: 0.7 });
         if (st === 'wake_detected') { rings.push({ t: 0, kind: 'burst', life: 0.8 }); rings.push({ t: -0.18, kind: 'burst', life: 0.8 }); }
         if (st === 'error') rings.push({ t: 0, kind: 'in', life: 0.9 });
-        lastState = st;
       }
+      lastState = st;
       if (P.toolPulse !== lastPulse) {
         lastPulse = P.toolPulse;
-        beams.push({ t: 0, node: P.nodes.indexOf(P.activeCategory) });
+        if (!reduced) beams.push({ t: 0, node: P.activeCategory });
       }
 
       const T = TUNE[st];
-      const amp = st === 'speaking' ? live.amplitude : 0;
+      // Era's real output level, whatever the state label says this frame.
+      const amp = live.amplitude;
       mic = approach(mic, Math.min(1, Math.sqrt(live.micLevel) * 2.2), 14, dt);
       const listenBoost = st === 'listening' || st === 'transcribing' || st === 'idle' ? mic * 0.35 : 0;
       inten = approach(inten, T.inten + amp * 0.5 + listenBoost + Math.sin(time * 1.3) * 0.04, 3, dt);
-      // Hue glide. A big swing (cyan -> gold) would pass through green on the
-      // way, so saturation dips while the hue is far from its target: the core
-      // cools to neutral, then warms into the new colour.
+      // Hue glide. A big swing would pass through unrelated hues, so saturation
+      // dips while the hue is far from its target: cool to neutral, then warm.
       const dh = ((P.hue - curHue + 540) % 360) - 180;
       curHue += dh * (1 - Math.exp(-(Math.abs(dh) > 50 ? 3.2 : 1.6) * dt));
       const swing = Math.min(1, Math.abs(dh) / 90);
       curSat = approach(curSat, P.sat * (1 - 0.85 * swing), swing > 0.3 ? 8 : 1.6, dt);
-      scale = approach(scale, st === 'standby' ? 0.5 : st === 'offline' ? 0.82 : 1, 1.6, dt);
+      scale = approach(scale, st === 'standby' ? 0.84 : st === 'offline' ? 0.82 : 1, 1.6, dt);
       rotY += dt * T.rot * motion;
 
       for (let b = 0; b < EQ; b++) {
-        const target = st === 'speaking' ? live.bands[b] ?? 0 : 0;
-        eq[b] = approach(eq[b], target, target > eq[b] ? 26 : 7, dt);
+        const target = amp > 0.002 ? live.bands[b] ?? 0 : 0;
+        // snappy attack so a syllable lands on its frame; slower release so it reads
+        eq[b] = approach(eq[b], target, target > eq[b] ? 45 : 11, dt);
       }
-      const eqAt = (bf: number) => { const i = bf | 0; const a = eq[i] ?? 0; const bb = eq[i + 1] ?? a; return a + (bb - a) * (bf - i); };
       const eqOn = eq.some(v => v > 0.002);
 
       // spawn synapse pulses at the state's firing rate
@@ -242,138 +216,82 @@ function NeuralCore(props: Props) {
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      // Centre sits a little above the middle: the state label lives below it.
-      const cx = w / 2, cy = h / 2 - Math.min(18, h * 0.025);
-      // The core stays the hero on large displays: the cap grows with the
-      // stage (240 px at 1080p, ~330 px at 1440p) instead of a fixed 240.
-      const rCap = w < 880 ? 170 : Math.max(240, Math.min(340, Math.min(w, h) * 0.26));
-      const R = Math.max(40, Math.min(rCap, (Math.min(w, h) / 2 - 38) / 1.62)) * scale;
-      const cY = Math.cos(rotY), sY = Math.sin(rotY);
-      const rotX = -0.2 + Math.sin(time * 0.23) * 0.08;
-      const cX = Math.cos(rotX), sX = Math.sin(rotX);
-      const fov = 3.2;
-      let ox = 0, oy = 0, od = 0;
-      const proj = (x: number, y: number, z: number, sw: number) => {
-        x *= sw; y *= sw; z *= sw;
-        const x2 = x * cY - z * sY, z2 = x * sY + z * cY;
-        const y2 = y * cX - z2 * sX, z3 = y * sX + z2 * cX;
-        const s = fov / (fov + z3);
-        ox = cx + x2 * R * s; oy = cy - y2 * R * s; od = (z3 + 1.15) / 2.3;
-      };
+      focus = reduced ? Number(P.focused) : approach(focus, Number(P.focused), 5, dt);
+      hover = approach(hover,reduced ? 0 : Number(box.parentElement?.dataset.pointerNear === 'true'),5,dt);
+      const cx = w / 2 - focus * Math.min(22, w * 0.035), cy = h / 2 - Math.min(10, h * 0.015);
+      const base = P.hero ? Math.min(w, h) * 0.235 : w < 880 ? 118 : Math.max(150, Math.min(250, Math.min(w, h) * 0.19));
+      const R = Math.max(22, Math.min(base * look.coreScale, Math.min(w, h) / 2.5)) * scale * (1 - focus * 0.06);
       const light = P.light;
       ctx.globalCompositeOperation = light ? 'source-over' : 'lighter';
+      const nCount = NEURON_COUNT[look.density];
+      const ef = {
+        ctx, cx, cy, R: R * (reduced ? 1 : 1.01 + Math.sin(time * 1.15) * .01), hue: curHue, sat: curSat, light, inten: inten + hover * .15, time, dt, motion, st, amp, mic,
+        eqAt, eqOn, eqBands: EQ, glowK: look.glow * (1+hover*.16), density: look.density,
+      };
+      const cf = {
+        ctx, cx, cy, R, w, h, light, inten: inten + hover * .3, time, dt, motion, st, nodes: P.nodes, active: P.activeCategory,
+        lastUsed: P.lastUsed, labels: look.labels, dpr, glowK: look.glow * (1+hover*.16),
+      };
+      const showGraph = look.constellation && st !== 'offline';
 
-      // volumetric glow
-      const halo = ctx.createRadialGradient(cx, cy, R * 0.05, cx, cy, R * 1.6);
-      const ga = (light ? 0.1 : 0.3) * (0.3 + inten);
-      halo.addColorStop(0, `hsla(${curHue}, ${curSat}%, ${light ? 45 : 62}%, ${ga})`);
-      halo.addColorStop(0.45, `hsla(${curHue}, ${curSat}%, 55%, ${ga * 0.33})`);
-      halo.addColorStop(1, `hsla(${curHue}, ${curSat}%, 50%, 0)`);
-      ctx.fillStyle = halo;
-      ctx.fillRect(cx - R * 1.6, cy - R * 1.6, R * 3.2, R * 3.2);
-
-      // neurons projected once (edges + nodes + pulses share them)
-      for (let i = 0; i < NEURONS; i++) {
-        proj(geo.neu.x[i], geo.neu.y[i], geo.neu.z[i], eqOn ? 1 + eqAt(geo.neu.band[i]) * EQ_DISPLACE : 1);
-        pnx[i] = ox; pny[i] = oy; pnd[i] = od;
-      }
-
-      // synapses: 4 alpha buckets = 4 strokes
-      ctx.lineWidth = 1;
-      for (let b = 0; b < 4; b++) {
-        ctx.beginPath();
-        for (let e = 0; e < nE; e++) {
-          const a = geo.ea[e], bb = geo.eb[e];
-          const d = (pnd[a] + pnd[bb]) / 2;
-          if (Math.min(3, Math.floor((1 - d) * 4)) !== b) continue;
-          ctx.moveTo(pnx[a], pny[a]); ctx.lineTo(pnx[bb], pny[bb]);
+      eclipse.halo(ef);
+      if (showGraph) constellation.back(cf);
+      eclipse.body(ef, () => {
+        // the inner network, projected inside the void
+        const cY = Math.cos(rotY), sY = Math.sin(rotY);
+        const rotX = -0.2 + Math.sin(time * 0.23) * 0.08, cX = Math.cos(rotX), sX = Math.sin(rotX);
+        const inner = R * 0.74, fov = 3.2;
+        for (let i = 0; i < nCount; i++) {
+          const x = net.x[i], y = net.y[i], z = net.z[i];
+          const x2 = x * cY - z * sY, z2 = x * sY + z * cY;
+          const y2 = y * cX - z2 * sX, z3 = y * sX + z2 * cX;
+          const s = fov / (fov + z3);
+          pnx[i] = cx + x2 * inner * s; pny[i] = cy - y2 * inner * s; pnd[i] = (z3 + 1.15) / 2.3;
         }
-        const alpha = (0.07 + b * 0.075) * (0.5 + inten);
-        ctx.strokeStyle = `hsla(${curHue}, ${curSat}%, ${light ? 35 : 66}%, ${alpha})`;
-        ctx.stroke();
-      }
-
-      // shell cloud (sprites)
-      const dot = sprite(curHue, curSat, light);
-      for (let i = 0; i < CORTEX; i++) {
-        const e = eqOn ? eqAt(geo.shell.band[i]) : 0;
-        proj(geo.shell.x[i], geo.shell.y[i], geo.shell.z[i], 1 + e * EQ_DISPLACE);
-        const near = 1 - od;
-        const r = (0.8 + near * 1.3 + inten * 0.6 + e * 1.1) * 2.3;
-        ctx.globalAlpha = Math.min(1, 0.16 + near * 0.7 * (0.5 + inten * 0.8) + e * 0.35);
-        ctx.drawImage(dot, ox - r, oy - r, r * 2, r * 2);
-      }
-
-      // neuron nodes (+ gold computation sparks while thinking/executing)
-      const spark = sprite(SPARK_HUE, 95, light, 88);
-      const sparkBoost = st === 'thinking' || st === 'tool_running' ? 1.6 : 1;
-      for (let i = 0; i < NEURONS; i++) {
-        const near = 1 - pnd[i];
-        const isSpark = st !== 'offline' && i % 14 === 0;
-        const flare = isSpark ? Math.max(0, Math.sin(time * 1.5 + i * 1.3)) ** 3 * sparkBoost : 0;
-        const tw = 0.7 + 0.3 * Math.sin(time * 2.1 + i * 2.7);
-        const r = (1.3 + near * 1.5 + inten + flare * 1.6) * 2.6;
-        ctx.globalAlpha = Math.min(1, (0.3 + near * 0.6) * tw * (0.5 + inten * 0.9) + flare * 0.5);
-        ctx.drawImage(flare > 0.15 ? spark : dot, pnx[i] - r, pny[i] - r, r * 2, r * 2);
-      }
-
-      // travelling pulses
-      const hot = sprite(curHue, curSat, light, 97);
-      for (let i = 0; i < MAXP; i++) {
-        if (!pLive[i]) continue;
-        pT[i] += pSpeed[i] * dt * motion;
-        if (pT[i] >= 1) { pLive[i] = 0; continue; }
-        const a = geo.ea[pEdge[i]], b = geo.eb[pEdge[i]];
-        const t = pDir[i] === 1 ? pT[i] : 1 - pT[i];
-        const x = pnx[a] + (pnx[b] - pnx[a]) * t, y = pny[a] + (pny[b] - pny[a]) * t;
-        const fade = Math.sin(pT[i] * Math.PI);
-        const r = 7 + amp * 5;
-        ctx.globalAlpha = fade;
-        ctx.drawImage(hot, x - r, y - r, r * 2, r * 2);
-      }
-      ctx.globalAlpha = 1;
-
-      // capability ring: nodes from the real tool registry
-      const nodes = P.nodes;
-      const nR = R / scale * 1.5;
-      const nodePos: [number, number][] = nodes.map((_, i) => {
-        const ang = -Math.PI / 2 + (i / Math.max(1, nodes.length)) * Math.PI * 2 + 0.2;
-        return [cx + Math.cos(ang) * nR, cy + Math.sin(ang) * nR * 0.9];
-      });
-      if (st !== 'standby' && st !== 'offline' && nodes.length) {
-        ctx.font = '500 9px "JetBrains Mono Variable", monospace';
-        ctx.textAlign = 'center';
-        nodes.forEach((name, i) => {
-          const [x, y] = nodePos[i];
-          const active = st === 'tool_running' && name === P.activeCategory;
-          const routing = st === 'routing';
-          if (routing) {
-            // outward sweep: a bright dash runs from the core edge to each node
-            const ph = (time * 1.6 + i / nodes.length) % 1;
-            const sx = cx + (x - cx) * (0.62 + ph * 0.38), sy = cy + (y - cy) * (0.62 + ph * 0.38);
-            ctx.strokeStyle = `hsla(${curHue}, ${curSat}%, 70%, ${0.12 + 0.3 * Math.sin(ph * Math.PI)})`;
-            ctx.beginPath(); ctx.moveTo(cx + (x - cx) * 0.62, cy + (y - cy) * 0.62); ctx.lineTo(sx, sy); ctx.stroke();
+        ctx.lineWidth = 1;
+        for (let b = 0; b < 2; b++) {
+          ctx.beginPath();
+          for (let e = 0; e < nE; e++) {
+            const a = net.ea[e], bb = net.eb[e];
+            if (bb >= nCount) continue;
+            if (((pnd[a] + pnd[bb]) / 2 < 0.5 ? 1 : 0) !== b) continue;
+            ctx.moveTo(pnx[a], pny[a]); ctx.lineTo(pnx[bb], pny[bb]);
           }
-          if (active) {
-            ctx.strokeStyle = `hsla(${curHue}, ${curSat}%, 72%, 0.45)`;
-            ctx.beginPath(); ctx.moveTo(cx + (x - cx) * 0.62, cy + (y - cy) * 0.62); ctx.lineTo(x, y); ctx.stroke();
-          }
-          const r = active ? 11 + Math.sin(time * 8) * 2 : 5;
-          ctx.globalAlpha = active ? 1 : 0.55;
-          ctx.drawImage(active ? hot : dot, x - r, y - r, r * 2, r * 2);
-          ctx.globalAlpha = active ? 0.95 : 0.4;
-          ctx.fillStyle = light ? '#1d4a5a' : `hsl(${curHue}, 40%, 78%)`;
-          ctx.fillText(name.toUpperCase(), x, y + (y >= cy ? 18 : -12));
-        });
+          ctx.strokeStyle = `hsla(${curHue + 18}, ${curSat}%, ${light ? 45 : 70}%, ${Math.min(1, (0.035 + b * 0.05) * (0.4 + inten) * look.glow)})`;
+          ctx.stroke();
+        }
+        const dot = glow(curHue + 18, curSat, light, 90, 16);
+        for (let i = 0; i < nCount; i++) {
+          const near = 1 - pnd[i];
+          const tw = 0.7 + 0.3 * Math.sin(time * 2.1 + i * 2.7);
+          const r = (1.2 + near * 1.6 + inten) * 1.6;
+          ctx.globalAlpha = Math.min(1, (0.07 + near * 0.3) * tw * (0.4 + inten));
+          ctx.drawImage(dot, pnx[i] - r, pny[i] - r, r * 2, r * 2);
+        }
+        const hot = glow(curHue, curSat, light, 97, 16);
+        for (let i = 0; i < MAXP; i++) {
+          if (!pLive[i]) continue;
+          pT[i] += pSpeed[i] * dt * motion;
+          const a = net.ea[pEdge[i]], b = net.eb[pEdge[i]];
+          if (pT[i] >= 1 || b >= nCount) { pLive[i] = 0; continue; }
+          const t = pDir[i] === 1 ? pT[i] : 1 - pT[i];
+          const r = 5 + amp * 4;
+          ctx.globalAlpha = Math.sin(pT[i] * Math.PI);
+          ctx.drawImage(hot, pnx[a] + (pnx[b] - pnx[a]) * t - r, pny[a] + (pny[b] - pny[a]) * t - r, r * 2, r * 2);
+        }
         ctx.globalAlpha = 1;
-      }
+      });
+      eclipse.motes(ef);
+      if (!reduced) eclipse.streaks(ef);
+      if (showGraph) constellation.front(cf);
 
       // tool beams: core → capability node → out toward Live Activity (left)
+      const hot = glow(curHue, curSat, light, 97, 32);
       for (let i = beams.length - 1; i >= 0; i--) {
         const bm = beams[i];
         bm.t += dt * 1.1;
         if (bm.t >= 1) { beams.splice(i, 1); continue; }
-        const [nx, ny] = bm.node >= 0 ? nodePos[bm.node] : [cx - nR, cy];
+        const [nx, ny] = (showGraph && constellation.position(bm.node, P.nodes)) || [cx - R * 1.8, cy];
         const pts: [number, number][] = [[cx, cy], [nx, ny], [0, ny + (cy - ny) * 0.4]];
         const seg = bm.t < 0.45 ? 0 : 1;
         const lt = seg === 0 ? bm.t / 0.45 : (bm.t - 0.45) / 0.55;
@@ -389,12 +307,12 @@ function NeuralCore(props: Props) {
 
       // state rings
       const ringStroke = (rad: number, a: number, width = 1) => {
-        ctx.strokeStyle = `hsla(${curHue}, ${curSat}%, ${light ? 38 : 66}%, ${a})`;
+        ctx.strokeStyle = `hsla(${curHue}, ${curSat}%, ${light ? 38 : 70}%, ${Math.min(1, a * look.glow)})`;
         ctx.lineWidth = width;
-        ctx.beginPath(); ctx.ellipse(cx, cy, rad, rad * 0.95, 0, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.ellipse(cx, cy, rad, rad * 0.97, 0, 0, Math.PI * 2); ctx.stroke();
         ctx.lineWidth = 1;
       };
-      if (!P.reducedMotion) {
+      if (!reduced) {
         // listening: inward waves whose rate follows the real mic level
         if (st === 'listening' || st === 'transcribing') {
           ripAcc += dt * (0.6 + mic * 3);
@@ -413,31 +331,32 @@ function NeuralCore(props: Props) {
         if (rg.t < 0) continue;
         const q = rg.t / rg.life;
         const a = Math.sin(q * Math.PI) * (rg.kind === 'burst' ? 0.5 : 0.22) * (0.5 + inten);
-        const rad = rg.kind === 'in' ? R * (1.6 - q * 0.95) : rg.kind === 'burst' ? R * (0.9 + q * 1.1) : R * (0.6 + q * 1.1);
+        const rad = rg.kind === 'in' ? R * (1.7 - q * 0.65) : rg.kind === 'burst' ? R * (1.02 + q * 1.1) : R * (1.04 + q * 0.9);
         ringStroke(rad, a, rg.kind === 'burst' ? 2 : 1);
       }
-      if (st === 'transcribing') {
-        const a0 = time * 3.2;
-        ctx.strokeStyle = `hsla(${curHue}, ${curSat}%, 74%, 0.5)`;
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.14, R * 1.08, 0, a0, a0 + Math.PI / 2); ctx.stroke();
-        ctx.lineWidth = 1;
-      }
-      if (st === 'synthesizing') ringStroke(R * (1.25 - ((time * 0.5) % 1) * 0.18), 0.28);
-      if (st === 'thinking') ringStroke(R * 1.18, 0.1 + 0.06 * Math.sin(time * 3));
+      if (st === 'synthesizing') ringStroke(R * (1.32 - ((time * 0.5) % 1) * 0.18), 0.24);
       // approval: a slow, deliberate breath (~0.3 Hz), never a flash
       if (st === 'awaiting_approval') {
-        const breath = P.reducedMotion ? 0.5 : 0.5 + 0.5 * Math.sin(time * 1.9);
-        ringStroke(R * (1.16 + breath * 0.04), 0.14 + breath * 0.2, 1.5);
+        const breath = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(time * 1.9);
+        ringStroke(R * (1.2 + breath * 0.04), 0.14 + breath * 0.2, 1.5);
       }
-    };
-    raf = requestAnimationFrame(render);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+      ctx.globalCompositeOperation = 'source-over';
+      live.frameMs = live.frameMs * 0.9 + (performance.now() - frameStart) * 0.1;
+    }
+    const loop = createCanvasLoop(box,render,() => {
+      const P = p.current;
+      if (P.paused || !w || !h) return null;
+      return canvasInterval(P.state,BUSY.has(P.state) || live.micLevel > .02,P.reducedMotion,live.frameMs);
+    });
+    refresh = loop.refresh;
+    syncRef.current = refresh;
+    return () => { syncRef.current = null; loop.stop(); ro.disconnect(); };
   }, []);
+  useEffect(() => { syncRef.current?.(); }, [props.paused,props.reducedMotion,props.state]);
 
   return (
     <div ref={boxRef} className="pointer-events-none absolute inset-0">
-      <canvas ref={canvasRef} className="block h-full w-full" />
+      <canvas ref={canvasRef} className="block h-full w-full" aria-hidden="true" />
     </div>
   );
 }

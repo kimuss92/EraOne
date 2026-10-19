@@ -410,6 +410,19 @@ class _BrowserSession:
         # Serialises driver restarts: several tool threads can notice a dead
         # driver at once, and only one of them should replace it.
         self._driver_lock = threading.Lock()
+        self._media_observer = None
+
+    def _schedule_media_observation(self) -> None:
+        loop = getattr(self, "_loop", None)
+        if loop is None or not loop.is_running() or not getattr(self, "_cdp_ready", False):
+            return
+        from core.browser_media import BrowserMediaObserver
+
+        if getattr(self, "_media_observer", None) is None:
+            self._media_observer = BrowserMediaObserver(self.browser_name)
+        observer = self._media_observer
+        for page in list(self._pages):
+            loop.call_soon_threadsafe(observer.track, page)
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -655,6 +668,10 @@ class _BrowserSession:
             asyncio.run_coroutine_threadsafe(self._async_close(), self._loop).result(10)
 
     async def _async_close(self):
+        observer = getattr(self, "_media_observer", None)
+        if observer is not None:
+            observer.close()
+            self._media_observer = None
         if self._context:
             try:
                 await self._context.close()
@@ -719,6 +736,10 @@ class _BrowserSession:
 
     def _drop_stale_connection(self) -> None:
         """Forget a dead CDP attachment so the next _launch() reattaches cleanly."""
+        observer = getattr(self, "_media_observer", None)
+        if observer is not None:
+            observer.close()
+            self._media_observer = None
         self._context = None
         self._browser_obj = None
         self._pages = []
@@ -831,6 +852,7 @@ class _BrowserSession:
                 await self._restore_native_downloads(p)
 
             self._cdp_ready = True
+            self._schedule_media_observation()
             log("Browser", f"CDP connected: {len(self._pages)} existing pages")
             log("Browser", "🔗 CDP Link active on port 9222.")
             return
@@ -935,8 +957,18 @@ class _BrowserSession:
             import psutil
 
             names = self._browser_exe_names()
-            for proc in psutil.process_iter(["name"]):
+            for proc in psutil.process_iter(["name", "cmdline"]):
                 if (proc.info.get("name") or "").lower() in names:
+                    args = proc.info.get("cmdline") or []
+                    # Renderer children and isolated headless automation do not
+                    # hold the user's default browser profile. In particular,
+                    # agent-browser's port=0 instance must not prevent launch.
+                    if any(arg.startswith("--type=") for arg in args):
+                        continue
+                    if any(arg.split("=", 1)[0] == "--headless" for arg in args) and any(
+                        arg.split("=", 1)[0] == "--user-data-dir" for arg in args
+                    ):
+                        continue
                     return True
         except Exception:
             pass
@@ -1016,6 +1048,7 @@ class _BrowserSession:
             self._pages.append(page)
             page.on("close", self._on_page_close)
             page.on("framenavigated", self._on_page_updated)
+            self._schedule_media_observation()
 
             # Reset Playwright's default light-scheme emulation on any newly
             # adopted tab too (runs for both init-time and later tabs; the call
@@ -1034,6 +1067,9 @@ class _BrowserSession:
                 asyncio.run_coroutine_threadsafe(self._restore_native_downloads(page), self._loop)
 
     def _on_page_close(self, page: Page):
+        observer = getattr(self, "_media_observer", None)
+        if observer is not None:
+            observer.remove(page)
         if page in self._pages:
             self._pages.remove(page)
             if self._active >= len(self._pages) and self._pages:
@@ -1044,6 +1080,7 @@ class _BrowserSession:
     def _on_page_updated(self, frame=None):
         """Event handler for page URL or title updates."""
         try:
+            self._schedule_media_observation()
             if self._loop and self._loop.is_running():
                 asyncio.run_coroutine_threadsafe(
                     self._sort_tabs_by_visual_position(self._pages), self._loop

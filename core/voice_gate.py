@@ -147,6 +147,8 @@ class UtteranceGate:
         followup_allowed: Callable[[], bool] | None = None,
     ) -> None:
         self._verifier = verifier
+        self._wearable_input = None
+        self._speech_floor = 0.012
         s = verifier.settings
         self.window_s = float(s["verify_window_s"])
         self.min_speech_s = float(s["min_command_speech_s"])
@@ -198,10 +200,19 @@ class UtteranceGate:
     # ── helpers ──────────────────────────────────────────────────────────────
     def _is_speech(self, frame: bytes) -> bool:
         level = _rms(frame)
-        speech = level > max(0.012, self._noise * 3.0)
+        speech = level > max(self._speech_floor, self._noise * 3.0)
         if not speech and self.state == IDLE:
             self._noise = 0.95 * self._noise + 0.05 * level
         return speech
+
+    def configure_input(self, wearable: bool) -> None:
+        """Quiet conditioned glasses speech can reach identity verification."""
+        with self._lock:
+            if self._wearable_input is bool(wearable):
+                return
+            self._wearable_input = bool(wearable)
+            self._speech_floor = 0.004 if wearable else 0.012
+            self._noise = self._speech_floor / 3.0 if wearable else 0.005
 
     def _submit(self, pcm: bytes, purpose: str = "command") -> None:
         self._purpose = purpose

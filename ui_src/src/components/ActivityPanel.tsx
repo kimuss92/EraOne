@@ -18,19 +18,18 @@ import {
   Mic,
   Monitor,
   Music,
-  Radio,
-  Route,
   ShieldQuestion,
   Sparkles,
   Workflow,
   X,
-  Zap,
 } from 'lucide-react';
 import { useHud } from '../lib/store';
 import { actions } from '../lib/transport';
 import { clock, duration } from '../lib/format';
-import type { TimelineItem, ToolRun, ToolStatus } from '../lib/types';
+import type { ToolRun, ToolStatus } from '../lib/types';
 import PathText from './PathText';
+import { splitPaths } from './PathText';
+import { FileActions, RecentFiles } from './FileActions';
 import TaskProgress from './TaskProgress';
 import { useDevelopment, working } from '../lib/development';
 
@@ -64,15 +63,6 @@ const STATUS: Record<ToolStatus, { label: string; cls: string; Icon: typeof Chec
   unknown: { label: 'NO RESULT', cls: 'chip-warn', Icon: CircleDashed },
 };
 
-const TL_ICON: Record<string, typeof Globe> = {
-  routing: Route,
-  connection: Radio,
-  wake: Zap,
-  interrupt: Hand,
-  error: AlertTriangle,
-  approval: ShieldQuestion,
-};
-
 // Priority: work that is happening or needs the user stays a full card;
 // finished work recedes to a one-line row (still expandable for details).
 const ACTIVE = new Set<ToolStatus>(['running', 'queued', 'awaiting']);
@@ -87,6 +77,8 @@ const CARD_TONE: Partial<Record<ToolStatus, string>> = {
 
 function RunDetails({ run }: { run: ToolRun }) {
   const args = Object.entries(run.args || {});
+  const fileParts = (text: string) => splitPaths(text).flatMap(part => typeof part === 'string' ? [] : [part.path]);
+  const files = [...new Set([...fileParts(run.summary || ''), ...args.flatMap(([key, value]) => /path|destination|filename/i.test(key) && /^[A-Za-z]:[\\/][^\r\n]+$/.test(String(value)) ? [String(value)] : fileParts(String(value)))])];
   if (!args.length && !run.summary) return null;
   return (
     <div className="mt-2 space-y-1.5 border-t border-[var(--line)] pt-2">
@@ -98,6 +90,7 @@ function RunDetails({ run }: { run: ToolRun }) {
         </div>
       )}
       {run.summary && <p className="select-text text-meta leading-snug t2"><PathText text={run.summary} /></p>}
+      {files.map(path => <FileActions key={path} path={path} />)}
     </div>
   );
 }
@@ -131,10 +124,12 @@ function ToolCard({ run }: { run: ToolRun }) {
   const Icon = CATEGORY_ICON[run.category] || Cpu;
   const st = STATUS[run.status] || STATUS.unknown;
   const args = Object.entries(run.args || {});
+  const expandable = args.length > 0 || !!run.summary;
+  // Header (expand target) and status row are separate, so the Cancel button
+  // sits on the status line without nesting a button inside a button.
   return (
     <article className={`tool-card ${CARD_TONE[run.status] || ''}`}>
-      <div className="flex w-full items-start gap-1">
-      <button type="button" className="flex min-w-0 flex-1 items-start gap-2.5 text-left" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+      <button type="button" className="flex w-full min-w-0 items-start gap-2.5 text-left" aria-expanded={open} onClick={() => setOpen(o => !o)}>
         <span className="tool-icon"><Icon className="h-3.5 w-3.5" /></span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
@@ -145,47 +140,30 @@ function ToolCard({ run }: { run: ToolRun }) {
             </span>
           </span>
           <span className="mt-0.5 block truncate text-small t1">{run.activity}</span>
-          <span className="mt-1.5 flex items-center gap-2">
-            <span className={`chip ${st.cls}`}>
-              <st.Icon className={`h-3 w-3 ${run.status === 'running' ? 'animate-spin' : ''}`} />
-              {st.label}
-            </span>
-            {run.routedTo && <span className="truncate font-mono text-micro t3">→ {run.routedTo}</span>}
-            {(args.length > 0 || run.summary) && (
-              <ChevronDown className={`ml-auto h-3 w-3 t3 transition-transform ${open ? 'rotate-180' : ''}`} />
-            )}
-          </span>
         </span>
       </button>
-      {/* Sibling of the expand button, never nested inside it: a button in a
-          button is invalid HTML and swallows the expand click target. Only on
-          a running row -- a settled one has nothing left to stop. */}
-      {run.status === 'running' && (
-        <button
-          type="button"
-          className="icon-btn icon-btn-xs shrink-0"
-          title="Cancel this task"
-          aria-label={`Cancel ${run.label}`}
-          onClick={() => actions.cancelTask(run.id)}
-        >
-          <X className="h-3 w-3" />
-        </button>
-      )}
+      <div className="tool-status-row">
+        <span className={`chip ${st.cls}`}>
+          <st.Icon className={`h-3 w-3 ${run.status === 'running' ? 'animate-spin' : ''}`} />
+          {st.label}
+        </span>
+        {run.routedTo && <span className="min-w-0 truncate font-mono text-micro t3">→ {run.routedTo}</span>}
+        {run.status === 'running' && (
+          <button type="button" className="tool-cancel"
+            title="Cancel only this Live Activity task"
+            aria-label={`Cancel task: ${run.activity}`}
+            onClick={() => actions.cancelTask(run.id)}>
+            <X className="h-3 w-3" /> Cancel
+          </button>
+        )}
+        {expandable && (
+          <button type="button" className={`icon-btn icon-btn-sm shrink-0 ${run.status === 'running' ? '' : 'ml-auto'}`} aria-label={open ? 'Hide details' : 'Show details'} aria-expanded={open} onClick={() => setOpen(o => !o)}>
+            <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+          </button>
+        )}
       </div>
       {open && <RunDetails run={run} />}
     </article>
-  );
-}
-
-function TimelineRow({ item }: { item: TimelineItem }) {
-  const Icon = TL_ICON[item.kind] || Radio;
-  return (
-    <div className={`tl-row tl-${item.tone}`}>
-      <Icon className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{item.label}</span>
-      {item.duration !== undefined && <span className="font-mono tabular-nums">{duration(item.duration)}</span>}
-      <span className="font-mono tabular-nums t3">{clock(item.ts)}</span>
-    </div>
   );
 }
 
@@ -195,18 +173,12 @@ function ActivityPanel() {
   const link = useHud(s => s.link);
   const tools = useHud(s => s.tools);
   const currentTool = tools.find(t => t.status === 'running' && !['autonomous_development', 'self_improve'].includes(t.tool));
-  const timeline = useHud(s => s.timeline);
+
   const running = tools.filter(t => t.status === 'running').length;
 
-  // Active work (running / awaiting the user) pinned on top; everything else
-  // newest first, tool runs and timeline rows interleaved by time.
-  const items = useMemo(() => {
-    const rows: ({ t: number; pin: boolean; tool: ToolRun } | { t: number; pin: boolean; tl: TimelineItem })[] = [
-      ...tools.map(tool => ({ t: tool.startedAt, pin: ACTIVE.has(tool.status), tool })),
-      ...timeline.map(tl => ({ t: tl.ts, pin: false, tl })),
-    ];
-    return rows.sort((a, b) => Number(b.pin) - Number(a.pin) || b.t - a.t).slice(0, 60);
-  }, [tools, timeline]);
+  // Only executable work belongs here. Ambient observer events have their own bar.
+  const items = useMemo(() => tools.map(tool => ({ t: tool.startedAt, pin: ACTIVE.has(tool.status), tool }))
+    .sort((a, b) => Number(b.pin) - Number(a.pin) || b.t - a.t).slice(0, 60), [tools]);
 
   return (
     <section className="panel flex min-h-0 flex-1 flex-col" aria-label="Live activity">
@@ -216,20 +188,15 @@ function ActivityPanel() {
           {link !== 'online' ? 'OFFLINE' : currentJob && !stale ? currentJob.state === 'awaiting_approval' ? 'REVIEW' : 'DEVELOPING' : running ? `${running} RUNNING` : 'IDLE'}
         </span>
       </div>
-      {currentJob ? <TaskProgress name={currentJob.request} value={currentJob.progress} phase={currentJob.phase || currentJob.state} stale={stale || link !== 'online'} /> : currentTool ? <TaskProgress name={currentTool.activity} value={null} phase="Running; this tool does not report measured progress" stale={link !== 'online'} /> : null}
+      {currentJob ? <TaskProgress name={currentJob.request} value={currentJob.progress} phase={currentJob.phase || currentJob.state} stale={stale || link !== 'online'} /> : currentTool ? <TaskProgress name={currentTool.activity} value={null} phase="Running; this tool does not report measured progress" stale={link !== 'online'} onCancel={() => actions.cancelTask(currentTool.id)} /> : null}
       <div className="custom-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
         {items.length === 0 && (
           <p className="px-1 pt-2 text-meta leading-relaxed t3">
-            No activity yet. Tool calls, routing and link events appear here as ERA ONE performs them.
+            No tasks running. Your requested work appears here; system changes stay in the event bar.
           </p>
         )}
-        {items.map(it =>
-          'tool' in it
-            ? SETTLED.has(it.tool.status)
-              ? <SettledRow key={it.tool.id} run={it.tool} />
-              : <ToolCard key={it.tool.id} run={it.tool} />
-            : <TimelineRow key={it.tl.id} item={it.tl} />,
-        )}
+        {items.map(it => SETTLED.has(it.tool.status) ? <SettledRow key={it.tool.id} run={it.tool} /> : <ToolCard key={it.tool.id} run={it.tool} />)}
+        <RecentFiles />
       </div>
     </section>
   );

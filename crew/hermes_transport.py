@@ -52,6 +52,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from core.logger import log_event
+from core.protected_config import ProtectedConfigError, decode
 from core.tool_result import ToolResult
 from core.utils import CONFIG_PATH
 from crew import router as crew_router
@@ -88,8 +89,8 @@ def read_key(config_path: Path | None = None) -> str:
     """The era_one key, read from disk NOW. Raises HermesKeyMissing without echoing anything."""
     try:
         data = json.loads(Path(config_path or CONFIG_PATH).read_text(encoding="utf-8-sig"))
-        value = data.get(KEY_ENTRY) if isinstance(data, dict) else None
-    except (OSError, ValueError):
+        value = decode(data.get(KEY_ENTRY)) if isinstance(data, dict) else None
+    except (OSError, ValueError, ProtectedConfigError):
         value = None
     key = value.strip() if isinstance(value, str) else ""
     if not key or key.lower() == "placeholder":
@@ -318,12 +319,22 @@ class HermesAgentTransport(InProcessTransport):
         body = json.dumps(payload).encode("utf-8")
         url = f"{self._base}/v1/chat/completions"
         for attempt in range(1 + CHAT_RETRIES):
+            from core.cancel_registry import raise_if_cancelled, sleep_cancellable
+
+            raise_if_cancelled()
+            room = turn.deadline - time.monotonic() if turn.deadline else CHAT_TIMEOUT_S
+            if room <= 0:
+                raise TimeoutError("Crew call deadline exceeded before the model request")
             try:
-                return self._http("POST", url, self._headers(key), body, CHAT_TIMEOUT_S)
+                return self._http("POST", url, self._headers(key), body, min(CHAT_TIMEOUT_S, room))
             except Exception as exc:  # noqa: BLE001 - retried once, then re-raised
                 room = turn.deadline - time.monotonic() if turn.deadline else float("inf")
                 if attempt >= CHAT_RETRIES or room < CHAT_RETRY_MIN_ROOM_S:
                     raise
+                if not isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+                    raise
+                if not sleep_cancellable(min(4.0, 0.25 * 2**attempt)):
+                    raise_if_cancelled()
                 log_event(
                     runtime_logger,
                     "crew.hermes.chat_retry",

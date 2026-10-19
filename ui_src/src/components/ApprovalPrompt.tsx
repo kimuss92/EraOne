@@ -7,12 +7,9 @@ import { actions } from '../lib/transport';
 // ACTION REQUIRED — Era's single pending confirmation (app/hud/bus_approval.py),
 // shown for exactly as long as the backend really holds it.
 //
-// The buttons are typing shortcuts, not a new approval path: they send the
-// bare words "yes" / "no" through the same typed-command route as the command
-// bar, so the backend's own gate (_user_approved_pending: the user's latest
-// utterance must be a whole "yes", said after the action was armed) decides,
-// exactly as if the user had typed it. Nothing is auto-focused, so a stray
-// Enter can never approve anything.
+// Buttons submit the displayed confirmation id and creation time to the
+// authenticated backend. The exact stored action executes once without
+// requiring the model to interpret another yes. Nothing is auto-focused.
 //
 // The card is never parked on screen: it hides itself after HIDE_AFTER_MS
 // (paused while hovered/focused) or on its X. Hiding is display-only — the
@@ -33,10 +30,11 @@ function ApprovalPrompt() {
   const online = useHud(s => s.link === 'online');
   const now = useNow();
   const [sent, setSent] = useState<'' | 'yes' | 'no'>('');
+  const [error, setError] = useState('');
   const [hiddenId, setHiddenId] = useState('');
   const [held, setHeld] = useState(false);
 
-  useEffect(() => { setSent(''); setHeld(false); }, [a?.id]);
+  useEffect(() => { setSent(''); setError(''); setHeld(false); }, [a?.id]);
   const id = a?.id ?? '';
   // Keyed on the id, not the object: state pushes must not restart the clock.
   useEffect(() => {
@@ -53,7 +51,12 @@ function ApprovalPrompt() {
   }, [sent]);
 
   if (!a || !online || hiddenId === a.id) return null;
-  const answer = (v: 'yes' | 'no') => { if (actions.sendCommand(v)) setSent(v); };
+  const answer = (v: 'yes' | 'no') => {
+    setSent(v); setError('');
+    void actions.answerApproval(a.id, a.createdAt, v === 'yes' ? 'approve' : 'cancel').catch(() => {
+      setSent(''); setError('Approval could not be accepted. Check the current action and try again.');
+    });
+  };
 
   return (
     <section
@@ -95,7 +98,7 @@ function ApprovalPrompt() {
           <X className="h-3.5 w-3.5" /> Cancel
         </button>
         <span className="text-meta t3" role="status">
-          {sent ? `Sent “${sent}” — waiting for ERA ONE…` : 'or say “yes” / “no”'}
+          {error || (sent ? 'Decision received — applying…' : 'or say “yes” / “no”')}
         </span>
       </div>
     </section>

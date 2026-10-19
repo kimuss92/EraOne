@@ -110,6 +110,7 @@ from app.text_intents import (  # noqa: F401  (re-export: preserves public + int
     _clean_transcript,
     _extract_raw_path,
     _is_bare_path_paste,
+    _is_path_open_request,
     _model_intent,
     _say_exactly,
     _theme_intent_mode,
@@ -153,9 +154,11 @@ from app.notify import (  # noqa: F401  (re-export: preserves public + internal 
 from core.async_submit import submit_coroutine
 from core.conversation_log import ConversationLog
 from core.era_state import EraState
+from core.input_envelope import InputEnvelope, InputSource, current_input
 from core.input_safety_gate import CLARIFICATION_PHRASE, InputSafetyGate
 from core.live_turn_state import LiveTurnState, TurnSnapshot
 from core.logger import log_crash, log_event, main_logger
+from core.model_reply import send_model_text
 from core.pending_confirmation import get_shared_store, set_user_approval_probe
 from core.session_manager import SessionManager
 from core.speaker_recognition import get_verifier
@@ -231,6 +234,7 @@ from app.era_live.mic_mute import MicMuteMixin
 from app.era_live.model_route import ModelRouteMixin
 from app.era_live.panic import PanicStopMixin
 from app.era_live.reconnect_mixin import ReconnectMixin
+from app.era_live.report_pump import start_report_pump
 from app.era_live.session_runtime import live_model, managed_live_connection, stop_on_renewal
 from app.era_live.speech_out import SpeechOut
 from app.era_live.tool_batch import ToolBatchMixin
@@ -245,7 +249,13 @@ from app.system_prompt import (  # noqa: F401  (re-export: preserves public + in
 from app.tool_declarations import TOOL_DECLARATIONS  # noqa: F401  (re-export)
 from core.live_health import LiveHealth
 from core.tts_fish import is_configured as _fish_configured
-from core.voice_mode import MODE_FISH_AUDIO, MODE_KOKORO_AUDIO, MODE_LABELS, VOICE_CFG
+from core.voice_mode import (
+    MODE_FISH_AUDIO,
+    MODE_GEMINI_AUDIO,
+    MODE_KOKORO_AUDIO,
+    MODE_LABELS,
+    VOICE_CFG,
+)
 
 
 def _voice_refused(era, exc: BaseException) -> bool:
@@ -327,7 +337,7 @@ class EraLive(
         self._loop = None
         self._is_speaking = False
         self._speaking_lock = threading.Lock()
-        self.ui.on_text_command = self._on_text_command
+        self.ui.on_text_command = lambda text: self._on_text_command(text, source="typed")
         self.ui.on_file_upload = self._on_file_upload
         self._turn_done_event: asyncio.Event | None = None
 
@@ -666,10 +676,167 @@ class EraLive(
         self._tg_reply_pending = False
         _tg_notify(message)
 
-    def _on_text_command(self, text: str):
+    def _on_text_command(self, text: str, *, source: InputSource | None = None):
+        # Compatibility for embedded callers; production adapters name their
+        # channel explicitly before the callback crosses any thread boundary.
+        explicit_source = source is not None
+        source = source or ("telegram" if self._tg_reply_pending else "typed")
+        envelope = InputEnvelope.create(text, source)
+        loop = getattr(self, "_loop", None)
+        epoch = getattr(self, "_input_dispatch_epoch", 0)
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        def report_failure(error):
+            log_event(
+                main_logger,
+                "input.dispatch.failed",
+                "ERROR",
+                request_id=envelope.id,
+                source=envelope.source,
+                error_type=type(error).__name__,
+                reason=str(error),
+            )
+            message = "I couldn't process that command on my side. Please try again."
+            if envelope.source == "telegram":
+                if getattr(self, "_input_envelope", None) is envelope:
+                    self._tg_reply_pending = False
+                _tg_notify(message)
+            try:
+                self.ui.write_log(f"SYS: {message}")
+            except Exception:
+                pass
+
+        post = getattr(loop, "call_soon_threadsafe", None)
+        abort_check = getattr(self, "_is_abort_order", None)
+        if callable(abort_check) and abort_check(text):
+
+            def abort_now():
+                self._input_dispatch_epoch = getattr(self, "_input_dispatch_epoch", 0) + 1
+                try:
+                    EraLive._accept_input(self, envelope)
+                    EraLive._handle_owned_text(self, envelope)
+                except Exception as error:
+                    report_failure(error)
+
+            if (
+                loop is not None
+                and loop.is_running()
+                and callable(post)
+                and loop is not current_loop
+            ):
+                post(abort_now)
+            else:
+                abort_now()
+            return  # panic must never wait behind a blocked file/OS handler
+
+        async def deliver():
+            try:
+                lock = getattr(self, "_input_dispatch_lock", None)
+                if lock is None:
+                    lock = self._input_dispatch_lock = asyncio.Lock()
+                async with lock:
+                    if epoch != getattr(self, "_input_dispatch_epoch", 0):
+                        log_event(
+                            main_logger,
+                            "input.cancelled",
+                            "INFO",
+                            request_id=envelope.id,
+                            source=envelope.source,
+                            reason="abort before dispatch",
+                        )
+                        if envelope.source == "telegram":
+                            _tg_notify("Your queued command was cancelled by the abort request.")
+                        return
+                    EraLive._accept_input(self, envelope)
+                    # Existing local intercepts may block on OS/file work. They
+                    # were designed to run outside the audio loop; retain that.
+                    await asyncio.to_thread(EraLive._handle_owned_text, self, envelope)
+            except Exception as error:
+                report_failure(error)
+
+        if (
+            loop is not None
+            and loop.is_running()
+            and callable(post)
+            and (explicit_source or loop is not current_loop)
+        ):
+
+            def start_delivery():
+                task = loop.create_task(deliver())
+                pending = getattr(self, "_input_dispatch_tasks", None)
+                if pending is None:
+                    pending = self._input_dispatch_tasks = set()
+                pending.add(task)
+                task.add_done_callback(pending.discard)
+
+            post(start_delivery)
+        else:
+            # Direct/offline dispatch retains caller-visible errors so the
+            # existing adapter can report them. Queued callbacks report above.
+            try:
+                EraLive._accept_input(self, envelope)
+                EraLive._handle_owned_text(self, envelope)
+            except Exception:
+                if (
+                    envelope.source == "telegram"
+                    and getattr(self, "_input_envelope", None) is envelope
+                ):
+                    self._tg_reply_pending = False
+                raise
+
+    def _handle_owned_text(self, envelope: InputEnvelope) -> None:
+        token = current_input.set(envelope)
+        try:
+            EraLive._handle_text_command(self, envelope.text)
+        finally:
+            current_input.reset(token)
+
+    def _report_unattributed_model_reply(self, reason: str) -> None:
+        self.ui.write_log(f"SYS: Remote reply could not be safely attributed ({reason}).")
+        if reason == "session_closed":
+            _tg_notify(
+                "My connection changed before I could finish your reply. Please send your request again."
+            )
+        else:
+            _tg_notify(
+                "The conversation changed before I could safely match the reply. Please send your latest request again."
+            )
+
+    def _accept_input(self, envelope: InputEnvelope) -> None:
+        tracker = getattr(self, "_model_reply_ownership", None)
+        if tracker is not None and (tracker.owner is None or tracker.owner.id != envelope.id):
+            tracker.invalidate("new_input")
+        bridge = getattr(self, "_telegram_speech", None)
+        interrupted_speech = bridge.pending_owner if bridge is not None else None
+        if bridge is not None:
+            bridge.select(envelope)
+        previous = getattr(self, "_input_envelope", None)
+        if (self._tg_reply_pending and previous is not None and previous.source == "telegram") or (
+            interrupted_speech is not None and interrupted_speech.id != envelope.id
+        ):
+            _tg_notify("Your previous request was interrupted by a new command.")
+        self._input_envelope = envelope
+        self._tg_reply_pending = envelope.source == "telegram"
+        log_event(
+            main_logger,
+            "input.accepted",
+            "INFO",
+            request_id=envelope.id,
+            source=envelope.source,
+            received_at=envelope.received_at,
+        )
+
+    def _handle_text_command(self, text: str):
         # HUD conversation record: the typed/Telegram order as the user sent it.
         # Sentinels ("__mute__" etc.) are skipped inside user_input. Never raises.
-        hud.user_input(text, "telegram" if self._tg_reply_pending else "typed")
+        envelope = getattr(self, "_input_envelope", None)
+        hud.user_input(
+            text,
+            envelope.source if envelope else ("telegram" if self._tg_reply_pending else "typed"),
+        )
         _note_listening(self, "activity")  # typing to Era opens the window
 
         # === "abort mission", TYPED — FIRST, above everything ===
@@ -678,9 +845,20 @@ class EraLive(
         # restart Era to get out of one. Needs no session, no model and no
         # tool call, which is the whole point — see core/panic_stop.py.
         if self._is_abort_order(text):
+            from app.input_buffer import buffer_for
+
+            buffer_for(self).clear()
             self._note_user_utterance(text)
             self.ui.write_log(f"You: {text}")
             self.trigger_abort("typed", text)
+            return
+
+        from app.codemode_runtime import route as route_codemode
+
+        if route_codemode(self, text, getattr(self, "_input_envelope", None)):
+            note = getattr(self, "_note_user_utterance", None)
+            if callable(note):
+                note(text)
             return
 
         # "cancel that" / "no, I meant X" while something is running. BELOW the
@@ -707,6 +885,23 @@ class EraLive(
             return
 
         # === Voice switch, TYPED ===
+        from app.manual_presence import handle_presence_order
+
+        presence_reply = handle_presence_order(text)
+        if presence_reply is not None:
+            self._note_user_utterance(text)
+            self._tg_ack(presence_reply)
+            if not self._standby_active:
+                self.speak_dispatched(presence_reply)
+            self.ui.write_log(f"SYS: {presence_reply}")
+            return
+        standby_order = getattr(self, "_handle_auto_standby_order", lambda text: None)(text)
+        if standby_order is not None:
+            self._tg_ack(standby_order)
+            if not self._standby_active:
+                self.speak_dispatched(standby_order)
+            return
+
         # This must be reachable without the model, because the situation it
         # exists for is exactly the one where the model is unreachable: during a
         # quota outage there is no session, and the mic dies with it, so a
@@ -714,8 +909,13 @@ class EraLive(
         # here, ahead of everything else, it works with Era fully offline.
         voice_target = _voice_switch_intent(text)
         if voice_target is not None:
+            retrying_cloud = voice_target == "gemini" and self.local_mode_active()
             self._apply_voice_switch(voice_target)
-            self._tg_ack("Voice switch applied, sir.")
+            self._tg_ack(
+                "Gemini isn't connected; trying the cloud voice again, sir."
+                if retrying_cloud
+                else "Voice switch applied, sir."
+            )
             return
 
         # === "switch to Claude" / "use your backup brain", TYPED ===
@@ -759,9 +959,7 @@ class EraLive(
                     self._note_user_utterance(text)
                     self._last_interaction_timestamp = time.time()
                     submit_coroutine(
-                        self.session.send_realtime_input(
-                            text=build_resume_note(turn.spoken, turn.remainder)
-                        ),
+                        send_model_text(self, build_resume_note(turn.spoken, turn.remainder)),
                         self._loop,
                     )
                     return
@@ -861,12 +1059,22 @@ class EraLive(
             # answers typed and Telegram orders instead of "session isn't up".
             if self.local_submit_text(text):
                 return
+            from app.input_buffer import buffer_for
+
+            owner = getattr(self, "_input_envelope", None)
+            queued = owner is not None and buffer_for(self).put(owner)
             self.ui.write_log(
-                "SYS: No active model connection. Era is reconnecting; try again shortly."
+                "SYS: Connection interrupted. Your request is buffered for reconnection."
+                if queued
+                else "SYS: Request could not be buffered. Please resend after reconnection."
             )
             if self._tg_reply_pending:
                 self._tg_reply_pending = False
-                _tg_notify("I'm not fully awake yet — my session isn't up. Try again shortly.")
+                _tg_notify(
+                    "Your request is buffered while I reconnect."
+                    if queued
+                    else "Please resend after reconnection; this request could not be buffered."
+                )
             return
 
         # A typed "take a break" / "go offline" is a STANDBY ORDER, not conversation.
@@ -943,7 +1151,7 @@ class EraLive(
             print(f"[PASTE] Classified typed input as {paste_kind}; asking user what to do.")
             if self._loop and self.session:
                 submit_coroutine(
-                    self.session.send_realtime_input(text=wrapped),
+                    send_model_text(self, wrapped),
                     self._loop,
                 )
             else:
@@ -986,7 +1194,7 @@ class EraLive(
                 self._last_interaction_timestamp = time.time()
                 wrapped = _build_paste_clarify_instruction("UNCLEAR", text)
                 submit_coroutine(
-                    self.session.send_realtime_input(text=wrapped),
+                    send_model_text(self, wrapped),
                     self._loop,
                 )
                 return
@@ -1013,9 +1221,9 @@ class EraLive(
             print(f"[Memory] [WARN] feedback detection skipped: {_fb_err}")
 
         raw_path = _extract_raw_path(text)
-        if raw_path and not _is_bare_path_paste(text, raw_path):
-            # Explicit instruction attached to the path ("open D:\foo",
-            # "delete D:\foo") — act immediately, same as before.
+        if raw_path and _is_path_open_request(text, raw_path):
+            # Only a standalone open request uses this read-only shortcut.
+            # Rename/delete and compound instructions retain normal tool gates.
             loop = self._loop
             if loop and loop.is_running():
                 result = file_controller(
@@ -1091,7 +1299,7 @@ class EraLive(
                     )
 
         if self._loop and self._loop.is_running():
-            submit_coroutine(self.session.send_realtime_input(text=note), self._loop)
+            submit_coroutine(send_model_text(self, note, internal=True), self._loop)
 
     def _on_browser_mic_toggle(self, active: Any = None):
         # Prefer an ABSOLUTE state from the UI when it sends one ("active": bool).
@@ -1134,6 +1342,15 @@ class EraLive(
             return  # loading; this switch re-runs itself once George can speak
 
         label = MODE_LABELS[resolved]
+        if (
+            resolved == MODE_GEMINI_AUDIO
+            and getattr(self, "request_gemini_reconnect", lambda: False)()
+        ):
+            VOICE_CFG.set_mode(resolved)
+            self._tts_primary_retry_at = 0.0
+            self._tts_primary_mode = ""
+            self.ui.write_log("SYS: Gemini is not connected; retrying the cloud voice.")
+            return
         already_active = VOICE_CFG.mode == resolved
         if already_active:
             # Era is already speaking in this voice — but she may be here only via
@@ -1339,7 +1556,22 @@ class EraLive(
             # see nothing at all. Mirror here instead — _tg_ack disarms, so the
             # reply lands exactly once whichever path speaks it.
             spoken = _unwrap_say_exactly(text)
-            self._tg_ack(spoken)
+            owner = current_input.get()
+            loop = self._loop
+            import era_telegram
+
+            owned = (
+                owner is not None
+                and owner.source == "telegram"
+                and loop is not None
+                and loop.is_running()
+                and era_telegram.enabled()
+            )
+            if owned:
+                if getattr(self, "_input_envelope", None) == owner:
+                    self._tg_reply_pending = False
+            else:
+                self._tg_ack(spoken)
             # On this branch speak() IS the final utterance — nothing downstream
             # produces a turn_complete — so this is where a question of Era's has
             # to arm the awaiting-reply window, exactly as _receive_audio does for
@@ -1352,14 +1584,76 @@ class EraLive(
                 # are not thread-safe.
                 # `spoken`, not `text`: a _say_exactly() wrapper is an instruction
                 # to Gemini, and Fish read it aloud word for word (2026-10-09).
-                loop.call_soon_threadsafe(self.speech_out.say, spoken)
+                if owned:
+                    loop.call_soon_threadsafe(self._begin_owned_speech, owner, spoken)
+                else:
+                    loop.call_soon_threadsafe(self.speech_out.say, spoken)
             else:
                 self.speech_out.say(spoken)
             return
 
         if not self._loop or not self.session:
             return
-        submit_coroutine(self.session.send_realtime_input(text=text), self._loop)
+        submit_coroutine(send_model_text(self, text), self._loop)
+
+    def _begin_owned_speech(self, owner: InputEnvelope, spoken: str) -> None:
+        if getattr(self, "_input_envelope", None) != owner:
+            log_event(
+                main_logger,
+                "speech.cancelled",
+                "INFO",
+                request_id=owner.id,
+                reason="superseded input",
+            )
+            return
+        if self._prepare_owned_speech(owner):
+            self.speech_out.say(spoken, owner=owner)
+        else:
+            # Preserve later utterances from the same command. The original
+            # mirror also acknowledged only its first direct utterance.
+            self.speech_out.say(spoken)
+
+    def _prepare_owned_speech(self, owner: InputEnvelope, *, reuse: bool = False) -> bool:
+        import era_telegram
+        from core.telegram_reply import TelegramReply
+        from core.telegram_speech import TelegramSpeech
+
+        if getattr(self, "_input_envelope", None) != owner or not era_telegram.enabled():
+            return False
+        bridge = getattr(self, "_telegram_speech", None)
+        if bridge is None:
+
+            def report(event):
+                log_event(main_logger, "telegram.delivery", "INFO", **event)
+                if event["stage"] == "reply" and event["status"] not in (
+                    "sent",
+                    "empty",
+                    "cancelled",
+                ):
+                    self.ui.write_log(
+                        "SYS: Telegram reply delivery was not confirmed. See delivery logs."
+                    )
+                if (
+                    event["stage"] == "reply"
+                    and event["status"] == "cancelled"
+                    and event["reason"]
+                    in (
+                        "playback_failed",
+                        "reply_capacity_or_closed",
+                    )
+                ):
+                    self.ui.write_log(f"SYS: Live Telegram reply cancelled ({event['reason']}).")
+                    latest = getattr(self, "_input_envelope", None)
+                    if latest is not None and latest.id == event["request_id"]:
+                        _tg_notify(
+                            "I couldn't finish the live reply text. Please ask me to repeat it if needed."
+                        )
+
+            bridge = self._telegram_speech = TelegramSpeech(
+                lambda envelope: TelegramReply(envelope, era_telegram._chat_id(), reporter=report)
+            )
+            bridge.select(owner)
+        return bridge.begin(owner, reuse=reuse)
 
     def _era_busy(self) -> bool:
         state = str(self.session_manager.get_state_snapshot().get("current_state", ""))
@@ -1426,7 +1720,7 @@ class EraLive(
             f"({avoid}) and never explain how to wake you. Do not ask a question. "
             "Do not use any tool.]"
         )
-        submit_coroutine(self.session.send_realtime_input(text=note), self._loop)
+        submit_coroutine(send_model_text(self, note, internal=True), self._loop)
 
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
@@ -1501,6 +1795,29 @@ class EraLive(
         local synthesis is just a new source of the same staleness.
         """
         count = 0
+        tracker = getattr(self, "_model_reply_ownership", None)
+        if tracker is not None:
+            loop = getattr(self, "_loop", None)
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if loop is not None and loop.is_running() and current_loop is not loop:
+                loop.call_soon_threadsafe(tracker.invalidate, "audio_flush")
+            else:
+                tracker.invalidate("audio_flush")
+        bridge = getattr(self, "_telegram_speech", None)
+        if bridge is not None:
+            loop = getattr(self, "_loop", None)
+            if loop is not None and loop.is_running():
+                try:
+                    current_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    current_loop = None
+                if current_loop is loop:
+                    bridge.select(None)
+                else:
+                    loop.call_soon_threadsafe(bridge.select, None)
         try:
             count += self.speech_out.interrupt()
         except Exception:
@@ -1630,7 +1947,7 @@ class EraLive(
             task.cancel()
 
     def enter_standby(self, network_failure: bool = False):
-        if self._standby_active:
+        if self._standby_active or getattr(self, "_standby_entering", False):
             return
 
         # Stop any existing listener
@@ -1674,6 +1991,7 @@ class EraLive(
                 # --- NOW activate standby — after the notification has played ---
                 self._standby_entering = False
                 self._standby_active = True
+                self._prepare_standby_wake_input()
                 self.session_manager.wake_word_active = False
                 self.session_manager.transition_to(EraState.STANDBY, reason="user_standby_request")
 
@@ -1713,6 +2031,7 @@ class EraLive(
                 # Ensure standby is activated even on error
                 self._standby_entering = False
                 self._standby_active = True
+                self._prepare_standby_wake_input()
             finally:
                 self.ui.set_mute(True)
 
@@ -1725,11 +2044,26 @@ class EraLive(
         else:
             self._standby_entering = False
             self._standby_active = True
+            self._prepare_standby_wake_input()
             self.session_manager.wake_word_active = False
             self.session_manager.transition_to(EraState.STANDBY, reason="user_standby_request")
             self.ui.set_mute(True)
 
     async def run(self):
+        from app.telegram_call_runtime import create_service
+
+        self._loop = asyncio.get_running_loop()
+        self._telegram_calls = await create_service()
+        from app.manual_presence import start_local_presence
+
+        presence_watcher = await asyncio.to_thread(start_local_presence, self)
+        try:
+            await self._run_local_session()
+        finally:
+            await asyncio.to_thread(presence_watcher.stop)
+            await self._telegram_calls.close()
+
+    async def _run_local_session(self):
         # Publish the loop handle IMMEDIATELY, not on the first successful
         # connect. Every cross-thread caller (speak, _on_text_command, the
         # Telegram bridge, the wake listener) routes work through self._loop,
@@ -1817,6 +2151,10 @@ class EraLive(
                 # before _build_config so the failure path can tell a rejected
                 # handle (drop it, retry now) from a genuinely bad config
                 # (retrying is futile) — they report the same INVALID_ARGUMENT.
+                if getattr(self, "_fresh_session_requested", False):
+                    self.session_manager.clear_token()
+                    self.session_manager.save_to_disk()
+                    self._fresh_session_requested = False
                 resumed_with_handle = self.session_manager.get_resumption_token() is not None
                 config = self._build_config()
                 # Re-read credentials on each attempt so an auth fix takes
@@ -1908,6 +2246,9 @@ class EraLive(
 
                     # ── Session Manager: restore state after reconnect ──
                     self.session_manager.restore_after_reconnect()
+                    from app.input_buffer import buffer_for, start_drain
+
+                    start_drain(self)
 
                     # ── UX: first boot audible greeting; routine rotations silent;
                     # a genuine outage (quota cooldown / auth fix / network blip)
@@ -1916,6 +2257,9 @@ class EraLive(
                     if self._standby_active:
                         self.ui.set_state("STANDBY")
                         print("[era] [SILENT] Reconnected in background (standby).")
+                    elif buffer_for(self).items:
+                        self._has_completed_initial_boot = True
+                        self.ui.set_state("LISTENING")
                     elif not self._has_completed_initial_boot:
                         self._has_completed_initial_boot = True
                         self.ui.set_state("LISTENING")
@@ -1937,6 +2281,15 @@ class EraLive(
                         else:
                             print("[era] [SILENT] Reconnected seamlessly.")
 
+                    # Reports Era owes the owner (a finished/failed development
+                    # job, ...) are spoken from a durable on-disk queue by a pump
+                    # that outlives sessions: whatever ended while she was
+                    # disconnected is delivered now. Idempotent.
+                    try:
+                        start_report_pump(self)
+                    except Exception as pump_err:
+                        print(f"[era] [WARN] report pump not started: {pump_err}")
+
                     # ── Audio-engine re-enumeration (the only safe moment) ──
                     # PortAudio freezes its device list at Pa_Initialize, so a
                     # device first connected after Era started is invisible to
@@ -1947,9 +2300,19 @@ class EraLive(
                     # so nothing is open. No-op unless a pinned device is
                     # connected and genuinely missing from the engine's list.
                     try:
+                        from app.era_live.audio_capture import close_retained_input
+                        from core.voice_output import generation as _voice_output_generation
                         from core.voice_output import refresh_between_sessions
 
-                        refresh_between_sessions()
+                        if refresh_between_sessions(
+                            before_refresh=lambda: close_retained_input(self),
+                            force=(
+                                getattr(self, "_voice_device_refresh_required", False)
+                                and getattr(self, "_voice_device_refresh_generation", None)
+                                == _voice_output_generation()
+                            ),
+                        ):
+                            self._voice_device_refresh_required = False
                     except Exception as _vo_err:
                         print(f"[era] [AUDIO] device refresh skipped: {_vo_err}")
 
@@ -2419,7 +2782,9 @@ def remote_voice_input():
         print("[BRIDGE] denied /remote_voice: missing or bad X-Era-Token")
         return {"status": "denied"}, 403
 
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or not isinstance(payload.get("command", ""), str):
+        return {"status": "invalid", "reason": "Expected a JSON object with command text"}, 400
     text_command = payload.get("command", "").strip()
 
     log_event(
@@ -2438,12 +2803,14 @@ def remote_voice_input():
             # Check if it's not a wake-up command to prevent duplicate notifications
             if not active_era_instance._standby_active:
                 submit_coroutine(
-                    send_era_notification_async("Remote Task Executed", f"Command: {text_command}"),
+                    send_era_notification_async(
+                        "Remote command received", f"Command: {text_command}"
+                    ),
                     active_era_instance._loop,
                 )
 
-        active_era_instance._on_text_command(text_command)
-        return {"status": "success", "executed": text_command}, 200
+        active_era_instance._on_text_command(text_command, source="remote")
+        return {"status": "accepted", "queued": text_command}, 202
 
     return {"status": "ignored", "reason": "Missing text or engine offline"}, 400
 
@@ -2731,6 +3098,39 @@ def main():
     ws_server = WebSocketServer(port=_hud_port(), port_fallback=(10 if ui_mode == "browser" else 0))
     ws_server.meta = {"live_model": LIVE_MODEL, "ui_mode": ui_mode}
     ws_server.engine_provider = lambda: active_era_instance
+    # Read-only telemetry is process-scoped, independent of voice reconnects.
+    import atexit
+
+    from core.device_awareness import get_device_awareness
+    from core.file_awareness import get_file_awareness
+    from core.foreground_awareness import get_foreground_awareness
+    from core.network_awareness import get_network_awareness
+    from core.process_lifecycle import get_process_lifecycle
+    from core.system_awareness import get_media_awareness
+
+    media_awareness = get_media_awareness()
+    media_awareness.start()
+    atexit.register(media_awareness.stop)
+    foreground_awareness = get_foreground_awareness()
+    foreground_awareness.start()
+    atexit.register(foreground_awareness.stop)
+    process_lifecycle = get_process_lifecycle()
+    process_lifecycle.start()
+    atexit.register(process_lifecycle.stop)
+    network_awareness = get_network_awareness()
+    network_awareness.start()
+    atexit.register(network_awareness.stop)
+    file_awareness = get_file_awareness()
+    file_awareness.start()
+    atexit.register(file_awareness.stop)
+    device_awareness = get_device_awareness()
+    device_awareness.start()
+    atexit.register(device_awareness.stop)
+    from core.pnp_awareness import get_pnp_awareness
+
+    pnp_awareness = get_pnp_awareness()
+    pnp_awareness.start()
+    atexit.register(pnp_awareness.stop)
     ws_server.start()
     ws_server.ready.wait(15)
     if ws_server.bound_port:
@@ -2761,6 +3161,13 @@ def main():
     hud.attach(ws_server.broadcast)
 
     # ── HUD actions: resolve the engine at CALL time (crash-rebuild safe) ──
+    def _hud_approval(confirmation_id: str, created_at: float, decision: str) -> bool:
+        from app.hud.approval import submit_decision
+
+        return submit_decision(active_era_instance, confirmation_id, created_at, decision)
+
+    ws_server._on_approval = _hud_approval
+
     def _hud_interrupt() -> None:
         era = active_era_instance
         loop = getattr(era, "_loop", None)
@@ -2770,9 +3177,8 @@ def main():
     def _hud_cancel_task(cid: str = "") -> bool:
         """Cancel a running task from the HUD: the row's X, or the global button.
 
-        Deliberately NOT routed through _on_command (the way the approval
-        buttons send a literal "yes"). An approval belongs to the model, so it
-        goes through the model. A cancel has to work precisely when the model's
+        Deliberately NOT routed through _on_command. HUD approvals and task
+        cancellation use exact backend decisions. A cancel must work when the model's
         channel is not being read -- the receive loop is suspended for the
         duration of the tool call -- so it takes its own path, like interrupt.
 
@@ -2822,6 +3228,17 @@ def main():
 
     ws_server._on_interrupt = _hud_interrupt
     ws_server._on_cancel_task = _hud_cancel_task
+
+    def _hud_telegram_call(action: str, generation: str = "") -> None:
+        from app.telegram_call_runtime import request_control
+
+        if not request_control(active_era_instance, action, generation):
+            hud.error(
+                "Telegram call controls are unavailable while Era is starting.",
+                where="telegram_call",
+            )
+
+    ws_server._on_telegram_call = _hud_telegram_call
     ws_server._on_shutdown = _hud_shutdown
     ws_server._on_restart = lambda: _hud_shutdown(relaunch=True)
     if ui_mode == "browser":
@@ -2890,19 +3307,20 @@ def main():
                 import era_telegram
 
                 def _on_telegram_command(text: str):
-                    # Arm the mirror BEFORE dispatching: _on_text_command hands the
-                    # order to the event loop and returns immediately, so the reply
-                    # can arrive before we'd get another chance to set this.
-                    era._tg_reply_pending = True
-                    try:
-                        era._on_text_command(text)
-                    except Exception:
-                        # The poller reports the failure itself; just don't leave the
-                        # flag armed or the next local turn gets mirrored to the chat.
-                        era._tg_reply_pending = False
-                        raise
+                    # Capture origin now; acceptance and reply ownership change
+                    # together on the Era loop, not on this polling thread.
+                    live = active_era_instance
+                    if live is not None:
+                        live._on_text_command(text, source="telegram")
 
-                if era_telegram.start(_on_telegram_command):
+                if era_telegram.enabled():
+                    from core.telegram_approvals import TelegramApprovals
+
+                    approvals = TelegramApprovals(get_shared_store(), lambda: active_era_instance)
+                    import atexit
+
+                    atexit.register(approvals.close)
+                    era_telegram.start(_on_telegram_command, on_callback=approvals.handle_callback)
                     print("[TG] two-way Telegram bridge started.")
             except Exception as e:
                 print(f"[TG] Telegram bridge failed to start: {e}")

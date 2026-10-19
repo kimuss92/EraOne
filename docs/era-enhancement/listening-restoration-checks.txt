@@ -1,0 +1,9 @@
+........................................................................ [ 63%]
+..........................................                               [100%]
+============================== warnings summary ===============================
+..\..\..\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+114 passed, 1 warning in 18.78s

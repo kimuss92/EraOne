@@ -1,0 +1,57 @@
+FFFF....F                                                                [100%]
+================================== FAILURES ===================================
+____________ test_concurrent_identical_submissions_create_one_job _____________
+tools\test_task_deduplication.py:24: in test_concurrent_identical_submissions_create_one_job
+    ids = list(pool.map(lambda _: submit_or_existing(queue, "review project"), range(32)))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\concurrent\futures\_base.py:645: in result_iterator
+    yield _result_or_cancel(fs.pop())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\concurrent\futures\_base.py:312: in _result_or_cancel
+    return fut.result(timeout)
+           ^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\concurrent\futures\_base.py:447: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\concurrent\futures\_base.py:396: in __get_result
+    raise self._exception
+C:\Python314\Lib\concurrent\futures\thread.py:86: in run
+    result = ctx.run(self.task)
+             ^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\concurrent\futures\thread.py:73: in run
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+tools\test_task_deduplication.py:24: in <lambda>
+    ids = list(pool.map(lambda _: submit_or_existing(queue, "review project"), range(32)))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tools\test_task_deduplication.py:13: in submit_or_existing
+    from agent.task_queue import DuplicateTaskError
+E   ImportError: cannot import name 'DuplicateTaskError' from 'agent.task_queue' (C:\Users\nesri\OneDrive\Documents\EraOne\agent\task_queue.py)
+___________ test_active_job_reports_existing_id[TaskStatus.RUNNING] ___________
+tools\test_task_deduplication.py:31: in test_active_job_reports_existing_id
+    from agent.task_queue import DuplicateTaskError
+E   ImportError: cannot import name 'DuplicateTaskError' from 'agent.task_queue' (C:\Users\nesri\OneDrive\Documents\EraOne\agent\task_queue.py)
+______ test_active_job_reports_existing_id[TaskStatus.AWAITING_APPROVAL] ______
+tools\test_task_deduplication.py:31: in test_active_job_reports_existing_id
+    from agent.task_queue import DuplicateTaskError
+E   ImportError: cannot import name 'DuplicateTaskError' from 'agent.task_queue' (C:\Users\nesri\OneDrive\Documents\EraOne\agent\task_queue.py)
+___________ test_cancelled_but_still_executing_job_blocks_duplicate ___________
+tools\test_task_deduplication.py:43: in test_cancelled_but_still_executing_job_blocks_duplicate
+    from agent.task_queue import DuplicateTaskError
+E   ImportError: cannot import name 'DuplicateTaskError' from 'agent.task_queue' (C:\Users\nesri\OneDrive\Documents\EraOne\agent\task_queue.py)
+________________ test_recovered_pending_job_prevents_duplicate ________________
+tools\test_task_deduplication.py:74: in test_recovered_pending_job_prevents_duplicate
+    assert submit_or_existing(recovered, "review project") == first
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tools\test_task_deduplication.py:13: in submit_or_existing
+    from agent.task_queue import DuplicateTaskError
+E   ImportError: cannot import name 'DuplicateTaskError' from 'agent.task_queue' (C:\Users\nesri\OneDrive\Documents\EraOne\agent\task_queue.py)
+---------------------------- Captured stdout call -----------------------------
+[TaskQueue] \U0001f4e5 Task queued: [242c328115a14ac781331f6ef8a74078]
+=========================== short test summary info ===========================
+FAILED tools/test_task_deduplication.py::test_concurrent_identical_submissions_create_one_job
+FAILED tools/test_task_deduplication.py::test_active_job_reports_existing_id[TaskStatus.RUNNING]
+FAILED tools/test_task_deduplication.py::test_active_job_reports_existing_id[TaskStatus.AWAITING_APPROVAL]
+FAILED tools/test_task_deduplication.py::test_cancelled_but_still_executing_job_blocks_duplicate
+FAILED tools/test_task_deduplication.py::test_recovered_pending_job_prevents_duplicate
+5 failed, 4 passed in 1.52s

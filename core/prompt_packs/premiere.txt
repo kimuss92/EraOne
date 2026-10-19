@@ -1,0 +1,6 @@
+EXPORTING RULE: Export/render a sequence → you MUST use the export_sequence tool (renders directly inside Premiere Pro).
+  ⛔ DO NOT use 'format', 'quality', or 'resolution' parameters.
+  ⛔ DO NOT use 'add_to_render_queue' (launches Media Encoder and times out).
+  - MANDATORY: 'presetPath' set exactly to:
+    "C:\\Users\\nesri\\OneDrive\\Documents\\Adobe\\Adobe Media Encoder\\26.0\\Presets\\h264_high.epr"
+  - DYNAMIC OUTPUT PATH: never hard-code a directory. Read the sequence's 'mediaPath' or 'treePath' from the project metadata, take its parent folder, and save the exported .mp4 there.

@@ -49,8 +49,72 @@ class FakeRec:
 
 @pytest.fixture(autouse=True)
 def _config(monkeypatch, tmp_path):
-    monkeypatch.setattr(attention, "_VOICE_JSON", tmp_path / "voice.json")
+    # Historical boundary cases intentionally exercise a configured 45s window.
+    config_path = tmp_path / "voice.json"
+    config_path.write_text(json.dumps({"listening": {"attention_window_s": 45}}))
+    monkeypatch.setattr(attention, "_VOICE_JSON", config_path)
     monkeypatch.setattr(attention, "_names", lambda: {"era", "shazam"})
+
+
+def test_explicit_long_reply_leaves_a_full_two_minute_followup_window(monkeypatch):
+    monkeypatch.setattr(attention, "get_listening_config", lambda: dict(attention.DEFAULTS))
+    clock = Clock()
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    state.note_activity(explicit=True)
+    clock.t += 110  # The response must not consume the user's follow-up interval.
+    state.era_finished_speaking(interrupted=False)
+    clock.t += 119
+    assert state.window_open()
+    clock.t += 2
+    assert not state.window_open()
+
+
+def test_always_listening_setting_passes_first_request_after_idle_with_media(monkeypatch, tmp_path):
+    config_path = tmp_path / "voice.json"
+    config_path.write_text(json.dumps({"listening": {"attention_window_s": 0}}))
+    monkeypatch.setattr(attention, "_VOICE_JSON", config_path)
+    clock = Clock()
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    calls = []
+
+    def recognizer():
+        calls.append(True)
+        return FakeRec("[unk]")
+
+    gate = AttentionGate(state, recognizer)
+    clock.t += 3600
+    frame = _speech()
+    assert gate.feed(frame) == [frame]
+    assert calls == []  # No name recognition delay or name-related loss.
+    state.era_finished_speaking(interrupted=False)
+    assert state.echo_hold_active()  # Turning off name gating retains echo protection.
+
+
+def test_only_one_reply_can_refresh_an_explicit_conversation_anchor():
+    clock = Clock()
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    state.note_activity(explicit=True)
+    clock.t += 20
+    state.era_finished_speaking(interrupted=False)
+    clock.t += 40
+    state.note_activity()  # Possible background speech must not renew the anchor.
+    state.era_finished_speaking(interrupted=False)
+    clock.t += 6
+    assert not state.window_open()  # 46s since the one explicit reply finished.
+
+
+def test_named_transcript_anchors_an_already_open_conversation():
+    clock = Clock()
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 20
+    state.note_transcript("Era, tell me a story.")
+    clock.t += 40
+    state.era_finished_speaking(interrupted=False)
+    clock.t += 40
+    assert state.window_open()
+    state.note_transcript("Someone else is speaking.")
+    clock.t += 6
+    assert not state.window_open()
 
 
 def _closed_gate(text: str, after: int = 3):
@@ -283,6 +347,55 @@ class ConfRec(FakeRec):
         return json.dumps({"result": [{"word": w, "conf": c} for w, c in self.words]})
 
 
+def test_ignored_media_cannot_keep_listening_closed_after_playback_stops():
+    clock = Clock()
+    media = [True]
+    state = ListeningState(clock=clock, media_active=lambda: media[0])
+    clock.t += 60
+    gate = AttentionGate(state, lambda: ConfRec([("call", 1.0), ("tomorrow", 1.0)]))
+    gate.feed(_speech())
+    gate.feed(_speech())
+    assert gate.mode == attention.DROPPING
+    media[0] = False
+    frame = _speech()
+    assert gate.feed(frame) == [frame]
+    assert gate.mode == attention.PASSING
+
+
+def test_continuous_ignored_audio_rearms_the_name_check_without_silence():
+    clock = Clock()
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60
+    verdicts = iter([[("call", 1.0), ("tomorrow", 1.0)], [("era", 0.99)]])
+    gate = AttentionGate(state, lambda: ConfRec(next(verdicts)))
+    # First rejected background phrase, without waiting for any quiet frame.
+    gate.feed(_speech())
+    gate.feed(_speech())
+    assert gate.mode == attention.DROPPING
+    for _ in range(30):
+        if gate.mode == attention.IDLE:
+            break
+        assert all(not any(frame) for frame in gate.feed(_speech()))
+    assert gate.mode == attention.IDLE
+    gate.feed(_speech())
+    accepted = gate.feed(_speech())
+    assert any(any(frame) for frame in accepted)
+    assert gate.mode == attention.PASSING
+
+
+def test_explicit_reopen_during_name_check_does_not_release_held_media():
+    clock = Clock()
+    state = ListeningState(clock=clock, media_active=lambda: True)
+    clock.t += 60
+    gate = AttentionGate(state, lambda: ConfRec([("call", 1.0), ("tomorrow", 1.0)]))
+    previous = _speech()
+    gate.feed(previous)
+    assert gate.mode == attention.CHECKING
+    new = bytes(2048)
+    assert gate.feed(new, keep_open=True) == [new]
+    assert gate.mode == attention.PASSING
+
+
 def test_a_near_miss_heard_as_era_at_low_confidence_is_not_her_name():
     """Typical near-misses score 0.51-0.67 ("Error...", "Errors"). One reading of
     "Error in the report" reached 0.87: at the 0.80 bar that rare case passes, a
@@ -411,7 +524,7 @@ def test_with_music_her_name_opens_a_normal_conversation_but_replies_do_not():
     """Live 2026-10-10, twice: first a reply to a lyric re-opened the window for
     the next lyric (a loop); then requiring her name on EVERY sentence made her
     deaf mid-conversation. Now: a deliberate address opens 45 s, her replies
-    alone never extend it while media plays."""
+    unrelated replies never extend it while media plays."""
     clock = Clock()
     playing = [True]
     s = ListeningState(clock=clock, media_active=lambda: playing[0])
@@ -423,7 +536,9 @@ def test_with_music_her_name_opens_a_normal_conversation_but_replies_do_not():
     s.era_finished_speaking(interrupted=False)
     assert s.window_open(), "follow-ups within 45 s of addressing her need no name"
     clock.t += 20
-    assert not s.window_open(), "45 s after the last deliberate address it closes"
+    assert s.window_open(), "the explicit reply leaves a full configured follow-up window"
+    clock.t += 26
+    assert not s.window_open(), "45 s after the explicit reply finishes it closes"
     playing[0] = False
     s.era_finished_speaking(interrupted=False)
     assert s.window_open(), "no music: her replies keep the conversation open as before"

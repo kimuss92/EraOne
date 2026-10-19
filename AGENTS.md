@@ -1,5 +1,17 @@
 # Project Context Instructions
 
+## Shared work log (read first, write last)
+
+Two agents work on this repo — Claude Code and ChatGPT (CodeMode and other work).
+To stay in sync:
+
+1. **Before starting**, read the top entries of `handoff.md` (newest first) and the
+   "In progress" table of `TODO.md`. They record what the other agent changed,
+   what is verified, what is still owed, and the rules to respect.
+2. **After each fix or improvement**, add an entry at the top of `handoff.md`
+   (under "Phase 0"): date · who · title, then what was wrong, what changed (files),
+   how it was verified, and what is NOT yet proven. Add owed live tests to `TODO.md`.
+
 ## Knowledge Graph
 
 This project has a persistent knowledge graph at `graphify-out/` with 3699 nodes and 7944 edges.

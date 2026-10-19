@@ -9,6 +9,7 @@ device through drops, flapping and total loss with no audio hardware.
 
 import asyncio
 import random
+import threading
 import types
 
 import pytest
@@ -83,16 +84,46 @@ def test_healthy_write():
     dev = FakeDevice()
     out = ResilientOutputStream(dev.opener, sleep=_nosleep)
     assert out.open()
-    assert _run(out.write(b"a"))
-    assert dev.played == [b"a"]
+    assert _run(out.write(b"aa"))
+    assert dev.played == [b"aa"]
+
+
+def test_device_buffer_tail_is_pending_after_write_until_latency_elapses():
+    clock = Clock()
+    dev = FakeDevice()
+
+    def opener(device):
+        stream = dev.opener(device)
+        stream.latency = 0.35
+        return stream
+
+    output = ResilientOutputStream(opener, clock=clock)
+    assert output.open()
+    assert not output.playback_pending
+    assert _run(output.write(b"\x01\x00" * 32))
+    assert output.playback_pending
+    clock.t += 0.2
+    assert output.playback_pending
+    clock.t += 0.16
+    assert not output.playback_pending
+    output.close()
+
+
+def test_invalid_pcm_does_not_extend_device_buffer_tail():
+    dev = FakeDevice()
+    output = ResilientOutputStream(dev.opener)
+    assert output.open()
+    assert not _run(output.write(b"\x01"))
+    assert not output.playback_pending
+    output.close()
 
 
 def test_mid_stream_drop_reopens_and_replays_same_chunk():
     dev = FakeDevice(fail_writes=1)
     out = ResilientOutputStream(dev.opener, sleep=_nosleep)
     out.open()
-    assert _run(out.write(b"a")) is True  # no raise, chunk not lost
-    assert dev.played == [b"a"]
+    assert _run(out.write(b"aa")) is True  # no raise, chunk not lost
+    assert dev.played == [b"aa"]
     assert len(dev.opened_on) == 2
     assert not out.degraded
 
@@ -103,8 +134,8 @@ def test_endpoint_settling_is_ridden_out_inline():
     out = ResilientOutputStream(dev.opener, sleep=_nosleep)
     out.open()
     dev.fail_opens = 2
-    assert _run(out.write(b"a")) is True
-    assert dev.played == [b"a"]
+    assert _run(out.write(b"aa")) is True
+    assert dev.played == [b"aa"]
 
 
 def test_missing_glasses_fall_back_to_default():
@@ -126,14 +157,14 @@ def test_total_loss_degrades_then_recovers_with_backoff():
         # While inside the backoff window, writes are dropped without probing.
         opens_before = dev.fail_opens
         for _ in range(50):
-            assert await out.write(b"x") is False
+            assert await out.write(b"xx") is False
         assert dev.fail_opens == opens_before
         # Backoff grows 1s → 2s → 4s → 8s (capped).
         gaps = []
         for _ in range(5):
             prev = out._next_retry_at
             clock.t = out._next_retry_at
-            assert await out.write(b"x") is False
+            assert await out.write(b"xx") is False
             gaps.append(round(out._next_retry_at - prev, 3))
         assert gaps == [2.0, 4.0, 8.0, 8.0, 8.0]
         # Speaker comes back.
@@ -161,7 +192,7 @@ def test_intermittent_flapping_never_raises():
         results = []
         for i in range(2000):
             clock.t += 0.043  # Live audio cadence: ~43ms per chunk
-            results.append(await out.write(bytes([i % 256])))
+            results.append(await out.write(bytes([i % 256, 0])))
         return results
 
     results = _run(drive())  # the real assertion: nothing raised
@@ -177,7 +208,7 @@ def test_non_device_errors_are_not_swallowed():
             pass
 
         def write(self, _c):
-            raise ValueError("bug")
+            raise RuntimeError("bug")
 
         def stop(self):
             pass
@@ -187,8 +218,8 @@ def test_non_device_errors_are_not_swallowed():
 
     out = ResilientOutputStream(lambda _d: Boom(), sleep=_nosleep)
     out.open()
-    with pytest.raises(ValueError):
-        _run(out.write(b"a"))
+    with pytest.raises(RuntimeError):
+        _run(out.write(b"aa"))
 
 
 # ── Integration: the real _play_audio loop ────────────────────────────────
@@ -264,3 +295,274 @@ def test_play_audio_with_no_speaker_at_all_keeps_session_alive(monkeypatch):
     era = _run_play_audio(monkeypatch, dev, chunks)
     assert dev.played == []
     assert era.audio_in_queue.empty()  # drained, so turn-done logic still works
+    assert era.live_turn.snapshot().audio_played == 0
+
+
+def test_playback_evidence_counts_only_successful_writes(monkeypatch):
+    dev = FakeDevice()
+    chunks = [b"\x01\x00" * 32, b"\x02\x00" * 17]
+    era = _run_play_audio(monkeypatch, dev, chunks)
+    assert era.live_turn.snapshot().audio_played == sum(map(len, chunks))
+
+
+def test_empty_queue_does_not_finish_speech_while_driver_has_buffered_audio(monkeypatch):
+    import core.voice_output as vo
+
+    dev = FakeDevice()
+
+    def opener(**kwargs):
+        stream = dev.opener(kwargs["device"])
+        stream.latency = 0.4
+        return stream
+
+    monkeypatch.setattr(vo, "get_pin", lambda: None)
+    monkeypatch.setattr(vo, "resolve_output_index", lambda: None)
+    monkeypatch.setattr(vo, "pinned_device_connected", lambda: False)
+    monkeypatch.setattr(sd, "RawOutputStream", opener)
+
+    async def run():
+        era = _fake_era([b"\x01\x00" * 32])
+        era._turn_done_event.set()
+        task = asyncio.create_task(AudioIOMixin._play_audio(era))
+        try:
+            while not dev.played:
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.15)
+            assert era.audio_in_queue.empty()
+            assert era.speaking[-1] is True
+            assert era._turn_done_event.is_set()
+
+            async def finished():
+                while era._turn_done_event.is_set():
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(finished(), 1.0)
+            assert era.speaking[-1] is False
+        finally:
+            era._go_away_event.set()
+            await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_phrase_caption_uses_device_write_result(monkeypatch, available):
+    from app.era_live import audio
+    from app.hud.events import HudBus
+    from core.speech_frames import SpeechFrame, SpeechPhrase
+
+    bus = HudBus()
+    monkeypatch.setattr(audio, "hud", bus)
+    phrase = SpeechPhrase("test-phrase", "The complete spoken phrase.", "fish")
+    chunks = [
+        SpeechFrame(b"\x01\x00" * 32, phrase, first=True, last=False),
+        SpeechFrame(b"\x02\x00" * 32, phrase, first=False, last=True),
+    ]
+    dev = FakeDevice(fail_opens=0 if available else 10**6)
+    _run_play_audio(monkeypatch, dev, chunks)
+    events = [e for e in bus.recent_events() if e["type"].startswith("tts.phrase.")]
+    assert [e["type"] for e in events] == (
+        ["tts.phrase.started", "tts.phrase.completed"] if available else ["tts.phrase.failed"]
+    )
+    assert all(e["metadata"]["id"] == phrase.id for e in events)
+    assert bus.snapshot()["transcript"]["caption"]["state"] == (
+        "completed" if available else "failed"
+    )
+    copy = bus.snapshot()
+    copy["transcript"]["caption"]["text"] = "changed by caller"
+    assert bus.snapshot()["transcript"]["caption"]["text"] == phrase.text
+
+
+def test_incomplete_caption_is_closed_when_playback_stops(monkeypatch):
+    from app.era_live import audio
+    from app.hud.events import HudBus
+    from core.speech_frames import SpeechFrame, SpeechPhrase
+
+    bus = HudBus()
+    monkeypatch.setattr(audio, "hud", bus)
+    phrase = SpeechPhrase("cancelled", "The phrase was interrupted.", "fish")
+    frame = SpeechFrame(b"\x01\x00" * 32, phrase, first=True, last=False)
+    _run_play_audio(monkeypatch, FakeDevice(), [frame])
+    assert [e["type"] for e in bus.recent_events()] == [
+        "tts.phrase.started",
+        "tts.phrase.interrupted",
+    ]
+
+
+def test_resolved_return_adopts_device_when_initial_index_was_unknown():
+    dev = FakeDevice()
+    output = ResilientOutputStream(dev.opener, preferred_device=None)
+    assert output.open()
+    output.reclaim_resolved(4)
+    assert dev.opened_on == [None, 4]
+    assert output.preferred_device == 4 and not output.on_fallback
+    output.reclaim_resolved(4)
+    assert dev.opened_on == [None, 4]  # healthy route never reopens
+    output.close()
+
+
+def test_invalid_preferred_index_requests_refresh_without_disrupting_default(monkeypatch):
+    dev = FakeDevice()
+    monkeypatch.setattr(sd, "query_hostapis", lambda index: {"name": "MME"})
+    invalid = [True]
+
+    def opener(index):
+        if index == 4 and invalid[0]:
+            raise sd.PortAudioError("Invalid MME device ID", -9999, (0, 2, "out of range"))
+        return dev.opener(index)
+
+    output = ResilientOutputStream(opener, 4)
+    assert output.open()
+    assert output.requires_device_refresh and output.on_fallback
+    assert asyncio.run(output.write(b"default remains usable"))
+    invalid[0] = False
+    output.reclaim_resolved(4)
+    assert not output.requires_device_refresh and not output.on_fallback
+    output.close()
+
+
+def test_generic_device_fault_does_not_force_reenumeration():
+    dev = FakeDevice()
+    dev.missing.add(4)
+    output = ResilientOutputStream(dev.opener, 4)
+    assert output.open()
+    assert not output.requires_device_refresh
+    output.close()
+
+
+def test_invalid_visible_device_schedules_existing_bounded_idle_refresh(monkeypatch):
+    import core.voice_output as vo
+
+    dev = FakeDevice()
+    monkeypatch.setattr(sd, "query_hostapis", lambda index: {"name": "MME"})
+
+    def open_stream(**kwargs):
+        if kwargs["device"] == 4:
+            raise sd.PortAudioError("Invalid device ID", -9999, (0, 2, "out of range"))
+        return dev.opener(None)
+
+    claims = []
+    monkeypatch.setattr(sd, "RawOutputStream", open_stream)
+    monkeypatch.setattr(vo, "resolve_output_index", lambda: 4)
+    monkeypatch.setattr(vo, "get_pin", lambda: None)
+    monkeypatch.setattr(vo, "pinned_device_connected", lambda: True)
+    monkeypatch.setattr(vo, "needs_reenumeration", lambda: False)  # frozen index is still listed
+    monkeypatch.setattr(vo, "claim_reenumeration_retry", lambda: claims.append(True) or True)
+
+    async def run():
+        era = _fake_era([])
+        prepared = []
+        era.session_manager = types.SimpleNamespace(prepare_reconnect=lambda: prepared.append(True))
+        task = asyncio.create_task(AudioIOMixin._play_audio(era))
+        try:
+
+            async def scheduled():
+                while not getattr(era, "_voice_device_refresh_required", False):
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(scheduled(), 2)
+            assert era._renewal_deadline > 0 and prepared == [True] and claims == [True]
+            assert dev.opened_on == [None]  # refresh is scheduled, never done with streams open
+        finally:
+            era._go_away_event.set()
+            await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())
+
+
+def test_unavailable_resolved_target_keeps_default_open_and_backs_off():
+    dev = FakeDevice()
+    dev.missing.add(4)
+    clock = Clock()
+    output = ResilientOutputStream(dev.opener, None, clock=clock)
+    assert output.open()
+    default = output._stream
+    output.reclaim_resolved(4)
+    assert output._stream is default and output.on_fallback
+    retry_at = output._preferred_retry_at
+    output.reclaim_resolved(4)
+    output.reclaim_resolved(None)
+    assert output._preferred_retry_at == retry_at
+    assert asyncio.run(output.write(b"still speaking"))
+    dev.missing.clear()
+    clock.t = retry_at + 1
+    output.reclaim_resolved(4)
+    assert dev.opened_on == [None, 4] and not output.on_fallback
+    output.close()
+
+
+def test_playback_recovers_when_glasses_return_after_startup(monkeypatch):
+    import core.voice_output as vo
+
+    dev = FakeDevice()
+    answers = iter([None, 4])
+    monkeypatch.setattr(vo, "resolve_output_index", lambda: next(answers, 4))
+    monkeypatch.setattr(vo, "get_pin", lambda: None)
+    monkeypatch.setattr(vo, "needs_reenumeration", lambda: False)
+    monkeypatch.setattr(sd, "RawOutputStream", lambda **kw: dev.opener(kw["device"]))
+
+    async def run():
+        era = _fake_era([])
+        task = asyncio.create_task(AudioIOMixin._play_audio(era))
+        try:
+
+            async def recovered():
+                while 4 not in dev.opened_on:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(recovered(), 2)
+            assert dev.opened_on == [None, 4]
+        finally:
+            era._go_away_event.set()
+            await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())
+
+
+def test_old_recovery_probe_cannot_override_a_new_user_route(monkeypatch):
+    import core.voice_output as vo
+
+    dev = FakeDevice()
+    started = threading.Event()
+    release = threading.Event()
+    generation = [0]
+    calls = [0]
+
+    def resolve():
+        calls[0] += 1
+        if calls[0] == 1:
+            return None  # startup without glasses
+        if calls[0] == 2:
+            started.set()
+            assert release.wait(3)
+            return 4  # result from the old routing request
+        return 7  # the new explicit choice
+
+    monkeypatch.setattr(vo, "generation", lambda: generation[0])
+    monkeypatch.setattr(vo, "resolve_output_index", resolve)
+    monkeypatch.setattr(vo, "get_pin", lambda: None)
+    monkeypatch.setattr(vo, "needs_reenumeration", lambda: False)
+    monkeypatch.setattr(sd, "RawOutputStream", lambda **kw: dev.opener(kw["device"]))
+
+    async def wait_until(predicate):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+    async def run():
+        era = _fake_era([])
+        task = asyncio.create_task(AudioIOMixin._play_audio(era))
+        try:
+            await asyncio.wait_for(wait_until(started.is_set), 2)
+            generation[0] = 1
+            await asyncio.wait_for(wait_until(lambda: calls[0] >= 3), 2)
+            release.set()
+            era.audio_in_queue.put_nowait(b"\x01\x00" * 32)
+            await asyncio.wait_for(wait_until(lambda: bool(dev.played)), 2)
+            assert 4 not in dev.opened_on
+            assert dev.opened_on == [None, 7]
+        finally:
+            release.set()
+            era._go_away_event.set()
+            await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())

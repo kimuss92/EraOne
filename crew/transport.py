@@ -49,6 +49,7 @@ ERROR_TYPES = frozenset(
         "TransportDown",
         "MissingCredential",
         "BotError",
+        "Cancelled",
     }
 )
 

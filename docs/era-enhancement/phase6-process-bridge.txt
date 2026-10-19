@@ -1,0 +1,163 @@
+
+[fc_args_to_dict] Testing arg extraction...
+  PASS: normal args to dict
+  PASS: args=None -> {}
+  PASS: missing args attr -> {}
+
+[tool_result_to_response_payload] Testing payload conversion...
+  PASS: success payload has result
+  PASS: success payload has success=True
+  PASS: success payload has duration_ms
+  PASS: success payload has risk_level
+  PASS: success payload has verification_status
+  PASS: fail payload success=False
+  PASS: fail payload error_type
+  PASS: fail payload error
+  PASS: blocked payload risk_level
+  PASS: confirm payload risk_level
+  PASS: confirm payload requires_confirmation
+  PASS: unknown tool payload error_type
+  PASS: unknown tool payload contains name
+  PASS: payload carries risk_level
+  PASS: payload carries requires_confirmation
+  PASS: payload carries verified
+  PASS: payload carries verification_status
+  PASS: large data excluded from payload
+
+[build_function_response] Testing response builder...
+  PASS: normal fc id
+  PASS: normal fc name
+  PASS: normal response result
+  PASS: normal response success
+  PASS: no silent flag for normal tool
+  PASS: save_memory fc id
+  PASS: save_memory response result
+  PASS: save_memory silent flag
+
+[classify_action] Integration tests...
+  PASS: open_app is LOW
+  PASS: web_search is LOW
+  PASS: weather_report is LOW
+  PASS: send_message is HIGH
+  PASS: send_message requires confirmation
+  PASS: shutdown_era is LOW
+  PASS: shutdown_era does NOT require confirmation
+  PASS: close_era is LOW
+  PASS: close_era does NOT require confirmation
+  PASS: exit_era is LOW
+  PASS: exit_era does NOT require confirmation
+  PASS: enter_standby is LOW
+  PASS: save_memory is LOW
+  PASS: unknown tool defaults to LOW
+  PASS: browser search is LOW
+
+[ToolResult -> payload] Simulated _execute_tool_result outputs...
+  PASS: unknown tool payload error_type
+  PASS: unknown tool payload success=False
+  PASS: blocked payload risk_level
+  PASS: blocked payload success=False
+  PASS: confirm required error_type
+  PASS: confirm required risk_level
+  PASS: all expected payload keys present
+
+[Dangerous actions] Confirmation still required...
+  PASS: computer shutdown requires confirmation
+  PASS: computer restart requires confirmation
+  PASS: file delete requires confirmation
+  PASS: send message requires confirmation
+
+[Confirmation tools] Testing safety classification...
+  PASS: confirm_pending_confirmation is LOW
+  PASS: confirm_pending_confirmation no confirmation
+  PASS: cancel_pending_confirmation is LOW
+  PASS: cancel_pending_confirmation no confirmation
+
+[TOOL_DECLARATIONS] Verifying new tool declarations exist...
+  PASS: TOOL_DECLARATIONS contains confirm_pending_confirmation
+  PASS: TOOL_DECLARATIONS contains cancel_pending_confirmation
+  PASS: both confirmation tools declared in TOOL_DECLARATIONS
+
+[ConfirmationManager] Testing request_confirmation...
+  PASS: shutdown_era LOW returns True
+  PASS: send_message HIGH unconfirmed returns False
+  PASS: send_message HIGH confirmed returns True
+  PASS: LOW risk returns True
+
+[record_tool_result] Verifying second arg is always a dict...
+  PASS: second arg is dict for normal fc
+  PASS: second arg contains expected key
+  PASS: second arg is dict for args=None
+  PASS: second arg is dict for missing args
+
+[cancel_pending_confirmation] Testing honest cancellation...
+  PASS: cancel with no pending -> no pending msg
+  PASS: cancel with active pending clears
+  PASS: after clear -> no pending
+
+[shutdown_era] Testing duplicate guard...
+  PASS: first shutdown returns normal
+  PASS: second shutdown returns already in progress
+  PASS: shutdown_era remains LOW
+  PASS: shutdown_era no confirmation
+  PASS: computer shutdown still requires confirmation
+  PASS: computer restart still requires confirmation
+
+[_safe_preview_value] Testing safe value formatting...
+  PASS: safe preview empty
+  PASS: safe preview normal
+  PASS: safe preview long truncated
+  PASS: safe preview long ends with ...
+  PASS: safe preview password masked
+  PASS: safe preview token masked
+  PASS: safe preview secret masked
+
+[_build_suggested_confirmation_question] Testing confirmation preview...
+  PASS: success returns empty
+  PASS: blocked returns empty
+  PASS: default question
+  PASS: send_message preview contains platform
+  PASS: send_message preview contains receiver
+  PASS: send_message preview contains message
+  PASS: long message truncated
+  PASS: sensitive field not leaked
+  PASS: file_controller preview contains action
+  PASS: file_controller preview contains name
+  PASS: computer_settings preview contains action
+  PASS: forget_memory preview contains category
+  PASS: forget_memory preview contains key
+  PASS: forget_memory preview does NOT leak value
+
+[retrieve_memory_context] Verifying tool declaration and safety...
+  PASS: TOOL_DECLARATIONS contains retrieve_memory_context
+  PASS: retrieve_memory_context classified as LOW
+  PASS: retrieve_memory_context no confirmation required
+  PASS: retrieve_memory_context reason mentions read-only
+  PASS: retrieve_memory: relevant result contains 'blue' or 'Blue'
+  PASS: retrieve_memory: result non-empty for matching query
+  PASS: retrieve_memory: no-match still returns entries (ranked, not filtered)
+  PASS: retrieve_memory: preview lines are bare 'category/key: value'
+  PASS: retrieve_memory: preview carries no decorative header
+
+[YouTube volume routing] Testing canonicalize_tool_call...
+  PASS: youtube_video volume_up stays youtube_video
+  PASS: youtube_video volume_up preserves action
+  PASS: youtube_video volume_up defaults amount to 10
+  PASS: youtube_video volume_up with custom amount
+  PASS: youtube_video volume_down stays youtube_video
+  PASS: youtube_video volume_down preserves action
+  PASS: youtube_video volume_down defaults amount to 10
+  PASS: generic volume_up goes computer_settings
+  PASS: generic volume_down goes computer_settings
+  PASS: youtube_volume_up spec exists
+  PASS: youtube_volume_up spec maps to youtube_video
+  PASS: youtube_volume_down spec exists
+  PASS: youtube_volume_down spec maps to youtube_video
+  PASS: generic volume_up spec maps to computer_settings
+  PASS: generic volume_down spec maps to computer_settings
+  PASS: volume_up spec tool is computer_settings (unchanged)
+  PASS: alias 'louder' routes to computer_settings volume_up
+  PASS: alias 'quieter' routes to computer_settings volume_down
+
+========================================
+Main tool bridge tests: 127 passed, 0 failed out of 127
+========================================

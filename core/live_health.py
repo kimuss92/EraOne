@@ -56,7 +56,7 @@ def enabled() -> bool:
 
 @dataclass(frozen=True)
 class Verdict:
-    kind: str  # "deaf" | "mute" | "flaky"
+    kind: str  # "deaf" | "mute" | "flaky" | "undelivered"
     detail: str
 
 
@@ -99,6 +99,10 @@ class LiveHealth:
             self._last_voice_at: float | None = None
             self._longest_unheard_s = 0.0
             self._awaiting_reply_since: float | None = None
+            self._pending_text = False
+            self._awaiting_delivery_since: float | None = None
+            self._last_heard_at: float | None = None
+            self._pending_text_delivery = False
 
     def clear_errors(self) -> None:
         with self._lock:
@@ -131,12 +135,49 @@ class LiveHealth:
             self._unheard_n = 0
             self._longest_unheard_s = 0.0
             self._awaiting_reply_since = self._clock()
+            self._last_heard_at = self._awaiting_reply_since
+            if self._awaiting_delivery_since is None:
+                self._awaiting_delivery_since = self._awaiting_reply_since
+
+    @property
+    def pending_text(self) -> bool:
+        with self._lock:
+            return self._pending_text or self._pending_text_delivery
+
+    def note_text(self) -> None:
+        """A successfully sent user text also requires a reply, even with mic off."""
+        with self._lock:
+            if self._awaiting_reply_since is None:
+                self._awaiting_reply_since = self._clock()
+            self._pending_text = True
+            self._pending_text_delivery = True
+            if self._awaiting_delivery_since is None:
+                self._awaiting_delivery_since = self._clock()
+
+    def note_delivered(self) -> None:
+        """Output accepted a real speech frame; generation alone is insufficient.
+
+        This confirms software delivery, not that a person heard the device.
+        """
+        with self._lock:
+            self._awaiting_delivery_since = None
+            self._pending_text_delivery = False
+            self._awaiting_reply_since = None
+            self._pending_text = False
+
+    def note_working(self) -> None:
+        """Allow active tools/CodeMode their own budgets, then a response window."""
+        with self._lock:
+            if self._awaiting_delivery_since is not None:
+                self._awaiting_delivery_since = self._clock()
+                self._awaiting_reply_since = None
 
     def note_reply(self) -> None:
         """Gemini produced an answer: audio, a spoken transcript, a tool call,
         or the end of a turn. Anything that means "it responded"."""
         with self._lock:
             self._awaiting_reply_since = None
+            self._pending_text = False
             self._unheard_n = 0
             self._longest_unheard_s = 0.0
 
@@ -176,6 +217,17 @@ class LiveHealth:
                 return Verdict(
                     "mute",
                     f"heard the user but no answer for {now - self._awaiting_reply_since:.0f}s",
+                )
+            if (
+                self._awaiting_delivery_since is not None
+                and now - self._awaiting_delivery_since >= self._reply_timeout_s
+                and (self._last_voice_at is None or now - self._last_voice_at >= EPISODE_GAP_S)
+                and (self._last_heard_at is None or now - self._last_heard_at >= EPISODE_GAP_S)
+            ):
+                return Verdict(
+                    "undelivered",
+                    "user input has no delivered speech for "
+                    f"{now - self._awaiting_delivery_since:.0f}s despite upstream activity",
                 )
             if len(self._errors) >= self._flaky_errors:
                 return Verdict(

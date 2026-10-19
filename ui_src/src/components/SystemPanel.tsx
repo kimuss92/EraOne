@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown } from 'lucide-react';
 import { useHud } from '../lib/store';
 import { bytesRate, pct, uptime } from '../lib/format';
+import TelemetryGraph from './TelemetryGraph';
 
 // Real values only, all from the backend's SystemMonitor (psutil + NVML):
 // anything it cannot read arrives as null and is shown as N/A. The previous UI
@@ -36,16 +37,6 @@ function Meter({ label, value }: { label: string; value: number | null }) {
   );
 }
 
-function Spark({ series }: { series: number[] }) {
-  if (series.length < 2) return <div className="spark h-4" />;
-  const pts = series.map((v, i) => `${(i / (series.length - 1)) * 100},${16 - (v / 100) * 15}`).join(' ');
-  return (
-    <svg viewBox="0 0 100 16" preserveAspectRatio="none" className="spark h-4 w-full" aria-hidden="true">
-      <polyline points={pts} fill="none" stroke="var(--text-3)" strokeWidth="1" vectorEffect="non-scaling-stroke" opacity="0.7" />
-    </svg>
-  );
-}
-
 function Fact({ label, value, tone = 't2' }: { label: string; value: string; tone?: string }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-2">
@@ -61,11 +52,7 @@ function loadDetails(): boolean {
 
 function SystemPanel() {
   const m = useHud(s => s.metrics);
-  const [cpuHist, setCpuHist] = useState<number[]>([]);
   const [details, setDetails] = useState(loadDetails);
-  useEffect(() => {
-    if (m.cpu_percent !== null) setCpuHist(h => [...h, m.cpu_percent as number].slice(-40));
-  }, [m.cpu_percent]);
   useEffect(() => {
     try { localStorage.setItem(DETAILS_KEY, details ? '1' : '0'); } catch { /* private mode */ }
   }, [details]);
@@ -96,7 +83,7 @@ function SystemPanel() {
           <Meter label="RAM" value={m.ram_percent} />
           <Meter label="GPU" value={m.gpu_usage_percent} />
         </div>
-        <Spark series={cpuHist} />
+        <TelemetryGraph />
         <div className="flex items-baseline justify-between gap-2 font-mono text-meta tabular-nums t3">
           <span className="flex items-center gap-2" title="Network upload / download">
             <span className="flex items-center gap-0.5"><ArrowUp className="h-3 w-3" />{bytesRate(m.net_sent_bytes_per_sec)}</span>

@@ -34,6 +34,10 @@ import pytest
 # Pinning it to 0 here makes both agree, so the outcome no longer depends on
 # collection order. Test-process only — Era's own runtime is untouched.
 sys.coinit_flags = 0  # COINIT_MULTITHREADED
+if sys.platform == "win32":
+    # A flag alone does not initialize COM. pythoncom can otherwise claim STA
+    # before a later comtypes import and make the outcome collection-order dependent.
+    import comtypes  # noqa: F401
 
 _REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_REPO_ROOT))
@@ -150,6 +154,9 @@ os.environ["ERA_HIVE_DIR"] = str(_TEST_HIVE_DIR)
 # store would be re-registered at Era's next start and actually run.
 _TEST_TASKS_DIR = Path(tempfile.mkdtemp(prefix="era-test-tasks-"))
 os.environ["ERA_SCHEDULED_TASKS_DIR"] = str(_TEST_TASKS_DIR)
+# Importing agent.task_queue constructs and recovers its process-wide store.
+# Keep that bootstrap (and subprocess smoke checks) off the user's live history.
+os.environ["ERA_AGENT_TASK_DB"] = str(_TEST_TASKS_DIR / "agent_history.sqlite3")
 
 
 # The cross-process dispatch mutex (era_dispatch.FileLock, ~/.era/era.lock).
@@ -191,6 +198,12 @@ def _cleanup_test_memory_dirs() -> None:
 
 
 def pytest_configure(config):
+    from app.hud import recent_files
+    from core import codemode_models
+
+    recent_files.PATH = _TEST_MEMORY_DIR / "recent_files.json"
+    codemode_models.PATH = _TEST_MEMORY_DIR / "codemode_model.json"
+    os.environ.pop("ERA_SPOTIFY_ACCESS_TOKEN", None)
     for marker in ("slow", "unit", "integration", "smoke"):
         config.addinivalue_line("markers", marker)
 
@@ -277,6 +290,18 @@ def _isolate_voice_json(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _block_live_sentence_recovery(monkeypatch):
+    """Recovery tests must explicitly inject a transport, never spend live quota."""
+    from core import tts_gemini
+
+    async def blocked(*args, **kwargs):
+        raise RuntimeError("live sentence recovery blocked under pytest")
+
+    monkeypatch.setattr(tts_gemini, "_post", blocked)
+    monkeypatch.setattr(tts_gemini, "_retry_at", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _reset_vision_provider_health():
     """core.vision_resilience benches a provider after it fails; that is process-wide
     state, so one test's simulated Ollama/Gemini failure would silently skip the provider
@@ -285,6 +310,32 @@ def _reset_vision_provider_health():
     module = sys.modules.get("core.vision_resilience")
     if module is not None:
         module.reset_provider_health()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_report_outbox(monkeypatch, tmp_path):
+    """core.report_outbox is Era's durable "things I owe the owner" queue. The
+    development tests drive real jobs to terminal states, and each one queued a fake
+    report ("Change the example and verify its result") into the REAL queue, which the
+    live Era then spoke aloud. Every test gets its own empty queue and no notifier."""
+    from core import development, report_outbox
+
+    monkeypatch.setattr(report_outbox, "PATH", tmp_path / "report_outbox.json")
+    monkeypatch.setattr(development, "_notifier", None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_glasses_probe_state():
+    """core.audio_devices keeps disconnect hysteresis: the last PUBLISHED glasses state
+    survives across calls. A test that published "connected" made the next test's
+    "not connected" assertion fail, and the volume test then wrote a real volume to the
+    user's actual glasses. Only touched if a test already imported it."""
+    for phase in ("before", "after"):
+        module = sys.modules.get("core.audio_devices")
+        if module is not None:
+            module._reset_probe_state()
+        if phase == "before":
+            yield
 
 
 @pytest.fixture(autouse=True)

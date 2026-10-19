@@ -1,0 +1,32 @@
+{
+  "summary": "0 error(s), 0 warning(s), 4 note(s); 0 fix(es) available.",
+  "applied": false,
+  "findings": [
+    {
+      "severity": "info",
+      "kind": "note_truncated",
+      "path": "02 - Delta Cuisine/Delta_Cuisine_Reel_Concepts_Batch.md",
+      "detail": "8261 chars exceeds the 4500-char cap. It is a working document, so the brief takes the first sections and is told to open the file for the rest. Fine to leave; split only if the CM keeps missing the later parts."
+    },
+    {
+      "severity": "info",
+      "kind": "note_truncated",
+      "path": "02 - Delta Cuisine/Delta_PackRosiere_Meta_Ads_Campaign.md",
+      "detail": "4737 chars exceeds the 4500-char cap. It is a working document, so the brief takes the first sections and is told to open the file for the rest. Fine to leave; split only if the CM keeps missing the later parts."
+    },
+    {
+      "severity": "info",
+      "kind": "note_truncated",
+      "path": "03 - Ceram Quartz/Ceram_Quartz_Reel_Concepts_Batch.md",
+      "detail": "7717 chars exceeds the 4500-char cap. It is a working document, so the brief takes the first sections and is told to open the file for the rest. Fine to leave; split only if the CM keeps missing the later parts."
+    },
+    {
+      "severity": "info",
+      "kind": "note_truncated",
+      "path": "03 - Ceram Quartz/Perla_Meta_Ads_Campaign.md",
+      "detail": "5861 chars exceeds the 4500-char cap. It is a working document, so the brief takes the first sections and is told to open the file for the rest. Fine to leave; split only if the CM keeps missing the later parts."
+    }
+  ],
+  "actions": [],
+  "promoted": []
+}

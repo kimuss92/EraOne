@@ -191,6 +191,36 @@ def test_read_key_raises_without_echoing_anything(tmp_path):
     assert "k.json" not in str(err.value) and KEY not in str(err.value)
 
 
+def test_protected_key_is_decoded_before_authentication(keyfile, monkeypatch):
+    from core import protected_config
+
+    monkeypatch.setattr(protected_config, "_unprotect", lambda value: KEY)
+    keyfile.write_text(
+        json.dumps({KEY_ENTRY: {protected_config.MARKER: "synthetic"}}), encoding="utf-8"
+    )
+    t, http = make(keyfile)
+    t.dispatch("tester", Turn(task="t"))
+    assert http.calls
+    assert all(h["Authorization"] == f"Bearer {KEY}" for _, _, h, _ in http.calls)
+
+
+def test_unreadable_protected_key_fails_without_sending_or_exposing_it(keyfile, monkeypatch):
+    from core import protected_config
+
+    def unreadable(value):
+        raise protected_config.ProtectedConfigError("synthetic decryption failure")
+
+    monkeypatch.setattr(protected_config, "_unprotect", unreadable)
+    keyfile.write_text(
+        json.dumps({KEY_ENTRY: {protected_config.MARKER: "synthetic"}}), encoding="utf-8"
+    )
+    t, http = make(keyfile)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "MissingCredential"
+    assert http.calls == []
+    assert "synthetic" not in str(out)
+
+
 def test_the_key_is_read_at_call_time_so_rotating_it_needs_no_restart(keyfile):
     t, http = make(keyfile, recheck_s=0)
     t.dispatch("tester", Turn(task="one"))

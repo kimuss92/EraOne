@@ -40,6 +40,7 @@ WHY THE `zz` IN THE FILENAME
 
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import subprocess
@@ -192,7 +193,10 @@ def test_every_check_script_is_listed() -> None:
     on_disk = {
         p.stem
         for p in _TOOLS_DIR.glob("test_*.py")
-        if "def check(" in p.read_text(encoding="utf-8", errors="replace")
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check"
+            for node in ast.parse(p.read_text(encoding="utf-8-sig")).body
+        )
     }
     on_disk.discard(Path(__file__).stem)
     missing = sorted(on_disk - set(_SCRIPTS) - set(_SUBPROCESS_SCRIPTS))

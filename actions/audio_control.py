@@ -53,6 +53,19 @@ _ALIASES = {
     "voice_output": "voice_output",
     "voice_output_status": "voice_output",
     "voice_device": "voice_output",
+    # MEDIA routing, per app (core/media_routing.py): where Spotify / the browser
+    # REALLY play, and moving them. set_default cannot move an app that Windows'
+    # per-app "Output device" setting holds on another device (2026-10-16).
+    "route_media": "route_media",
+    "route_app": "route_media",
+    "route_music": "route_media",
+    "send_media": "route_media",
+    "move_media": "route_media",
+    "media_output": "route_media",
+    "media_routing": "media_routing",
+    "where_media": "media_routing",
+    "media_status": "media_routing",
+    "what_plays_where": "media_routing",
     "battery": "battery",
     "battery_status": "battery",
     "battery_level": "battery",
@@ -209,7 +222,27 @@ def audio_control(
         if action == "set_default":
             if _is_system(device):
                 return "Which device should become the default, sir?"
-            return ae.set_default_device(device, flow, str(params.get("role") or "default")).message
+            res = ae.set_default_device(device, flow, str(params.get("role") or "default"))
+            if res.ok and flow != ae.INPUT:
+                # Never "the music should be playing there" while an app is held
+                # on another device: say so, from the real sessions.
+                from core import media_routing as mr
+
+                ep, err = ae.resolve(device, ae.OUTPUT)
+                if ep is not None and err is None:
+                    return res.message + mr.held_elsewhere_note(ep)
+            return res.message
+
+        if action == "route_media":
+            from core import media_routing as mr
+
+            app = str(params.get("app") or params.get("application") or "").strip()
+            return mr.route_media(device, app).message
+
+        if action == "media_routing":
+            from core import media_routing as mr
+
+            return mr.where_media_plays().message
 
         # Windows' own per-app device preference: what pins Era's audio to one
         # endpoint no matter what the system default is.
@@ -250,8 +283,8 @@ def audio_control(
                 f"I don't know the audio action '{params.get('action')}', sir. "
                 "Try list_devices, set_default, device_volume_set/up/down, "
                 "device_mute/unmute, device_status, set_voice_output, "
-                "clear_voice_output, voice_output, battery, app_preference, or "
-                "clear_app_preference."
+                "clear_voice_output, voice_output, battery, route_media, media_routing, "
+                "app_preference, or clear_app_preference."
             )
 
         # ── Baseline Routing Rule ───────────────────────────────────────────

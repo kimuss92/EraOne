@@ -2,7 +2,7 @@
 
     pythonw -m app.hud.launcher               normal: silent, opens/focuses the HUD
     python  -m app.hud.launcher --debug       same backend + HUD, live logs here
-    pythonw -m app.hud.launcher --background  start silently (logon), no window
+    pythonw -m app.hud.launcher --background  start silently (logon), no splash; HUD opens once ready
 
 It holds no AI and no state. Its whole job:
 
@@ -243,6 +243,15 @@ def run(*, background: bool = False) -> int:
         else:
             log("ERA ONE is already starting; waiting for it")
         if background:
+            # Logon start: no splash, but never leave Era listening and speaking
+            # with nothing on screen — that is indistinguishable from a ghost.
+            # Wait for real readiness, then open the HUD like a normal launch.
+            try:
+                port, h = wait_ready(lambda _stages: None, started_at=started_at, proc=proc)
+            except LaunchError as e:
+                log(f"background startup failed: {e.reason} | {e.detail}")
+                return 1
+            open_hud(port, h)
             return 0
         try:
             port, h = launcher_ui.run_with_splash(
@@ -340,7 +349,9 @@ def run_debug() -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Start ERA ONE and open its HUD.")
     ap.add_argument("--debug", action="store_true", help="show live backend logs")
-    ap.add_argument("--background", action="store_true", help="start silently, open nothing")
+    ap.add_argument(
+        "--background", action="store_true", help="start without a splash; the HUD opens once ready"
+    )
     opts = ap.parse_args(argv)
     os.chdir(REPO)
     if opts.debug:

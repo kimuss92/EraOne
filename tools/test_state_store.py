@@ -6,8 +6,7 @@ worth pinning is the behaviour that only shows up under a running loop: that
 every write stamps `last_sync_ts` (a stale stamp is how "Era can't see my
 windows" presents), that the drift log cannot grow without bound, that the
 debounce actually throttles a 20 Hz poll down to its interval, and that
-`snapshot()` hands back the LIVE state object rather than a copy - an aliasing
-detail a caller can corrupt state through, so it is documented as a test.
+`snapshot()` returns detached state that callers cannot mutate into the store.
 """
 
 import asyncio
@@ -134,13 +133,14 @@ async def test_drift_flags_are_capped_at_200_keeping_the_newest():
     assert flags[0]["n"] == 50 and flags[-1]["n"] == 249
 
 
-async def test_clear_drift_flags_empties_without_replacing_the_list():
+async def test_clear_drift_flags_preserves_existing_snapshot():
     store = StateStore()
     await store.add_drift_flag({"n": 1})
     snap = await store.snapshot()
     held = snap.drift_flags
     await store.clear_drift_flags()
-    assert held == [], "cleared in place, so an existing reader sees the reset"
+    assert held == [{"n": 1}], "an existing snapshot retains its observed state"
+    assert (await store.snapshot()).drift_flags == []
 
 
 # ── locking ──────────────────────────────────────────────────────────────────
@@ -166,17 +166,14 @@ async def test_concurrent_mixed_updates_settle_consistently():
     assert snap.open_apps and snap.media_sessions and snap.browser_tabs
 
 
-async def test_snapshot_returns_the_live_state_not_a_copy():
-    """Documented as-is: `snapshot()` hands out the real SystemState, so a
-    caller that mutates it mutates the store. Readers must treat it as
-    read-only; if this ever starts returning a deepcopy, this test is the
-    place that says so."""
+async def test_snapshot_is_detached_from_other_readers_and_the_store():
     store = StateStore()
     a = await store.snapshot()
     b = await store.snapshot()
-    assert a is b
+    assert a is not b
     a.open_apps["injected.exe"] = {"pid": 999}
-    assert "injected.exe" in (await store.snapshot()).open_apps
+    assert b.open_apps == {}
+    assert "injected.exe" not in (await store.snapshot()).open_apps
 
 
 # ── Debounce ─────────────────────────────────────────────────────────────────

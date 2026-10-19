@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -220,8 +221,10 @@ def analyze_screen(
     mode: str = "fast",
     target: str = "active_window",
     save_debug: bool = False,
+    *,
+    capture: tuple[bytes, str, int, int] | None = None,
 ) -> VisionResult:
-    if not prompt or not prompt.strip():
+    if not isinstance(prompt, str) or not prompt.strip():
         return VisionResult(
             ok=False,
             mode=mode,
@@ -231,7 +234,21 @@ def analyze_screen(
         )
     prompt = prompt.strip()
     try:
-        image_bytes, mime_type, orig_size, opt_size, metadata = _capture_targeted(mode, target)
+        if capture is None:
+            image_bytes, mime_type, orig_size, opt_size, metadata = _capture_targeted(mode, target)
+        else:
+            image_bytes, mime_type, orig_size, opt_size = capture
+            metadata = {
+                "capture_method": "provided",
+                "original_size": orig_size,
+                "processed_size": opt_size,
+            }
+        if (
+            not isinstance(image_bytes, bytes)
+            or not image_bytes
+            or len(image_bytes) > 20 * 1024 * 1024
+        ):
+            raise ValueError("Missing or oversized image payload")
     except Exception as e:
         return VisionResult(
             ok=False,
@@ -249,6 +266,7 @@ def analyze_screen(
         if cache_key in _CACHE:
             expiry, cached_result = _CACHE[cache_key]
             if time.monotonic() < expiry:
+                cached_result = copy.deepcopy(cached_result)
                 cached_result.cached = True
                 cached_result.metadata.update(metadata)
                 cached_result.metadata["cache_hit"] = True
@@ -257,14 +275,17 @@ def analyze_screen(
                 del _CACHE[cache_key]
 
     analyze_start = time.perf_counter()
-    raw = _analyze_with_gemini(image_bytes, mime_type, prompt)
+    try:
+        raw = _analyze_with_gemini(image_bytes, mime_type, prompt)
+    except Exception:
+        raw = None
     metadata["analyze_ms"] = round((time.perf_counter() - analyze_start) * 1000, 1)
     if raw is None:
         # Tells screen_process the provider chain already ran and failed, so it must not
         # run the whole chain a second time on its own capture.
         metadata["analysis_failed"] = True
         return VisionResult(
-            ok=True,
+            ok=False,
             mode=mode,
             target=target,
             screen_state="unknown",
@@ -293,5 +314,7 @@ def analyze_screen(
     if save_debug:
         _save_debug_artifacts(image_bytes, result, mode)
     with _CACHE_LOCK:
-        _CACHE[cache_key] = (time.monotonic() + _CACHE_TTL, result)
+        if len(_CACHE) >= 64:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[cache_key] = (time.monotonic() + _CACHE_TTL, copy.deepcopy(result))
     return result

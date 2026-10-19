@@ -42,13 +42,14 @@ export default function DiagnosticsDrawer() {
   const [d, setD] = useState<Diag | null>(null);
   const [err, setErr] = useState('');
   const [fps, setFps] = useState(live.fps);
+  const [frameMs, setFrameMs] = useState(live.frameMs);
   const rtt = useHud(s => s.rttMs);
   const link = useHud(s => s.link);
 
   useEffect(() => {
     const load = () => api<Diag>('/api/diagnostics').then(x => { setD(x); setErr(''); }).catch(e => setErr(String(e.message || e)));
     load();
-    const t = window.setInterval(() => { load(); setFps(live.fps); }, 2500);
+    const t = window.setInterval(() => { load(); setFps(live.fps); setFrameMs(live.frameMs); }, 2500);
     return () => window.clearInterval(t);
   }, []);
 
@@ -95,6 +96,7 @@ export default function DiagnosticsDrawer() {
       </Section>
       <Section title="HUD">
         <Row k="RENDER RATE" v={`${fps} fps`} />
+        <Row k="CANVAS CPU TIME" v={`${frameMs.toFixed(2)} ms/frame · moving average`} />
         <Row k="HOST" v={window.location.protocol.startsWith('http') ? 'Browser (localhost)' : 'Legacy desktop window'} />
       </Section>
       <Section title="RECENT FAILURES">

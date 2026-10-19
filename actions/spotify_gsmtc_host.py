@@ -34,6 +34,8 @@ _CREATE_NO_WINDOW = 0x08000000
 # (GetSessions() is a cheap sync call) so track changes are always seen.
 _PS_LOOP = r"""
 $ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
     $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
@@ -188,7 +190,12 @@ class _Host:
     def request(self, op: dict, timeout: float = 6.0) -> dict:
         """Send one op, return its reply dict. Serialised: one command in flight
         at a time. Respawns the host if it died. Never raises."""
-        with self._lock:
+        import time
+
+        deadline = time.monotonic() + timeout
+        if not self._lock.acquire(timeout=max(0.0, timeout)):
+            return {"ok": False, "error": "gsmtc host busy"}
+        try:
             if not self._alive():
                 try:
                     self._spawn()
@@ -206,7 +213,7 @@ class _Host:
                 self._kill()
                 return {"ok": False, "error": "gsmtc host write failed"}
             try:
-                line = self._q.get(timeout=timeout)
+                line = self._q.get(timeout=max(0.01, deadline - time.monotonic()))
             except Empty:
                 self._kill()
                 return {"ok": False, "error": "gsmtc host timed out"}
@@ -217,6 +224,8 @@ class _Host:
                 return json.loads(line)
             except Exception:
                 return {"ok": False, "error": "gsmtc host bad response"}
+        finally:
+            self._lock.release()
 
     def shutdown(self) -> None:
         with self._lock:

@@ -2618,9 +2618,9 @@ def _open_netflix_native_search(page, sess, query: str) -> bool:
     launcher_js = """
     (() => {
         var el = document.querySelector('[data-uia="search-box-launcher"]')
-            || document.querySelector('button[aria-label*="Search"]')
-            || document.querySelector('[aria-label*="Search"][role="button"]')
-            || document.querySelector('input[aria-label*="Search"]');
+            || document.querySelector('button[aria-label*="search" i], button[aria-label*="rechercher" i]')
+            || document.querySelector('[aria-label*="search" i][role="button"], [aria-label*="rechercher" i][role="button"]')
+            || document.querySelector('input[aria-label*="search" i], input[aria-label*="titres" i]');
         if (el) { el.click(); return 'clicked'; }
         return 'not_found';
     })()
@@ -2638,12 +2638,11 @@ def _open_netflix_native_search(page, sess, query: str) -> bool:
     input_js = """
     (() => {
         var input = document.querySelector('input[data-uia*="search"]')
-            || document.querySelector('input[aria-label*="Search"]')
-            || document.querySelector('input[placeholder*="Search"]')
+            || document.querySelector('input[aria-label*="search" i], input[aria-label*="titres" i]')
+            || document.querySelector('input[placeholder*="search" i], input[placeholder*="titres" i]')
             || document.querySelector('input[type="search"]');
         if (input) {
             input.focus();
-            input.value = '';
             return 'found';
         }
         return 'not_found';
@@ -2658,16 +2657,13 @@ def _open_netflix_native_search(page, sess, query: str) -> bool:
 
     time.sleep(0.2)
 
-    # Type the query character by character via keyboard
+    # Clear through real keyboard events so React's controlled input sees the
+    # replacement. Assigning input.value directly left the previous query live.
     try:
-        for ch in query:
-            sess.run(page.keyboard.type(ch, delay=30))
-            time.sleep(0.02)
+        sess.run(page.keyboard.press("ControlOrMeta+A"))
+        sess.run(page.keyboard.type(query, delay=30))
     except Exception:
-        try:
-            sess.run(page.keyboard.type(query, delay=30))
-        except Exception:
-            pass
+        return False
 
     return True
 
@@ -4617,6 +4613,20 @@ def _handle_player_action(action: str, params: dict, sess, page, state: str) -> 
 
     if action in ("next_episode", "skip_credits"):
         result = _finish_next_episode(result, sess, page, start_url)
+        from actions._netflix.player_api import NEXT_EPISODE_OK, resume_after_skip_script
+
+        if result == NEXT_EPISODE_OK:
+            print("[Netflix] playback state: SKIPPING -> RESUMING")
+            try:
+                playing = sess.run(
+                    sess.evaluate_background_media("netflix.com", resume_after_skip_script())
+                )
+            except Exception as exc:
+                print(f"[Netflix] post-skip playback validation failed: {exc}")
+                playing = False
+            if playing is not True:
+                return "The next episode opened, but Netflix did not confirm playback. Please press Play."
+            print("[Netflix] playback state: RESUMING -> PLAYING")
 
     missed = any(
         token in result.lower()

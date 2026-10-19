@@ -1,0 +1,14 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+____ test_stop_waking_idle_worker_does_not_launch_a_concurrent_submission _____
+tools\test_task_deduplication.py:174: in test_stop_waking_idle_worker_does_not_launch_a_concurrent_submission
+    assert queue.get_status(task.task_id)["status"] == "pending"
+E   AssertionError: assert 'failed' == 'pending'
+E     
+E     - pending
+E     + failed
+---------------------------- Captured stdout call -----------------------------
+[TaskQueue] \u2705 Started\n[TaskQueue] \u25b6\ufe0f Running: [after-stop] later\n[TaskQueue] Task after-stop failed: Executor factory not configured. Call set_executor_factory() before submitting tasks.\n[TaskQueue] \U0001f534 Stopped
+=========================== short test summary info ===========================
+FAILED tools/test_task_deduplication.py::test_stop_waking_idle_worker_does_not_launch_a_concurrent_submission
+1 failed in 0.77s

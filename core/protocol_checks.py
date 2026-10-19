@@ -50,6 +50,9 @@ SECURITY_RULES = {
 }
 # Reviewed and accepted, WITH the reason. Shown in the report, never hidden.
 ACCEPTED_RISKS = {
+    ("core/feature_engine.py", "S102"): "Intentional trusted Python plugin loading, not a sandbox. "
+    "Only direct features/*.py paths load; deployment requires explicit verified approval, "
+    "and restore checks approved content hashes. Plugins execute with Era's privileges.",
     ("main.py", "S104"): "LAN bridge refuses every request unless ERA_REMOTE_TOKEN is set "
     "(hmac.compare_digest) — _remote_bridge_authorized.",
     ("actions/netflix_control.py", "S608"): "False positive: an f-string spoken reply, not SQL.",

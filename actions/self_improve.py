@@ -67,6 +67,18 @@ _PROTECTED_GLOBS = (
 # keep both lists in sync). Breaking any of these bricks Era or her safety net.
 SAFETY_CRITICAL = frozenset(
     {
+        "core/codemode.py",
+        "core/codemode_cli.py",
+        "core/codemode_context.py",
+        "core/codemode_process.py",
+        "core/codemode_team.py",
+        "app/codemode_runtime.py",
+        "app/codemode_speech.py",
+        "crew/coordination.py",
+        "crew/source.py",
+        "crew/capabilities.py",
+        "crew/runtime.py",
+        "core/development_submission.py",
         "main.py",
         "app/websocket_server.py",
         "core/task_scheduler.py",

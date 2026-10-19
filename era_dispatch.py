@@ -34,6 +34,7 @@ USAGE FROM ERA (main.py)
 import contextlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -236,13 +237,21 @@ def _clear_status():
 _CM_LOG_DIR = Path(os.getenv("ERA_CM_LOG_DIR", str(Path.home() / ".era" / "cm_logs")))
 
 
+_COUNT_SKIP_DIRS = frozenset({"node_modules", ".git", "__pycache__"})
+
+
 def _count_recent_files(root, since_ts, cap=20000):
     """How many files under `root` were created/modified at or after `since_ts`.
     Bounded walk so a huge asset folder can never stall the dispatcher; we only
-    need the 0-vs-more-than-0 signal, not an exact census."""
+    need the 0-vs-more-than-0 signal, not an exact census.
+
+    Dependency and VCS folders are skipped: a Remotion project inside the brand
+    folder carries ~30,000 node_modules files, which would exhaust `cap` before
+    the walk reached the renders and report a false "no assets produced"."""
     n = seen = 0
     try:
-        for dirpath, _dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _COUNT_SKIP_DIRS]
             for fn in filenames:
                 seen += 1
                 if seen > cap:
@@ -642,6 +651,293 @@ def _magnific_note(brand):
         "  • Normal order of work: `flows_get` (read the input spec) -> `simulate_flows` "
         "(free) -> `flows_run` -> `flows_wait` -> `creations_show`. Chain by creation "
         "`identifier`, never by webUrl.\n\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Content-workflow lanes: `package` and `edit` (2026-10-16)
+#
+# Karim now generates and renders images/video himself. Era prepares the prompts
+# and text (`package`, stops at Gate A) and later edits his renders (`edit`).
+# Neither lane generates anything, so neither gets Magnific or Photoshop.
+# Ceram Quartz additionally never gets them on ANY lane (`magnific_allowed: false`):
+# Magnific and Adobe sit on Delta Cuisine's company account.
+# ---------------------------------------------------------------------------
+WORKFLOW_LANES = ("package", "edit")
+_NO_GEN_SERVERS = ("mcp__magnific", "mcp__photoshop")
+_TEXTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+
+
+def brand_allows_magnific(brand):
+    """False only when brands.yaml says so explicitly (Ceram Quartz)."""
+    return (brand or {}).get("magnific_allowed") is not False
+
+
+def _strip_tools(allowed, banned):
+    """Remove whole-server entries (e.g. mcp__magnific) from a comma allowlist."""
+    if not allowed:
+        return allowed
+    return ",".join(t for t in allowed.split(",") if t.strip() not in banned)
+
+
+def _brand_dir(brand, key, default_sub):
+    """A brand's renders/final/remotion folder: explicit key, else <project_dir>\\<sub>."""
+    base = os.path.expandvars(brand.get("project_dir") or "")
+    explicit = brand.get(key)
+    if explicit:
+        explicit = os.path.expandvars(explicit)
+        return explicit if os.path.isabs(explicit) else os.path.join(base, explicit)
+    return os.path.join(base, default_sub) if base else None
+
+
+def _texture_names(brand, cap=200):
+    """Exact slab/finish names (file stems) in the brand's texture_folder. [] on any
+    problem: a missing folder costs the brief a list, never the job."""
+    folder = brand.get("texture_folder")
+    if not folder:
+        return []
+    try:
+        root = Path(os.path.expandvars(folder))
+        # Names go into the brief verbatim, so only plain swatch-style names do: a
+        # file named like an instruction (or with odd characters) is skipped.
+        stems = {
+            p.stem
+            for p in root.iterdir()
+            if p.is_file()
+            and p.suffix.lower() in _TEXTURE_EXTS
+            and re.fullmatch(r"[\w .,&()'+-]{1,60}", p.stem)
+            and len(p.stem.split()) <= 6
+        }
+        return sorted(stems, key=str.lower)[:cap]
+    except Exception:  # noqa: BLE001 - degrade, never raise
+        return []
+
+
+def _inside(path, root):
+    """True when `path` resolves to `root` or something under it (blocks `..` and
+    symlink escapes; case-insensitive on Windows)."""
+    try:
+        p = os.path.normcase(str(Path(path).resolve()))
+        r = os.path.normcase(str(Path(root).resolve()))
+    except Exception:  # noqa: BLE001
+        return False
+    return p == r or p.startswith(r.rstrip("\\/") + os.sep)
+
+
+_PATH_START = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w:\\/.])\\\\")
+_PATH_TRIM = ".,;:)!'\" "
+_INDIRECT_PATH = re.compile(r"%[A-Za-z_]+%|\.\.[\\/]|(?<![\w.])~[\\/]")
+
+
+def _order_paths(text):
+    """Every drive or UNC path named in an order, as (path, exists) pairs.
+
+    Each path runs from its drive letter to the next path start (so two paths on
+    one line are BOTH seen), then is shortened word by word until it names
+    something real, because folder names hold spaces. A path that names nothing
+    real is still returned (exists=False): output targets do not exist yet, and the
+    validator must see them too. Input is capped so a hostile message cannot make
+    this quadratic."""
+    text = (text or "")[:4000]
+    starts = [m.start() for m in _PATH_START.finditer(text)]
+    out, seen = [], set()
+    for i, s in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(text)
+        seg = re.split(r'["<>|?*\r\n]', text[s:end])[0]
+        words = seg.split(" ")[:40]
+        found = None
+        for n in range(len(words), 0, -1):
+            trial = " ".join(words[:n]).rstrip(_PATH_TRIM)
+            if trial and os.path.exists(trial):
+                found = (trial, True)
+                break
+        if found is None:
+            # Not on disk (an output target): take the longest prefix whose parent
+            # folder exists, so a target in a folder with spaces is judged whole.
+            for n in range(len(words), 0, -1):
+                trial = " ".join(words[:n]).rstrip(_PATH_TRIM)
+                if trial and os.path.isdir(os.path.dirname(trial)):
+                    found = (trial, False)
+                    break
+        if found is None:
+            found = (words[0].rstrip(_PATH_TRIM), False)
+        if found[0] not in seen:
+            seen.add(found[0])
+            out.append(found)
+    return out
+
+
+def validate_edit_inputs(brand_key, brand, instruction, all_brands=None):
+    """Check an `edit` order BEFORE any run is spawned.
+
+    The render must exist and sit inside THIS brand's renders folder (so a typo, a
+    `..` escape or another brand's folder is refused in a second, not discovered
+    after a Remotion build). A music file may live anywhere but must exist; a path
+    inside another brand's folder is refused outright (brand isolation).
+    Returns {ok, error, render, music, renders_dir, final_dir, remotion_dir}.
+    """
+    renders = _brand_dir(brand, "renders_dir", "renders")
+    final = _brand_dir(brand, "final_dir", "final")
+    remotion = _brand_dir(brand, "remotion_dir", "remotion")
+    out = {
+        "ok": False,
+        "error": "",
+        "render": None,
+        "music": None,
+        "renders_dir": renders,
+        "final_dir": final,
+        "remotion_dir": remotion,
+    }
+    name = brand.get("display_name", brand_key)
+    if not (renders and final and remotion):
+        out["error"] = (
+            f"{name} has no project_dir, so I can't find its renders/final/remotion folders."
+        )
+        return out
+    others = [
+        os.path.expandvars(b.get("project_dir") or "")
+        for k, b in (all_brands or {}).items()
+        if k != brand_key and b.get("project_dir")
+    ]
+    for d, label in ((renders, "renders"), (final, "final"), (remotion, "remotion")):
+        if not os.path.isdir(d):
+            out["error"] = f"{name}'s {label} folder is missing: {d}"
+            return out
+    if _INDIRECT_PATH.search(instruction or ""):
+        out["error"] = (
+            "I can't follow relative, %VAR% or ~ paths in an edit order. "
+            f"Give me full paths: the render under {renders}."
+        )
+        return out
+    # EVERY path in the order must be accountable: the render (inside renders), a
+    # music file, or somewhere in this brand's own final/remotion folders. The run
+    # has Write/Bash, so a path it was merely told about is a path it may touch.
+    allowed_dirs = (final, remotion)
+    for p, exists in _order_paths(instruction):
+        if any(o and _inside(p, o) for o in others):
+            out["error"] = (
+                f"{p} belongs to another brand's folder. Nothing made for one brand may be "
+                f"edited from another's. Give me a file under {renders}."
+            )
+            return out
+        if exists and _inside(p, renders):
+            if out["render"] is None:
+                out["render"] = p
+        elif exists and Path(p).suffix.lower() in _AUDIO_EXTS:
+            if out["music"] is None:
+                out["music"] = p
+        elif any(_inside(p, d) for d in allowed_dirs):
+            continue
+        else:
+            out["error"] = (
+                f"I won't touch {p}: for an edit I only take the render under {renders}, "
+                f"a music file, and this brand's own final and remotion folders."
+            )
+            return out
+    if not out["render"]:
+        out["error"] = (
+            f"I need the render to edit: a file or folder under {renders}. "
+            "Give me its path and I'll build the reel."
+        )
+        return out
+    out["ok"] = True
+    return out
+
+
+def _languages_line(brand):
+    cl = brand.get("content_languages") or {}
+    if not cl.get("primary"):
+        return "the brand's language split from the vault"
+    share = cl.get("primary_share")
+    if share:
+        return f"{share}% {cl['primary']} / {100 - int(share)}% {cl.get('secondary', '')}"
+    return cl["primary"]
+
+
+def _package_note(brand_key, brand):
+    names = _texture_names(brand)
+    folder = brand.get("texture_folder", "")
+    if names:
+        tex = (
+            f"EXACT TEXTURE NAMES (file names in {folder}). Use these spellings and "
+            "NOTHING else, never a name from memory:\n    " + "\n    ".join(names)
+        )
+    else:
+        tex = (
+            f"The texture folder ({folder or 'not set'}) could not be read. Say so in the "
+            "package and ask me for the texture names. Do not invent any."
+        )
+    reports = os.path.join(os.path.expandvars(brand.get("project_dir") or ""), "reports")
+    return (
+        "PACKAGE MODE: you PREPARE the content; I generate and render it myself.\n"
+        "You do NOT generate images or video, you do not call Magnific, Photoshop or any "
+        "image/video tool, and you do not spend credits. Your deliverable is TEXT, in ONE "
+        "message, ending at GATE A.\n"
+        "Read the order. If a field a normal job needs is missing (product/material, format), "
+        "ask ONCE, in one message, and stop. A promo comes with images, prices and an offer "
+        "file (text/PDF/Excel): read it; prices come from that file, never an old post.\n\n"
+        "Deliver, in this order:\n"
+        "  1. CONCEPT and SHOT LIST (one line per shot).\n"
+        "  2. IMAGE PROMPTS, one per image, tool-neutral, each naming its texture by the "
+        "exact name below. Obey the DESIGN RULES block (material harmony, conception "
+        "references, one-product rule).\n"
+        "  3. ANIMATION PROMPT per shot, with the video model best suited to that motion "
+        "(aim for a good first result to save credits). Name only tools the vault "
+        "workflow note lists for this brand.\n"
+        f"  4. ON-SCREEN TEXT, per shot, in the brand split ({_languages_line(brand)}), "
+        "combining both languages on screen.\n"
+        "  5. VOICEOVER DRAFT in Tunisian derja (Arabic script) AND in French, marked "
+        "DRAFT. I will refine it; you never record a final voice.\n"
+        "  6. CAPTION DRAFT: at most 5 hashtags, then the caption footer above VERBATIM. "
+        "Caption language FOLLOWS THE VOICEOVER: French voiceover = French caption + French "
+        "footer; derja voiceover = Arabic and French combined + Arabic footer. No "
+        "voiceover: the brand's main language, and say which you used. No emoji in the body.\n\n"
+        f"{tex}\n\n"
+        f"Also save the full package to {reports}\\<short-slug>_package.md (UTF-8), with "
+        "`status: awaiting_gate_a` at the top.\n"
+        "THEN STOP. Show me the package and say plainly it is waiting on my GATE A "
+        "approval. Remind me to animate only once I like the hero image.\n"
+        'NEVER write "(approved)" anywhere: that is my signature. Music is mine to '
+        "supply; do not generate or suggest generating any.\n\n"
+    )
+
+
+def _edit_note(brand_key, brand, inputs):
+    music = inputs.get("music")
+    music_line = (
+        f"MUSIC (supplied by me): {music}. Lay it in, duck it under any voiceover, fade "
+        "out the last 2.5 s."
+        if music
+        else "No music file was given. Build the reel WITHOUT music and say so in your "
+        "summary so I can send one."
+    )
+    reports = os.path.join(os.path.expandvars(brand.get("project_dir") or ""), "reports")
+    return (
+        "EDIT MODE: you EDIT the render I made; you do not generate anything.\n"
+        f"SOURCE RENDER (verified, inside this brand's renders folder): {inputs['render']}\n"
+        f"REMOTION PROJECT: {inputs['remotion_dir']}\n"
+        f"OUTPUT FOLDER: {inputs['final_dir']}\n"
+        f"{music_line}\n"
+        "Steps:\n"
+        "  1. HANDOFF CHECK: with ffprobe confirm each source file exists, its size, "
+        "duration and resolution, and that it matches the approved concept. Look for the "
+        f"newest *_package.md in {reports}. If none exists, say so and work from my order.\n"
+        "  2. Build the reel in the REMOTION PROJECT (use the remotion-best-practices "
+        "skill): brand outro, badge and label, text animation and motion design, taken from "
+        "this brand's own logos/badges/outros/fonts folders and the fixed frame in the "
+        "VAULT notes below. On-screen text comes from the approved package.\n"
+        "  3. Render, then use ffmpeg for the final mux (music ducked under the voice, "
+        "9:16 1080x1920) and write the result to the OUTPUT FOLDER only. Never overwrite "
+        "an existing file there (bump the version suffix) and never modify the source "
+        "render.\n"
+        "  4. NO MUSIC GENERATION. Do not run music_generate.py, Lyria, Magnific audio or "
+        "any generator, even if another note says to, unless my order explicitly says "
+        "'generate music'. Premiere only if I asked for it.\n"
+        "  5. Do NOT call Magnific or Photoshop. Do NOT publish anything.\n"
+        'The finished file is a DRAFT: plain filename, NEVER "(approved)" (that is my '
+        "signature). Before anything is scheduled, check the same post is not already "
+        "published (duplicate reels minutes apart have halved reach).\n\n"
     )
 
 
@@ -1115,7 +1411,9 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
 
     psd_note = ""
     master_psd = brand.get("master_psd_template")
-    if master_psd:
+    # A brand with magnific_allowed: false never gets the Photoshop route either:
+    # it places Magnific images into the PSD, and Adobe is Delta Cuisine's login.
+    if master_psd and brand_allows_magnific(brand) and task_type not in WORKFLOW_LANES:
         psd_note = (
             "=== MASTER PSD TEMPLATE ===\n"
             f"This brand's carousel slides are built from `{master_psd}` (in this "
@@ -1139,7 +1437,16 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
     # there would be dead text in an already long brief.
     magnific_note = ""
     if task_type in ("weekly", "campaign", "rush", "revise", "approve", "adcreative"):
-        magnific_note = _magnific_note(brand)
+        if brand_allows_magnific(brand):
+            magnific_note = _magnific_note(brand)
+        else:
+            magnific_note = (
+                "=== NO MAGNIFIC, NO PHOTOSHOP FOR THIS BRAND ===\n"
+                "Magnific and Adobe are Delta Cuisine's company account. Never use "
+                "Magnific, its flows, or the photoshop MCP for this brand, and do not "
+                "generate images or video yourself: I generate them. Write tool-neutral "
+                "prompts and text, and work only with files I hand you.\n\n"
+            )
 
     # --- The two accumulating knowledge sources -----------------------------
     # Everything above this point is static configuration. These two blocks are
@@ -1225,6 +1532,16 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
             "one. Publish nothing. Attach nothing to a live campaign.\n\n"
         )
 
+    if task_type == "package":
+        rush_note = _package_note(brand_key, brand)
+
+    if task_type == "edit":
+        edit_inputs = validate_edit_inputs(brand_key, brand, instruction, all_brands)
+        if not edit_inputs["ok"]:
+            # run_task refuses before building; this only guards a direct caller.
+            raise ValueError(edit_inputs["error"])
+        rush_note = _edit_note(brand_key, brand, edit_inputs)
+
     # Gate 2 only means something if the finished asset actually reaches the user.
     # A headless run has no screen, so it must push the draft out over a channel the
     # user reads — hence the explicit hand-off contract below.
@@ -1232,8 +1549,9 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
     # has to reach the user for Gate 2 exactly like any other produced asset.
     # "adcreative" is included for the same reason and is the whole point of the
     # lane: its output has to land in the SAME review queue as organic drafts, or
-    # the existing approve/publish lanes can never pick it up.
-    if task_type in ("weekly", "campaign", "rush", "revise", "approve", "adcreative"):
+    # the existing approve/publish lanes can never pick it up. "edit" finishes a
+    # reel in the brand's final folder: same queue, same Gate 2.
+    if task_type in ("weekly", "campaign", "rush", "revise", "approve", "adcreative", "edit"):
         rush_note += (
             "ASSET REVIEW — how you show me a finished draft (GATE 2).\n"
             "For every asset you finish, tell me, in your final summary: the item name "
@@ -1517,6 +1835,13 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
             "to the ad ratios, and show me each variant. End with a short status "
             "summary I can read aloud, including the credits this run actually spent."
             if task_type == "adcreative"
+            else "Deliver the complete PACKAGE in one message and STOP at GATE A. Generate "
+            "nothing. End with one line saying it is waiting on my approval."
+            if task_type == "package"
+            else "Edit the reel from my render into the output folder as an unapproved "
+            "DRAFT, show it to me per ASSET REVIEW, and end with a short summary I can read "
+            "aloud (source used, music used or missing, output path)."
+            if task_type == "edit"
             else "Deliver the complete plan and STOP there for my per-item approval. Then "
             "produce the plan-approved items one at a time as unapproved DRAFTS and "
             "show me each one. Publish nothing until I approve the finished asset. End "
@@ -1563,6 +1888,19 @@ _DEFAULT_ALLOWED_TOOLS = {
     # loosening of it: `ads` must stay unable to generate (see its entry below), so
     # that spending money and making pictures remain two different orders.
     "adcreative": _PRODUCE_ALLOWED_TOOLS,
+    # package/edit (2026-10-16): Karim generates and renders; Era writes text and
+    # edits his files. Deliberately NO mcp__magnific / mcp__photoshop / composio —
+    # these lanes cannot generate and cannot publish.
+    # Bash is scoped to the media tools, NOT bare `Bash`: an unrestricted shell can
+    # start a nested `claude` or `python era_dispatch.py` that escapes the
+    # --disallowedTools deny (security review, 2026-10-16). package needs no shell
+    # (the texture names are listed in the brief). The edit lane's Telegram push
+    # (`python era_telegram.py`) is therefore denied; Era pushes the draft herself.
+    "package": "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,TodoWrite,mcp__context7",
+    "edit": (
+        "Read,Write,Edit,Glob,Grep,TodoWrite,mcp__context7,"
+        "Bash(ffmpeg:*),Bash(ffprobe:*),Bash(npx:*),Bash(npm:*),Bash(node:*)"
+    ),
     # approve straddles both gates: at Gate 1 it produces a draft, at Gate 2 it hosts
     # and posts. _PRODUCE_ALLOWED_TOOLS already carries mcp__composio, so it covers both.
     "approve": _PRODUCE_ALLOWED_TOOLS,
@@ -1662,6 +2000,8 @@ _LANE_SERVERS = {
     "revise": _PRODUCE_SERVERS,
     "approve": _PRODUCE_SERVERS,
     "adcreative": _PRODUCE_SERVERS,
+    "package": (),
+    "edit": (),
 }
 
 
@@ -1679,14 +2019,14 @@ def _claude_accounts(cfg):
     return dirs
 
 
-def _account_can_run(config_dir, task_type):
+def _account_can_run(config_dir, task_type, skip_servers=()):
     """Can this Claude profile do this lane's work at all? Ads need the
     facebook-ads token; produce/publish lanes need their MCP servers registered.
     A profile that fails this is never used as a failover — running a Meta job
     on a profile with no Meta connection would 'succeed' with nothing done."""
     if task_type == "ads":
         return _ads_connection_problem(config_dir) is None
-    needed = _LANE_SERVERS.get(task_type, ())
+    needed = tuple(s for s in _LANE_SERVERS.get(task_type, ()) if s not in skip_servers)
     if not needed:
         return True
     try:
@@ -2031,6 +2371,33 @@ def run_task(
             ),
         }
 
+    # Brands that must never touch Magnific (Ceram Quartz: Delta Cuisine's company
+    # account) and the package/edit lanes (Karim generates, Era does not) lose
+    # those servers even when a caller passed an explicit allowlist.
+    no_gen = (not brand_allows_magnific(brand)) or task_type in WORKFLOW_LANES
+    if task_type == "adcreative" and not brand_allows_magnific(brand):
+        return {
+            "ok": False,
+            "brand": brand_key,
+            "error": (
+                f"{brand.get('display_name', brand_key)} does not use Magnific, so Era cannot "
+                "build ad creative for it. Generate the visual yourself and ask for a "
+                "'package' to get the prompts and copy. Nothing was done."
+            ),
+        }
+    if task_type == "edit":
+        edit_check = validate_edit_inputs(brand_key, brand, instruction, cfg.get("brands"))
+        if not edit_check["ok"]:
+            return {
+                "ok": False,
+                "brand": brand_key,
+                "error": edit_check["error"],
+                "wrote_files": 0,
+                "log_path": None,
+            }
+    if no_gen:
+        allowed_tools = _strip_tools(allowed_tools, _NO_GEN_SERVERS)
+
     # Ads is the one lane with real money on the other side of a mistake, so it
     # gets its own explicit gate rather than inheriting "active" — flipping
     # ads.enabled is a deliberate, separate decision from the brand going live
@@ -2108,9 +2475,17 @@ def run_task(
     project_dir = os.path.expandvars(brand["project_dir"])
     env = {**os.environ, "CLAUDE_CONFIG_DIR": config_dir}
     # This lane's profile first, then every other profile able to do the work.
+    skip_servers = () if brand_allows_magnific(brand) else ("magnific",)
     accounts = [config_dir] + [
-        d for d in _claude_accounts(cfg) if d != config_dir and _account_can_run(d, task_type)
+        d
+        for d in _claude_accounts(cfg)
+        if d != config_dir and _account_can_run(d, task_type, skip_servers)
     ]
+    if not brand_allows_magnific(brand) and task_type != "ads":
+        # (ads is the one lane that needs the profile holding the Meta token.)
+        # Never fail over onto another brand's login (Delta Cuisine's profile owns
+        # the Magnific/Adobe accounts this brand must stay away from).
+        accounts = [config_dir]
 
     # Keep the Magnific MCP usable headless: strip any stale "needs auth" flag so
     # this run's generation tools aren't silently disabled (see the helper).
@@ -2175,6 +2550,8 @@ def run_task(
     ]  # lets the run read WORKFLOW.md + shared skills
     if allowed_tools:  # e.g. "Read,Edit,Write,Bash"
         cmd += ["--allowedTools", allowed_tools]
+    if no_gen:  # belt and braces: an explicit deny, not just an unlisted server
+        cmd += ["--disallowedTools", ",".join(_NO_GEN_SERVERS)]
 
     # Reading or changing EXISTING campaigns is bounded work with a hard money
     # ceiling. A read-only report also touches none of the shared resources the

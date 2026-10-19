@@ -14,16 +14,21 @@ _features = {}
 _lock = threading.RLock()
 
 
-def load(path: Path):
+def load(path: Path, *, expected_digest: str | None = None):
     path = path.resolve()
     if path.parent != (ROOT / "features").resolve() or path.suffix != ".py":
         raise ValueError("Reloadable features must be direct features/*.py modules")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    source = path.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    if expected_digest is not None and digest != expected_digest:
+        raise ValueError("Feature changed since approval; refusing to execute it")
     spec = importlib.util.spec_from_file_location(f"era_feature_{path.stem}_{digest}", path)
     module = importlib.util.module_from_spec(spec)
     # Avoid stale timestamp-based pyc caches on rapid live replacement.
     try:
-        exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+        # This is trusted, approved plugin code, not a Python sandbox. Compile
+        # the same snapshot we hashed, with no stale timestamp-based pyc reuse.
+        exec(compile(source, str(path), "exec"), module.__dict__)
     except (SystemExit, KeyboardInterrupt) as exc:
         raise ValueError("Feature import tried to terminate the host") from exc
     info = getattr(module, "FEATURE", None)
@@ -41,12 +46,21 @@ def load(path: Path):
         "description": info["description"],
         "module": module,
         "path": path.relative_to(ROOT).as_posix(),
+        "digest": digest,
     }
 
 
-def install(paths: list[Path]) -> None:
+def install(paths: list[Path], *, approved: dict[str, str] | None = None) -> None:
     # Validate all modules first, then publish the collection atomically.
-    loaded = [load(path) for path in paths]
+    loaded = [
+        load(
+            path,
+            expected_digest=approved[path.relative_to(ROOT).as_posix()]
+            if approved is not None
+            else None,
+        )
+        for path in paths
+    ]
     if len({f["id"] for f in loaded}) != len(loaded):
         raise ValueError("Duplicate feature ids")
     with _lock:
@@ -59,9 +73,7 @@ def install(paths: list[Path]) -> None:
         _features.clear()
         _features.update(updated)
         for feature in loaded:
-            _restored[feature["path"]] = hashlib.sha256(
-                (ROOT / feature["path"]).read_bytes()
-            ).hexdigest()
+            _restored[feature["path"]] = feature["digest"]
 
 
 def catalog() -> list[dict]:
@@ -133,7 +145,7 @@ def restore() -> None:
                     if _restored.get(rel) != actual or not any(
                         feature["path"] == rel for feature in _features.values()
                     ):
-                        install([path])
+                        install([path], approved={rel: item["candidate"]})
                         _restored[rel] = actual
                 except Exception:
                     continue

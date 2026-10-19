@@ -7,6 +7,29 @@ so `from main import TOOL_DECLARATIONS` and `main.TOOL_DECLARATIONS` still work.
 
 TOOL_DECLARATIONS = [
     {
+        "name": "code_mode",
+        "description": "Report CodeMode status or honor the user's enter/exit command. Natural coding requests enter through the deterministic input boundary. CodeMode retains the signed-in Claude subscription and offers Sonnet, Opus and Haiku selection by HUD or voice without changing account or billing. Changes are staged, verified and require the user's exact final approval.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {"action": {"type": "STRING", "enum": ["status", "enter", "exit"]}},
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "telegram_call",
+        "description": "Control Era's native Telegram voice calls to the configured owner. For 'call me through Telegram' use action='dial'; this is a VOICE CALL, not send_message. status reports actual availability/state. Never claim connected when only accepted/dialing. Only the configured owner can be called; arbitrary contacts are unsupported. Incoming reception can be enabled or stopped separately.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "enum": ["status", "dial", "hangup", "listen", "stop_listening"],
+                }
+            },
+            "required": ["action"],
+        },
+    },
+    {
         "name": "open_app",
         "description": (
             "Opens an APPLICATION on the computer system. If the application is already running "
@@ -375,8 +398,16 @@ TOOL_DECLARATIONS = [
                     "type": "STRING",
                     "description": (
                         "list_devices (all devices + live volume/mute + which is default) | "
-                        "set_default (make `device` the default output or input - this moves "
-                        "MEDIA: Spotify, YouTube, everything. It does NOT move my voice) | "
+                        "set_default (make `device` the default output or input. Apps that "
+                        "follow the default move with it; an app Windows holds on another device "
+                        "does NOT - the result names it. It does NOT move my voice) | "
+                        "route_media (send MEDIA to `device`: 'send the music to my glasses', "
+                        "'play YouTube on the speakers', 'put Spotify on the headset'. `app` = "
+                        "spotify / youtube / netflix / browser / an app name, or empty for "
+                        "everything playing; device 'default' = follow the default again. Use "
+                        "this, not set_default, whenever the user wants MEDIA on a device) | "
+                        "media_routing (which app is playing on which device RIGHT NOW - check it "
+                        "before ever saying where the music plays) | "
                         "set_voice_output (play MY OWN SPOKEN VOICE on `device` - 'speak on my "
                         "glasses', 'switch your voice to the computer', 'talk through the "
                         "speakers'. Persistent, instant, and it leaves media routing alone) | "
@@ -405,6 +436,13 @@ TOOL_DECLARATIONS = [
                         "'headset', 'microphone', or 'glasses'. Never guess or invent one - if "
                         "unsure, call list_devices first. If several devices match, the tool "
                         "returns the candidates: ask the user which."
+                    ),
+                },
+                "app": {
+                    "type": "STRING",
+                    "description": (
+                        "For route_media only: whose sound to move - 'spotify', 'youtube', "
+                        "'netflix', 'browser', or an app name. Empty = everything playing."
                     ),
                 },
                 "flow": {
@@ -482,12 +520,20 @@ TOOL_DECLARATIONS = [
                         "volume_down | current_track | status | minimize | set_volume_exact | "
                         "get_volume_exact | volume_delta | mute_exact | unmute_exact | "
                         "toggle_mute_exact | current_track_data | playback_state | progress | "
-                        "seek_exact | seek_forward | seek_rewind"
+                        "seek_exact | seek_forward | seek_rewind | play_uri | queue"
                     ),
                 },
                 "value": {
                     "type": "STRING",
                     "description": "Song/artist/album name to search for (required when action is search)",
+                },
+                "uri": {
+                    "type": "STRING",
+                    "description": "Exact Spotify URI for play_uri or queue. Prefer a saved favourite URI over title search.",
+                },
+                "track_id": {
+                    "type": "STRING",
+                    "description": "Exact 22-character Spotify track ID for API playback.",
                 },
                 "percent": {
                     "type": "INTEGER",
@@ -781,14 +827,17 @@ TOOL_DECLARATIONS = [
                     "description": "File/folder path or shortcut: desktop, downloads, documents, home. Full Windows paths with spaces are supported (e.g. D:\\my folder\\file.txt)",
                 },
                 "destination": {"type": "STRING", "description": "Destination path for move/copy"},
-                "new_name": {"type": "STRING", "description": "New name for rename"},
+                "new_name": {
+                    "type": "STRING",
+                    "description": "Required for rename: destination filename only, including its extension, in the same folder. Example: action='rename', path='C:\\work\\old.txt', new_name='new.txt'. Never put the destination in name. Use move to change folders.",
+                },
                 "content": {
                     "type": "STRING",
                     "description": "Content for create_file/write. To add to an existing file, use action='write' with append=true",
                 },
                 "name": {
                     "type": "STRING",
-                    "description": "File/folder name to search for or operate on. Also accepts full Windows paths for 'open' action.",
+                    "description": "Existing file/folder name to search for or operate on. For rename, use path as the full existing file path (omit name), or path as its parent folder and name as the existing filename; new_name is always the destination. Also accepts full Windows paths for 'open' action.",
                 },
                 "extension": {
                     "type": "STRING",
@@ -1788,6 +1837,9 @@ TOOL_DECLARATIONS = [
             "Cody (code and tests) and Nabar (independent review, the skeptic). Use it when "
             "the user names a crew member ('Drew, find what we decided about…', 'Laura, plan "
             "this') or asks for research, a draft or a review that needs a specialist. "
+            "The crew can inspect/read project source with hashes and submit one coordinated "
+            "candidate to Development for isolated verification and final HUD review. "
+            "Nabar only reads/checks. Queued verification is not an applied or passed change. "
             "action='ask' with task=… (and bot=… to address one directly); action='list' "
             "names the crew; action='status' says whether anything awaits approval. The crew "
             "never deletes and never approves its own changes: anything that replaces note "
@@ -2150,7 +2202,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "visual_engine",
-        "description": "Update the running HUD without restart. command is JSON: action upsert/remove/layout/reset; widget {id,kind:text|metric|progress|chart|button|field,label,value,series,binding:cpu_percent|ram_percent|development,action:{drawer:schedule|diagnostics|settings|capabilities|conversation}}; layout {theme:dark|light,density:compact|comfortable,columns:1..3,accent:#hex,left:bool,right:bool}. No HTML/scripts. Use action snapshot to read.",
+        "description": "Show Era One information on its HUD: for 'show me system telemetry', 'show active tasks', or other view requests use command JSON {action:focus,view:telemetry|activity|memory|context|schedule|diagnostics|tools|telegram|development|overview}. Views: development = staged changes from autonomous development awaiting the user's approval; tools = the tool list; diagnostics = health checks. Use the exact view the user names; never substitute a neighbour. Focus only navigates; never invent metric widgets for these requests. Also update the running HUD without restart: action upsert/remove/layout/reset; widget {id,kind:text|metric|progress|chart|button|field,label,value,series,binding:cpu_percent|ram_percent|development,action:{drawer:schedule|diagnostics|settings|capabilities|conversation}}; layout {theme:dark|light,density:compact|comfortable,columns:1..3,accent:#hex,left:bool,right:bool}. No HTML/scripts. Use action snapshot to read.",
         "parameters": {
             "type": "OBJECT",
             "properties": {"command": {"type": "STRING"}},

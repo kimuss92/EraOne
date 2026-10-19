@@ -1,7 +1,9 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Ban, Mic, MicOff, Paperclip, Power, Send, Square } from 'lucide-react';
-import { getState, live, useHud } from '../lib/store';
+import { getState, live, useHud, useMedia } from '../lib/store';
 import { actions } from '../lib/transport';
+import { startCanvasLoop } from '../lib/canvasLoop';
+import { useReducedMotion } from '../lib/motion';
 
 const HISTORY_KEY = 'era_cmd_history';
 const HISTORY_MAX = 50;
@@ -15,22 +17,20 @@ function loadHistory(): string[] {
   }
 }
 
-// Scrolling level trace: the REAL mic RMS while the user can be heard, Era's
-// REAL voice amplitude while she speaks. Canvas + rAF, never React state.
+// Input-only level trace, including while Era speaks. Canvas + rAF.
 function VoiceWave() {
   const ref = useRef<HTMLCanvasElement>(null);
+  const reduced = useReducedMotion();
+  const motion = useRef(reduced); motion.current = reduced;
   useEffect(() => {
     const c = ref.current!;
     const g = c.getContext('2d')!;
     const hist = new Float32Array(56);
-    let raf = 0, last = 0, head = 0, colorAt = 0, color = '#5fd4ff';
+    let head = 0, colorAt = 0, color = '#5fd4ff';
     const draw = (now: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden || now - last < 50) return;
-      last = now;
       const s = getState();
-      const speaking = s.agent.state === 'speaking';
-      const v = speaking ? live.amplitude : s.micActive && !s.standby ? Math.min(1, Math.sqrt(live.micLevel) * 2.2) : 0;
+      const v = s.link === 'online' && s.micActive && now - live.micLevelAt < 1000
+        ? Math.min(1, Math.sqrt(live.micLevel) * 2.2) : 0;
       hist[head] = v;
       head = (head + 1) % hist.length;
       const w = c.clientWidth, h = c.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -53,8 +53,7 @@ function VoiceWave() {
       }
       g.globalAlpha = 1;
     };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return startCanvasLoop(c,draw,() => motion.current ? 100 : 50);
   }, []);
   return <canvas ref={ref} className="h-9 w-28 shrink-0 xl:w-36" aria-hidden="true" />;
 }
@@ -66,14 +65,21 @@ export interface CommandBarHandle {
 
 interface Props {
   onFiles: (files: File[]) => void;
+  coding?: boolean;
 }
 
-const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onFiles }, ref) {
+const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onFiles, coding = false }, ref) {
   const link = useHud(s => s.link);
   const micActive = useHud(s => s.micActive);
   const standby = useHud(s => s.standby);
   const state = useHud(s => s.agent.state);
   const [text, setText] = useState('');
+  const [submitted, setSubmitted] = useState(0);
+  const [awaiting, setAwaiting] = useState(false);
+  const reduced = useReducedMotion();
+  const responding = useHud(s => s.transcript.responding);
+  const latestEntry = useHud(s => s.conversation[s.conversation.length-1]?.id || '');
+  const compact = useMedia('(max-width: 600px)');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const hist = useRef<string[]>(loadHistory());
@@ -87,6 +93,13 @@ const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onF
 
   const online = link === 'online';
   const speaking = state === 'speaking';
+  const processing = online && (awaiting || responding || ['routing','thinking','tool_running','synthesizing','transcribing'].includes(state));
+  useEffect(() => { setAwaiting(false); }, [online,state,responding,latestEntry]);
+  useEffect(() => {
+    if (!awaiting) return;
+    const timer = window.setTimeout(() => setAwaiting(false),10000);
+    return () => window.clearTimeout(timer);
+  }, [awaiting,submitted]);
   // How many tasks are actually in flight, so the cancel button is live
   // whenever there is work to stop -- including while she is silent.
   const running = useHud(s => s.tools.filter(t => t.status === 'running').length);
@@ -96,6 +109,7 @@ const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onF
     const msg = text.trim();
     if (!msg || !online) return;
     if (!actions.sendCommand(msg)) return;
+    setSubmitted(n => n+1); setAwaiting(true);
     setText('');
     const h = hist.current;
     if (h[h.length - 1] !== msg) {
@@ -155,8 +169,8 @@ const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onF
             else if (e.key === 'ArrowUp' && (text === '' || pos.current !== -1)) { e.preventDefault(); recall(-1); }
             else if (e.key === 'ArrowDown' && pos.current !== -1) { e.preventDefault(); recall(1); }
           }}
-          placeholder={online ? 'Ask ERA ONE anything…' : 'Waiting for ERA ONE…'}
-          aria-label="Command"
+          placeholder={online ? coding ? 'Ask Claude to build, debug or explain…' : compact ? 'Ask Era…' : 'Ask ERA ONE anything…' : compact ? 'Connecting…' : 'Waiting for ERA ONE…'}
+          aria-label={coding ? 'CodeMode command' : 'Command'}
           title="Enter to send · Shift+Enter new line · ↑/↓ history · / or Ctrl+K"
           disabled={!online}
           className="cmd-input min-h-[40px] min-w-0 flex-1 resize-none px-3 py-2.5 text-body"
@@ -190,12 +204,14 @@ const CommandBar = forwardRef<CommandBarHandle, Props>(function CommandBar({ onF
         </button>
         <button type="submit" className="round-btn round-btn-accent" title="Send" aria-label="Send" disabled={!online || !text.trim()}>
           <Send className="h-4 w-4" />
+          {submitted > 0 && !reduced && <span key={submitted} className="cmd-send-ripple" aria-hidden="true" />}
         </button>
       </form>
       {/* Only an abnormal mic state is worth a line; the slot keeps its height
           so the command bar never jumps when the mic toggles. */}
-      <div className="mt-1.5 flex h-4 justify-center">
+      <div className="mt-1.5 flex h-4 justify-center gap-3">
         <span className={`micro text-[var(--warn)] ${!online || !micActive || standby ? '' : 'invisible'}`} role="status">{micState}</span>
+        {processing && <span className="cmd-processing" role="status" aria-label={awaiting ? 'Command sent, awaiting response' : 'Era is processing'}><i aria-hidden="true" /><i aria-hidden="true" /><i aria-hidden="true" /><span>{awaiting ? 'Awaiting response' : 'Processing'}</span></span>}
       </div>
     </div>
   );

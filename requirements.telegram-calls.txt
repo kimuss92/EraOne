@@ -1,0 +1,5 @@
+# Optional isolated environment; do not install into Era's running environment.
+py-tgcalls==3.0.0
+ntgcalls==3.0.3
+telethon==1.45.0
+pywin32==311

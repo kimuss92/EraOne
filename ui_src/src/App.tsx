@@ -1,11 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { FileUp, WifiOff } from 'lucide-react';
 import HudHeader from './components/HudHeader';
 import CoreStage from './components/CoreStage';
+import BootScreen, { type BootPhase } from './components/BootScreen';
+import ViewNavigation from './components/ViewNavigation';
+import Drawer from './components/Drawer';
 import VisualWorkspace from './components/VisualWorkspace';
 import DevelopmentDrawer from './components/DevelopmentDrawer';
+import CodeModeWorkbench from './components/CodeModeWorkbench';
+import { useCodeMode } from './lib/codemode';
+import { useCodeTransition } from './lib/codeTransition';
+import { useCinematicInteraction, useDrawerTransition } from './lib/cinematic';
 import { DevelopmentProvider } from './lib/development';
 import ActivityPanel from './components/ActivityPanel';
+import TelegramCallPanel from './components/TelegramCallPanel';
+import CommandCenter, { editLayout } from './components/CommandCenter';
 import SystemPanel from './components/SystemPanel';
 import ContextPanel, { MemoryPanel, SourcesPanel, WeatherPanel } from './components/ContextPanel';
 import LiveTranscript from './components/LiveTranscript';
@@ -39,14 +48,24 @@ interface Caps {
 }
 
 export default function App() {
+  const { state: codeMode } = useCodeMode();
+  const coding = Boolean(codeMode?.enabled);
+  const codeEnabled = useRef(coding);
+  codeEnabled.current = coding;
+  const { phase: codePhase, reduced: codeReduced } = useCodeTransition(coding);
+  const [bootPhase, setBootPhase] = useState<BootPhase>('waiting');
+  const hudRef = useRef<HTMLDivElement>(null);
+  useCinematicInteraction(hudRef,!coding);
   const link = useHud(s => s.link);
   const agent = useHud(s => s.agent);
   const theme = useHud(s => s.theme);
   const drawer = useHud(s => s.drawer);
+  const { visible: displayDrawer, leaving: drawerLeaving } = useDrawerTransition(drawer,codeReduced);
   const palette = useHud(s => s.palette);
   const showLeft = useHud(s => s.showLeft);
   const showRight = useHud(s => s.showRight);
   const approval = useHud(s => s.approval);
+  const commandCenter = useHud(s => Boolean(s.widgetLayout));
   const overlay = useHud(s => s.overlay);
   const dockLeft = useMedia(DOCK_QUERY.left);
   const dockRight = useMedia(DOCK_QUERY.right);
@@ -55,22 +74,34 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const cmdRef = useRef<CommandBarHandle>(null);
+  const codeCmdRef = useRef<CommandBarHandle>(null);
+  const lastMainFocus = useRef<HTMLElement | null>(null);
+  const focusedCode = useRef(false);
   const memorySearchRef = useRef<HTMLInputElement>(null);
   const ptt = useRef(false);
 
   useEffect(() => { connect(); }, []);
   useScheduleSync();
 
+  useEffect(() => {
+    if (coding && codePhase !== 'off' && !focusedCode.current) {
+      focusedCode.current = true; codeCmdRef.current?.focus();
+    } else if (!coding && focusedCode.current && (codePhase === 'leaving' || codePhase === 'off')) {
+      focusedCode.current = false;
+      if (lastMainFocus.current?.isConnected) lastMainFocus.current.focus();
+    }
+  }, [coding, codePhase]);
+
   // High-risk approvals live with the activity feed, never over the central sphere.
   // Open the left rail while an approval is visible so its action buttons are reachable.
   useEffect(() => {
-    if (!approval || link !== 'online') return;
+    if (!approval || link !== 'online' || coding) return;
     if (dockLeft) {
       if (!showLeft) setState({ showLeft: true });
     } else if (overlay !== 'left') {
       setState({ overlay: 'left' });
     }
-  }, [approval?.id, link, dockLeft, showLeft, overlay]);
+  }, [approval?.id, link, dockLeft, showLeft, overlay, coding]);
 
   // "+ Schedule": pre-fill the command bar only — nothing is sent until Enter.
   const startSchedule = useCallback(() => {
@@ -93,8 +124,17 @@ export default function App() {
   // Registry-driven facts, refreshed whenever the link (re)opens.
   useEffect(() => {
     if (link !== 'online') return;
-    api<Caps>('/api/capabilities').then(setCaps).catch(() => setCaps(null));
-    api<HudSettings>('/api/settings').then(s => setSoundsEnabled(s.hud_sounds)).catch(() => {});
+    let disposed = false;
+    setCaps(null);
+    let capsTimer = 0;
+    const loadCaps = () => api<Caps>('/api/capabilities').then(c => {
+      if (!disposed && Array.isArray(c.skills) && typeof c.count === 'number') {
+        setCaps(c); window.clearInterval(capsTimer);
+      }
+    }).catch(() => {});
+    void loadCaps();
+    capsTimer = window.setInterval(loadCaps, 5000);
+    api<HudSettings>('/api/settings').then(s => setSoundsEnabled(s.hud_sounds, false)).catch(() => {});
     api<{ events: Array<{ task_id: string; seq: number; ts: number; status: string; goal: string; message: string; error_type?: string }> }>(
       '/api/tasks/events?limit=100',
     ).then(({ events }) => {
@@ -116,15 +156,15 @@ export default function App() {
       api<{ voice: { tts: string; stt: string } }>('/api/status').then(s => setVoice(s.voice)).catch(() => setVoice(null));
     loadStatus();
     const t = window.setInterval(loadStatus, 30_000);
-    return () => window.clearInterval(t);
+    return () => { disposed = true; window.clearInterval(t); window.clearInterval(capsTimer); };
   }, [link]);
 
   // Every real skill category gets a node (alphabetical = stable positions),
-  // so whichever tool runs, its own node is the one that lights up.
-  const nodes = (caps?.skills || [])
-    .map(s => s.id)
-    .filter(id => id !== 'safety')
-    .sort();
+  // sized by its real tool count, so whichever tool runs, its own node lights up.
+  const nodes = useMemo(() => (caps?.skills || [])
+    .filter(s => s.id !== 'safety')
+    .map(s => ({ id: s.id, count: s.count }))
+    .sort((a, b) => a.id.localeCompare(b.id)), [caps]);
 
   // HUD-side feedback (file sends) goes to the notification rail as info.
   const flash = useCallback((msg: string) => {
@@ -144,7 +184,7 @@ export default function App() {
     const typing = () => {
       const el = document.activeElement;
       return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
-        || el instanceof HTMLSelectElement || (el instanceof HTMLElement && el.isContentEditable);
+        || el instanceof HTMLSelectElement || Boolean(el?.closest('[role="combobox"],[aria-haspopup="listbox"],[role="listbox"]')) || (el instanceof HTMLElement && el.isContentEditable);
     };
     const toggleDrawer = (id: DrawerId) => setState(s => ({ drawer: s.drawer === id ? null : id }));
     const runShortcut = (id: ShortcutId) => {
@@ -152,7 +192,7 @@ export default function App() {
       switch (id) {
         case 'mic': if (s.link === 'online') actions.setMic(!s.micActive); break;
         case 'standby': if (s.link === 'online') actions.setStandby(!s.standby); break;
-        case 'ask': cmdRef.current?.focus(); break;
+        case 'ask': (codeEnabled.current ? codeCmdRef : cmdRef).current?.focus(); break;
         case 'conversation': toggleDrawer('conversation'); break;
         case 'schedule': toggleDrawer('schedule'); break;
         case 'capabilities': toggleDrawer('capabilities'); break;
@@ -172,22 +212,28 @@ export default function App() {
     };
     const down = (e: KeyboardEvent) => {
       const s = getState();
-      const sc = !typing() && !s.palette && !e.repeat ? matchShortcut(e) : null;
+      const inCode = codeEnabled.current;
+      const sc = !typing() && (!s.palette || inCode) && !e.repeat ? matchShortcut(e) : null;
       if (sc) {
+        if (inCode && !['mic', 'standby', 'ask', 'fullscreen'].includes(sc)) return;
         e.preventDefault();
         runShortcut(sc);
         return;
       }
       if (e.key.toLowerCase() === 'k' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        setState({ palette: !s.palette });
+        if (inCode) codeCmdRef.current?.focus();
+        else setState({ palette: !s.palette });
       } else if (e.key === 'Escape') {
-        if (s.palette) setState({ palette: false });
+        if (inCode) {
+          if (s.agent.state === 'speaking') actions.interrupt();
+          else (document.activeElement as HTMLElement | null)?.blur();
+        } else if (s.palette) setState({ palette: false });
         else if (s.drawer) setState({ drawer: null });
         else if (s.overlay) setState({ overlay: null });
         else if (s.agent.state === 'speaking') actions.interrupt();
         else (document.activeElement as HTMLElement | null)?.blur();
-      } else if (e.code === 'Space' && !typing() && !e.repeat && !s.palette && !s.drawer) {
+      } else if (e.code === 'Space' && !typing() && !e.repeat && (inCode || (!s.palette && !s.drawer))) {
         if (!s.micActive && !s.standby && s.link === 'online') {
           e.preventDefault();
           ptt.current = true;
@@ -215,20 +261,24 @@ export default function App() {
 
   return (
     <DevelopmentProvider><div
-      className="hud-root relative flex h-screen w-screen flex-col overflow-hidden"
+      ref={hudRef}
+      className={`hud-root relative flex h-screen w-screen flex-col overflow-hidden ${commandCenter ? 'cockpit-mode' : ''}`}
       style={{ '--sh': stateHue.h, '--ss': `${stateHue.s}%` } as CSSProperties}
       data-state={state}
+      data-code-room={codePhase}
+      data-boot={bootPhase}
       onContextMenu={e => { if (!(e.target as HTMLElement).closest('.select-text')) e.preventDefault(); }}
-      onDragEnter={e => { e.preventDefault(); dragDepth.current += 1; setDragging(true); }}
+      onDragEnter={e => { if (e.dataTransfer.types.includes('application/x-era-widget')) return; e.preventDefault(); dragDepth.current += 1; setDragging(true); }}
       onDragLeave={e => { e.preventDefault(); dragDepth.current -= 1; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }}
       onDragOver={e => e.preventDefault()}
       onDrop={e => { e.preventDefault(); dragDepth.current = 0; setDragging(false); sendFiles(Array.from(e.dataTransfer.files)); }}
     >
+      <div className={`hud-main-room cm-main-${codePhase}`} inert={coding} aria-hidden={coding} onFocusCapture={e => { lastMainFocus.current = e.target as HTMLElement; }}>
       <div className="hud-grid pointer-events-none absolute inset-0" />
       <div className="hud-vignette pointer-events-none absolute inset-0" />
 
       <HudHeader toolCount={caps?.count ?? null} voice={voice} />
-      <NotificationRail />
+      <ViewNavigation />
 
       {link !== 'online' && (
         <div className="banner absolute left-1/2 top-16 z-[var(--z-banner)] -translate-x-1/2" role="status">
@@ -239,10 +289,11 @@ export default function App() {
       )}
 
       <main className="relative z-[var(--z-content)] flex min-h-0 flex-1 gap-3 p-3">
-        {leftShown && (
+        {leftShown && !commandCenter && (
           <aside className={`rail rail-left ${dockLeft ? '' : 'rail-overlay'}`}>
             <ApprovalPrompt />
             <ActivityPanel />
+            <TelegramCallPanel />
             <ScheduledPanel onSchedule={startSchedule} />
             <SystemPanel />
           </aside>
@@ -252,15 +303,14 @@ export default function App() {
           className="relative flex min-w-0 flex-1 flex-col"
           onPointerDown={() => { if (getState().overlay) setState({ overlay: null }); }}
         >
-          <VisualWorkspace />
-          <CoreStage nodes={nodes} />
-          <div className="relative z-[var(--z-stage)] shrink-0 space-y-3 pt-2">
-            <LiveTranscript />
+          {commandCenter ? <><div className="era-approval-surface"><ApprovalPrompt /></div><CommandCenter nodes={nodes} onSchedule={startSchedule} memorySearchRef={memorySearchRef} corePaused={bootPhase === 'waiting'} /></> : <><button className="self-start rounded-lg border border-cyan-400/20 px-3 py-2 text-xs text-cyan-200" disabled={link !== 'online'} onClick={() => void editLayout({ view: 'command-center' }).catch(() => flash('Could not save the layout; try again.'))}>Command center</button><VisualWorkspace /><CoreStage nodes={nodes} paused={bootPhase === 'waiting'} /></>}
+          <div className="era-cmd-dock relative z-[var(--z-stage)] shrink-0 space-y-3 pt-2">
+            {!commandCenter && <LiveTranscript />}
             <CommandBar ref={cmdRef} onFiles={sendFiles} />
           </div>
         </section>
 
-        {rightShown && (
+        {rightShown && !commandCenter && (
           <aside className={`rail rail-right ${dockRight ? '' : 'rail-overlay'}`}>
             <ContextPanel />
             <SourcesPanel />
@@ -279,13 +329,21 @@ export default function App() {
         </div>
       )}
 
-      {drawer === 'conversation' && <ConversationDrawer />}
-      {drawer === 'diagnostics' && <DiagnosticsDrawer />}
-      {drawer === 'settings' && <SettingsDrawer />}
-      {drawer === 'capabilities' && <CapabilitiesDrawer />}
-      {drawer === 'schedule' && <ScheduleDrawer onSchedule={startSchedule} />}
-      {drawer === 'shortcuts' && <ShortcutsDrawer />}
-      {drawer === 'development' && <DevelopmentDrawer />}
+      {displayDrawer && <div className={`hud-drawer-presence ${drawerLeaving ? 'is-leaving' : ''}`} inert={drawerLeaving} aria-hidden={drawerLeaving}>
+        {displayDrawer === 'conversation' && <ConversationDrawer />}
+        {displayDrawer === 'diagnostics' && <DiagnosticsDrawer />}
+        {displayDrawer === 'settings' && <SettingsDrawer />}
+        {displayDrawer === 'capabilities' && <CapabilitiesDrawer />}
+        {displayDrawer === 'schedule' && <ScheduleDrawer onSchedule={startSchedule} />}
+        {displayDrawer === 'shortcuts' && <ShortcutsDrawer />}
+        {displayDrawer === 'development' && <DevelopmentDrawer />}
+        {displayDrawer === 'telegram' && <Drawer title="TELEGRAM"><TelegramCallPanel /></Drawer>}
+        {displayDrawer === 'telemetry' && <Drawer title="SYSTEM TELEMETRY"><SystemPanel /></Drawer>}
+        {displayDrawer === 'activity' && <Drawer title="LIVE ACTIVITY"><ActivityPanel /></Drawer>}
+        {displayDrawer === 'memory' && <Drawer title="MEMORY"><MemoryPanel searchRef={memorySearchRef} /></Drawer>}
+        {displayDrawer === 'context' && <Drawer title="CONTEXT"><ContextPanel /><SourcesPanel /></Drawer>}
+      </div>}
+      <BootScreen capabilitiesReady={link === 'online' && caps !== null} onPhaseChange={setBootPhase} />
       {palette && (
         <CommandPalette
           focusInput={() => cmdRef.current?.focus()}
@@ -293,6 +351,13 @@ export default function App() {
           startSchedule={startSchedule}
         />
       )}
+      </div>
+      {codePhase !== 'off' && <CodeModeWorkbench phase={codePhase} reduced={codeReduced} commandRef={codeCmdRef} onFiles={sendFiles} enabled={coding} />}
+      {(codePhase === 'entering' || codePhase === 'leaving') && !codeReduced && <>
+        <div className={`cm-wipe ${codePhase === 'leaving' ? 'cm-wipe-exit' : ''}`} aria-hidden="true" />
+        <p className="cm-initializing" role="status">{codePhase === 'entering' ? 'Initializing Code Environment…' : 'Returning to main…'}</p>
+      </>}
+      <NotificationRail />
     </div></DevelopmentProvider>
   );
 }

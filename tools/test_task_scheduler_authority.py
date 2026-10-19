@@ -560,3 +560,40 @@ class TestDispatcher:
     )
     def test_protocol_command_words(self, td, said, tool_name, expected):
         assert self._speaker(td, [(5, said)]).names_protocol(tool_name) is expected
+
+
+# ── "any pending approval?" reads the SAME store the HUD shows (2026-10-16) ──
+class TestPendingTellsTheTruth:
+    @pytest.fixture
+    def store(self, monkeypatch):
+        from core.pending_confirmation import PendingConfirmationStore
+
+        s = PendingConfirmationStore()
+        monkeypatch.setattr("core.pending_confirmation.get_shared_store", lambda: s)
+        return s
+
+    def test_an_armed_confirmation_is_named_not_denied(self, store):
+        store.store(
+            "manage_preference",
+            {"action": "waive_close_confirmation", "app": "spotify"},
+            "MEDIUM",
+            "Changes a standing safety preference.",
+        )
+        out = tool.scheduled_task({"action": "pending"})
+        assert out["success"]
+        assert "waive close confirmation" in out["message"]
+        assert "nothing is waiting" not in out["message"].lower()
+
+    def test_both_sources_are_listed_together(self, store, isolated):
+        store.store("computer_settings", {"action": "restart"}, "HIGH", "Restart.")
+        ts.fire(_delete_task()["id"])
+        msg = tool.scheduled_task({"action": "pending"})["message"]
+        assert "restart" in msg and "clean temp" in msg
+
+    def test_all_clear_only_when_both_are_empty(self, store):
+        msg = tool.scheduled_task({"action": "pending"})["message"]
+        assert msg == "Nothing is waiting for the user's approval."
+
+    @pytest.mark.parametrize("alias", ["list_pending", "approvals", "pending_approvals"])
+    def test_the_names_the_model_reached_for_work(self, store, alias):
+        assert tool.scheduled_task({"action": alias})["success"]

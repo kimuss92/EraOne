@@ -120,6 +120,22 @@ class ToolBatchMixin:
         )
         return build_function_response(fc, result, types.FunctionResponse)
 
+    def _attach_domain_pack(self, fr, name: str) -> None:
+        """The first result of a domain tool in this connection also carries its rule
+        pack (core/prompt_packs.py), so those rules cost nothing on turns that never
+        touch the domain. Never raises: without the pack the model still has the
+        prompt stub and the tool declaration."""
+        try:
+            from core.prompt_packs import pack_for_tool
+
+            sent = self.__dict__.setdefault("_domain_packs_sent", {})
+            pack = pack_for_tool(name, sent, getattr(self, "_conn_generation", 0))
+            payload = getattr(fr, "response", None)
+            if pack and isinstance(payload, dict):
+                payload["domain_rules"] = pack
+        except Exception as exc:  # noqa: BLE001
+            print(f"[era] [PACK] domain rules not attached for {name}: {type(exc).__name__}: {exc}")
+
     def _armed_confirmation_id(self) -> str | None:
         """Id of the confirmation awaiting the user's answer, or None."""
         store = getattr(self, "_pending_store", None)
@@ -282,6 +298,7 @@ class ToolBatchMixin:
                 ledger.fail(claim, "cancelled")
             else:
                 ledger.complete(claim, fr)
+            self._attach_domain_pack(fr, name)
             responses.append(fr)
 
             if name in HALTING_TOOLS:

@@ -55,3 +55,4 @@ pywin32; platform_system == "Windows"
 
 # Candidate verification
 ruff>=0.12,<1
+webrtcvad-wheels>=2.0.14.post1,<3

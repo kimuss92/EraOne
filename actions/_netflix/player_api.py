@@ -222,6 +222,33 @@ NEXT_EPISODE_UNMOVED = "NEXT_EPISODE_UNMOVED"
 NEXT_EPISODE_OK = "Next episode starting"
 
 
+def resume_after_skip_script() -> str:
+    """Resume the replacement player idempotently and verify actual playing state."""
+    return (
+        _PREAMBLE
+        + """
+return (async () => {
+  const deadline = Date.now() + 4000;
+  let resumed = null;
+  while (Date.now() < deadline) {
+    const p = _api(), v = _vid();
+    try {
+      let paused = null;
+      if (p && typeof p.getPaused === 'function') paused = p.getPaused();
+      else if (p && typeof p.isPaused === 'function') paused = p.isPaused();
+      if (paused === false) return true;
+      if (paused === null && v && !v.paused && !v.ended) return true;
+      if (p && p !== resumed && typeof p.play === 'function') { p.play(); resumed = p; }
+      else if (!p && v && v !== resumed) { await v.play(); resumed = v; }
+    } catch (e) { return false; }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return false;
+})();
+"""
+    )
+
+
 def _next_episode_script() -> str:
     """Advance one episode, and only say so once the episode actually changed.
 

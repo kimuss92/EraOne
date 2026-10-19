@@ -8,6 +8,7 @@ import threading  # Lets Era One handle background checks without lag
 import time
 import urllib.parse
 
+from core.cancel_registry import raise_if_cancelled, sleep_cancellable
 from core.intent_memory import remember_action
 from core.win_subprocess import NO_WINDOW
 
@@ -158,19 +159,13 @@ def _get_spotify_audio_session_state() -> int | None:
     Returns Spotify's Windows audio session state when available.
     """
     try:
-        comtypes.CoInitialize()
-    except Exception:
-        pass
-    try:
-        sessions = AudioUtilities.GetAllSessions()
-        for session in sessions:
-            if session.Process and session.Process.name().lower() == "spotify.exe":
-                state = getattr(session, "State", None)
-                if state is not None:
-                    try:
-                        return int(state)
-                    except Exception:
-                        return state
+        from core.media_routing import media_sessions
+
+        sessions = [session for session in media_sessions() if session.stem == "spotify"]
+        if sessions:
+            # Spotify can be explicitly routed away from Era's default output.
+            # A stale inactive session on one endpoint cannot hide a live one.
+            return int(any(session.active for session in sessions))
     except Exception:
         pass
     return None
@@ -196,13 +191,26 @@ def _spotify_window_exists() -> bool:
     return hwnd != 0
 
 
-def _send_spotify_command(app_command: int) -> bool:
+def _send_spotify_command(app_command: int, *, timeout_ms: int | None = None) -> bool:
     """
     Sends a targeted WM_APPCOMMAND directly into Spotify's process.
     """
     hwnd, _ = _get_spotify_hwnd_and_title()
     if hwnd != 0:
-        win32gui.SendMessage(hwnd, 0x0319, 0, app_command << 16)
+        if timeout_ms is None:
+            win32gui.SendMessage(hwnd, 0x0319, 0, app_command << 16)
+        else:
+            try:
+                win32gui.SendMessageTimeout(
+                    hwnd,
+                    0x0319,
+                    0,
+                    app_command << 16,
+                    win32con.SMTO_ABORTIFHUNG,
+                    timeout_ms,
+                )
+            except (OSError, win32gui.error):
+                return False
         return True
     return False
 
@@ -264,7 +272,7 @@ def _open_search(query: str) -> bool:
     if hwnd != 0:
         from actions.spotify_ui import set_search_query
 
-        if set_search_query(hwnd, query):
+        if set_search_query(hwnd, query, timeout_s=1.0):
             return True
     return _open_spotify_uri(f"spotify:search:{urllib.parse.quote(query)}")
 
@@ -300,12 +308,18 @@ def _press_global_media_play_pause() -> None:
     win32api.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
+def _cancel_wait(seconds: float) -> None:
+    sleep_cancellable(seconds)
+    raise_if_cancelled()
+
+
 def _wait_for_spotify_window(wait_s: float = 12.0, focus: bool = True) -> tuple[int, str]:
     """Waits until Spotify exposes a usable visible window."""
     deadline = time.time() + max(wait_s, 3.0)
     last_launch_attempt = 0.0
 
     while time.time() < deadline:
+        raise_if_cancelled()
         hwnd, title = _get_spotify_hwnd_and_title()
         if hwnd != 0:
             if focus:
@@ -316,7 +330,7 @@ def _wait_for_spotify_window(wait_s: float = 12.0, focus: bool = True) -> tuple[
             _launch_spotify_desktop()
             last_launch_attempt = time.time()
 
-        time.sleep(0.35)
+        _cancel_wait(0.35)
 
     return 0, ""
 
@@ -325,12 +339,13 @@ def _wait_until(predicate, timeout_s: float, interval_s: float = 0.25) -> bool:
     """Polls predicate until it returns True or the timeout elapses."""
     deadline = time.time() + max(timeout_s, 0.1)
     while time.time() < deadline:
+        raise_if_cancelled()
         try:
             if predicate():
                 return True
         except Exception:
             pass
-        time.sleep(interval_s)
+        _cancel_wait(interval_s)
     return False
 
 
@@ -416,7 +431,7 @@ def _wait_for_page_settled(
     """
     region = _content_region(hwnd)
     if region is None:
-        time.sleep(min_wait_s)
+        _cancel_wait(min_wait_s)
         return False
 
     deadline = time.time() + max(timeout_s, min_wait_s)
@@ -424,9 +439,10 @@ def _wait_for_page_settled(
     prev: list[int] | None = None
 
     while time.time() < deadline:
+        raise_if_cancelled()
         fp = _region_fingerprint(region)
         if fp is None:
-            time.sleep(poll_s)
+            _cancel_wait(poll_s)
             continue
 
         if (
@@ -438,7 +454,7 @@ def _wait_for_page_settled(
             return True
 
         prev = fp
-        time.sleep(poll_s)
+        _cancel_wait(poll_s)
 
     print("[Spotify] Page did not settle before the deadline — clicking anyway.")
     return False
@@ -460,7 +476,7 @@ def _wait_for_spotify_ui_ready(cold_start: bool) -> tuple[int, str]:
     # Cold start: give the embedded web view time to render the home page.
     # There is no window-level signal for this, so use a generous grace that
     # the click-verify-retry loop below can absorb if it's still not enough.
-    time.sleep(2.8 if cold_start else 0.6)
+    _cancel_wait(2.8 if cold_start else 0.6)
     return _get_spotify_hwnd_and_title()
 
 
@@ -766,10 +782,9 @@ def _spotify_search_and_play(query: str):
 
     spotify_was_closed = not _spotify_window_exists()
 
-    # The window must exist before UIA can drive its search box (launch if cold).
-    hwnd, _ = _wait_for_spotify_ui_ready(spotify_was_closed)
-    if hwnd == 0:
-        return "Spotify window verification failed."
+    # The UI worker spends ~2 s just starting, so 12 s left too little for search +
+    # a verification long enough to see the track change. Success returns early.
+    deadline = time.monotonic() + (20.0 if spotify_was_closed else 15.0)
 
     # Snapshot what is playing NOW, so success means "the track changed", not
     # "a button accepted invoke()". 2026-09-28: "Snoop Dogg" reported "Playing
@@ -777,43 +792,102 @@ def _spotify_search_and_play(query: str):
     # hover-revealed row button returned cleanly and did nothing, and the old
     # check (is the audio session active?) passed on the song already playing.
     before = _now_playing()
+    if before is not None and _track_matches(query, before) and _spotify_is_playing():
+        _mark_spotify_playing_state()
+        return f"Playing '{before[0]}' by {before[1]}, sir."
 
-    _open_search(query)  # UIA SetValue (clean box) -> URI fallback
+    from actions.spotify_search_worker import search_ui
 
-    from actions.spotify_ui import invoke_search_result
-
-    timeout = 10.0 if spotify_was_closed else 8.0
-    ok, _how = invoke_search_result(hwnd, query, timeout_s=timeout)
+    remaining = max(0.1, deadline - time.monotonic() - 3.0)
+    ok, detail = search_ui(query, cold=spotify_was_closed, timeout_s=remaining)
+    raise_if_cancelled()
+    if not ok and _wait_for_new_track(before, query, timeout_s=0.5) is None:
+        # A slow first load is the usual cause (2026-10-16: "try again" then worked
+        # every time). Retry ONCE here, with Spotify now warm, so the user never
+        # has to — a fresh worker and a fresh budget.
+        print(f"[Spotify] search attempt 1 failed ({detail}); retrying once")
+        deadline = time.monotonic() + 15.0
+        ok, detail = search_ui(query, cold=False, timeout_s=12.0)
+        raise_if_cancelled()
     if not ok:
-        return f"I searched for '{query}' but could not find a playable result, sir."
-
-    now = _wait_for_new_track(before, query)
-    if now is None and before is not None:
-        # First attempt did not change the track: retry with a real click.
-        hwnd, _ = _get_spotify_hwnd_and_title()
-        if hwnd:
-            _focus_spotify_window(hwnd)
-            ok, _how = invoke_search_result(hwnd, query, timeout_s=4.0, prefer_click=True)
-            if ok:
-                now = _wait_for_new_track(before, query)
+        now = _wait_for_new_track(before, query, timeout_s=0.5)
         if now is None:
-            title, artist = before
-            return (
-                f"I found '{query}' in Spotify but could not start it — "
-                f"'{title}' by {artist} is still playing, sir."
+            return f"Spotify search failed for '{query}': {detail}."
+        _mark_spotify_playing_state()
+        return f"Playing '{now[0]}' by {now[1]}, sir."
+
+    # 4 s, not 2: Spotify's media session reports a clicked track 2-3 s late, and
+    # 2026-10-16 "Konoba On Our Knees" was PLAYING while Era said it could not start
+    # it. A retry click on a track that is just starting can pause it again.
+    now = _wait_for_new_track(
+        before, query, timeout_s=min(4.0, max(0.1, deadline - time.monotonic()))
+    )
+    if now is None and before is not None and deadline - time.monotonic() > 2.0:
+        # First attempt did not change the track: retry with a real click.
+        ok, _how = search_ui(
+            query, cold=False, retry=True, timeout_s=max(0.1, deadline - time.monotonic() - 1.0)
+        )
+        if ok:
+            now = _wait_for_new_track(
+                before, query, timeout_s=min(3.0, max(0.1, deadline - time.monotonic()))
             )
 
     if now is None:
-        # No GSMTC reading at all (media session unavailable): fall back to the
-        # audio-session check rather than claim a track we cannot see.
-        if not _verify_playback_started(timeout_s=3.0):
-            return f"I clicked '{query}' in Spotify but playback did not start, sir."
-        _mark_spotify_playing_state()
-        return f"Playing '{query}', sir."
+        now = _wait_for_new_track(before, query, timeout_s=0.1)  # never fail on a stale read
+    if now is None:
+        if before is not None:
+            title, artist = before
+            return f"I could not start '{query}' in Spotify; the last verified track was '{title}' by {artist}, sir."
+        return (
+            f"I clicked '{query}' in Spotify but could not verify the requested track started, sir."
+        )
 
     _mark_spotify_playing_state()
     title, artist = now
-    return f"Playing '{title}' by {artist} (search: '{query}'), sir."
+    return f"Playing '{title}' by {artist}, sir."
+
+
+def _spotify_play_uri(params: dict) -> str:
+    """Request one exact track through the desktop protocol, then verify it.
+
+    Used only when OAuth is unconfigured and the bridge is disabled. Windows
+    opens a validated Spotify URI; no UI Automation, search, toggle or retry is
+    involved. GSMTC verifies metadata and audio, not Spotify's internal ID.
+    """
+    from actions.spotify_search_worker import open_track_uri
+    from core.spotify_api import identity
+
+    raise_if_cancelled()
+    try:
+        uri = identity(params.get("uri") or params.get("track_id"))
+    except ValueError as exc:
+        return f"Spotify playback failed: {exc}."
+    query = params.get("value") or params.get("query")
+    if not uri.startswith("spotify:track:") or not isinstance(query, str) or not query.strip():
+        return "Spotify playback failed: desktop ID playback needs the saved track title and artist; other exact-ID requests need the API or native bridge."
+
+    timeout = 6.0 if _spotify_window_exists() else 12.0
+    deadline = time.monotonic() + timeout
+    opened, _detail = open_track_uri(uri, timeout_s=min(1.5, max(0.1, deadline - time.monotonic())))
+    if not opened:
+        return "Spotify playback failed: the desktop launch was not confirmed; the command was not repeated."
+    resumed = False
+    while time.monotonic() < deadline:
+        raise_if_cancelled()
+        track = _now_playing()
+        if track is not None and _track_matches(query, track):
+            raise_if_cancelled()
+            if _spotify_is_playing():
+                _mark_spotify_playing_state()
+                return f"Playing '{track[0]}' by {track[1]}, sir."
+            if not resumed:
+                # Explicit Play is safe only once the requested metadata loaded.
+                # Never resume the old track or toggle a just-started song off.
+                raise_if_cancelled()
+                _send_spotify_command(APPCOMMAND_MEDIA_PLAY, timeout_ms=250)
+                resumed = True
+        _cancel_wait(0.2)
+    return "Spotify playback failed: I could not verify the requested track started; the command was not repeated."
 
 
 def _now_playing() -> tuple[str, str] | None:
@@ -822,7 +896,7 @@ def _now_playing() -> tuple[str, str] | None:
     try:
         from actions import spotify_gsmtc_host
 
-        data = spotify_gsmtc_host.request({"op": "current_track"}, timeout=3.0)
+        data = spotify_gsmtc_host.request({"op": "current_track"}, timeout=1.5)
     except Exception:
         return None
     if not isinstance(data, dict) or not data.get("ok") or not data.get("title"):
@@ -834,7 +908,7 @@ def _track_matches(query: str, track: tuple[str, str]) -> bool:
     """True when every query word appears in the track's title or artist."""
     from actions.spotify_ui import _norm
 
-    qtokens = set(_norm(query).split())
+    qtokens = set(_norm(query).split()) - {"by"}
     have = set(_norm(f"{track[0]} {track[1]}").split())
     return bool(qtokens) and qtokens.issubset(have)
 
@@ -851,7 +925,7 @@ def _wait_for_new_track(
         now = _now_playing()
         if now is None:
             return False
-        if now != before or _track_matches(query, now):
+        if _track_matches(query, now):
             if _spotify_is_playing():
                 found.append(now)
                 return True
@@ -861,15 +935,19 @@ def _wait_for_new_track(
     return found[-1] if found else None
 
 
-def _uia_play_page(label, success_msg, *, uri=None, hotkey_letter=None):
+def _uia_play_page(
+    label, success_msg, *, uri=None, hotkey_letter=None, open_row=None, prefer="label"
+):
     """Navigate to a Spotify page and start it via the accessibility tree's
     primary Play control — no pixel-ratio clicks, so a layout change or resize
     can never send the click to the wrong place (the old failure mode).
 
-    Navigation is by stable URI when one exists (Liked Songs), else by Spotify's
-    own keyboard shortcut. Playback is triggered with UIA `invoke()` on the
-    page's "Play <context>" button, then verified.
+    Navigation is by stable URI when one exists (Liked Songs), by a sidebar row
+    (`open_row`, Release Radar), else by Spotify's own keyboard shortcut. Only the
+    control NAMING the context (`prefer`, default the label) may be pressed, then
+    playback is verified. `prefer=None` keeps the old first-Play-on-the-page rule.
     """
+    raise_if_cancelled()
     # Silently pause YouTube/Netflix in the background first
     threading.Thread(target=_enforce_spotify_priority, daemon=True).start()
 
@@ -880,29 +958,38 @@ def _uia_play_page(label, success_msg, *, uri=None, hotkey_letter=None):
         hwnd, _ = _wait_for_spotify_ui_ready(cold_start)
     else:
         hwnd, _ = _wait_for_spotify_ui_ready(cold_start)
-        if hwnd:
+        if hwnd and hotkey_letter:
+            raise_if_cancelled()
             _focus_spotify_window(hwnd)
             pyautogui.hotkey("alt", "shift", hotkey_letter)  # Spotify's own shortcut, not a click
     if hwnd == 0:
         return f"I could not open Spotify to play {label}, sir."
 
-    _wait_for_page_settled(hwnd, timeout_s=10.0 if cold_start else 7.0, min_wait_s=1.0)
+    # UIA waits for the actual control; pixel fingerprints add latency without
+    # proving that the requested page or playback is ready.
+    raise_if_cancelled()
     hwnd, _ = _get_spotify_hwnd_and_title()
     if hwnd == 0:
         return f"I could not open Spotify to play {label}, sir."
 
-    from actions.spotify_ui import invoke_primary_play
+    # In a killable worker, never in-process: a hung UIA Invoke() once held Liked
+    # Songs "running" for 96 s with no way to stop it (actions/spotify_search_worker.py).
+    from actions.spotify_search_worker import primary_ui
 
-    ok, _how = invoke_primary_play(hwnd, timeout_s=10.0 if cold_start else 8.0)
+    ok, _how = primary_ui(
+        label if prefer == "label" else (prefer or ""),
+        cold=False,
+        timeout_s=14.0 if cold_start else 12.0,
+        open_row=open_row,
+    )
+    raise_if_cancelled()
     if ok:
-        _verify_playback_started(timeout_s=3.0)
+        if not _verify_playback_started(timeout_s=3.0):
+            return f"Spotify accepted the Play control for {label}, but playback was not confirmed."
         _mark_spotify_playing_state()
         return success_msg
     # The accessibility tree did not expose a Play control; report honestly rather
     # than fall back to a blind coordinate click.
-    if _spotify_is_playing():
-        _mark_spotify_playing_state()
-        return success_msg
     return f"I opened {label} in Spotify but could not start playback from the controls, sir."
 
 
@@ -914,12 +1001,20 @@ def _spotify_play_liked_songs():
 
 
 def _spotify_play_new_releases():
-    return _uia_play_page("New Releases", "Playing New Releases, sir.", hotkey_letter="n")
+    # Alt+Shift+N no longer opens anything in the current client (measured
+    # 2026-10-16: still on Liked Songs 3 s later), so "New Releases" pressed the
+    # first Play of whatever page was up. Release Radar is Spotify's own
+    # new-releases playlist for this account, pinned in the library sidebar.
+    return _uia_play_page(
+        "Release Radar",
+        "Playing your Release Radar — this week's new releases, sir.",
+        open_row="Release Radar",
+    )
 
 
 def _spotify_play_made_for_you():
     return _uia_play_page(
-        "Made For You mixes", "Playing Made For You mixes, sir.", hotkey_letter="m"
+        "Made For You mixes", "Playing Made For You mixes, sir.", hotkey_letter="m", prefer=None
     )
 
 
@@ -1061,6 +1156,7 @@ def _spotify_current_track() -> str:
 
 
 def spotify_control(parameters: dict | None = None, player=None) -> str:
+    raise_if_cancelled()
     params = parameters or {}
     action = str(params.get("action", "")).lower().strip()
     print(f"[Spotify] Executing control: {action!r}")
@@ -1138,10 +1234,27 @@ def spotify_control(parameters: dict | None = None, player=None) -> str:
     elif action in ("back", "rewind"):
         action = "previous"
 
+    started = time.perf_counter()
     try:
-        result = _dispatch(action, params)
+        from core.spotify_api import execute
+
+        result = execute(action, params)
+        if result is None:
+            result = _dispatch(action, params)
     except Exception as e:
         return f"Spotify routing failed: {e}"
+    finally:
+        from core.logger import log_event, main_logger
+
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        log_event(
+            main_logger,
+            "spotify.command.duration",
+            "INFO",
+            action=action,
+            elapsed_ms=elapsed_ms,
+            within_target=elapsed_ms < 500,
+        )
 
     # STANDING RULE: "minimize Spotify after use". Enforced HERE rather than
     # left to the model — honoring it from the prompt would require Era to chain
@@ -1149,7 +1262,9 @@ def spotify_control(parameters: dict | None = None, player=None) -> str:
     # she does not do that reliably, so the rule was saved and then silently
     # ignored. Only actions that actually surface the window trigger it, and
     # only once the action succeeded.
-    if action in _FOREGROUNDING_ACTIONS:
+    from core.tool_result import looks_like_failure
+
+    if action in _FOREGROUNDING_ACTIONS and not looks_like_failure(result):
         try:
             from core.user_prefs import is_post_action_minimize
 
@@ -1158,7 +1273,34 @@ def spotify_control(parameters: dict | None = None, player=None) -> str:
         except Exception as e:
             print(f"[Spotify] Post-action minimize skipped: {e}")
 
+    # Music plays on the REMEMBERED media device (PC speakers unless the owner
+    # chose another) — never wherever Windows last left Spotify. Background, so
+    # the reply is not delayed (core/media_routing.py).
+    if action in _PLAYBACK_ACTIONS and not looks_like_failure(result):
+        try:
+            from core.media_routing import enforce_media_target_async
+
+            enforce_media_target_async("spotify")
+        except Exception as e:
+            print(f"[Spotify] media routing skipped: {e}")
+
     return result
+
+
+# Actions after which Spotify is (or should be) making sound.
+_PLAYBACK_ACTIONS = frozenset(
+    {
+        "play",
+        "play_uri",
+        "open",
+        "next",
+        "previous",
+        "search",
+        "liked_songs",
+        "new_releases",
+        "made_for_you",
+    }
+)
 
 
 # Verbs that already say exactly what to do; the phrase heuristics above skip them.
@@ -1182,6 +1324,8 @@ _EXPLICIT_ACTIONS = {
     "check",
     "minimize",
     "next",
+    "queue",
+    "play_uri",
     "previous",
 }
 
@@ -1190,6 +1334,7 @@ _EXPLICIT_ACTIONS = {
 # are the ones "after use" refers to; status/current_track never raise it.
 _FOREGROUNDING_ACTIONS = {
     "play",
+    "play_uri",
     "open",
     "next",
     "previous",
@@ -1214,13 +1359,27 @@ def _minimize_after_use() -> None:
     minimize is best-effort: it must never turn a successful play into a
     reported failure.
     """
-    _verify_playback_started(timeout_s=3.0)
-    time.sleep(0.4)
+    raise_if_cancelled()
     msg = _spotify_minimize()
     print(f"[Spotify] Post-action minimize (standing user rule): {msg}")
 
 
 def _dispatch(action: str, params: dict) -> str:
+    if action in {"queue", "play_uri"}:
+        from core import spotify_bridge
+
+        if spotify_bridge.is_enabled():
+            return spotify_bridge.sync(
+                spotify_bridge.handle_action(
+                    {
+                        "action": "queue" if action == "queue" else "play",
+                        "uri": params.get("uri") or params.get("track_id"),
+                    }
+                )
+            )
+        if action == "play_uri":
+            return _spotify_play_uri(params)
+        return "Spotify queueing failed: exact-ID queueing requires the Spotify API connection or the enabled native bridge."
     if action == "play":
         return _spotify_play()
     elif action == "open":

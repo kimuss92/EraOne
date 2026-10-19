@@ -70,7 +70,7 @@ from app.wake import (  # noqa: F401  (re-export: preserves public + internal na
     WakeWordConfig,
     init_vosk,
 )
-from core.cancel_registry import CURRENT_TOKEN, REGISTRY, run_with_grace
+from core.cancel_registry import CURRENT_TOKEN, REGISTRY, CancelledTask, offload, run_with_grace
 from core.confirmation import ConfirmationManager
 from core.confirmation_preview import (
     ANNOUNCED_KEY,
@@ -114,10 +114,12 @@ from core.tts_fish import is_configured as is_fish_configured
 from core.verification import verify_tool_result
 from core.voice_mode import (
     MODE_FISH_AUDIO,
+    MODE_GEMINI_AUDIO,
     MODE_KOKORO_AUDIO,
     MODE_LABELS,
     VOICE_CFG,
     gemini_voice_name,
+    input_language_codes,
 )
 from core.window_awareness import format_context as format_window_context
 from memory.memory_audit import audit_event
@@ -165,6 +167,9 @@ _CANCEL_DISCARD = (
 # "always background" would ack over ~2000 pause/next/volume calls that already
 # return in under a second; a grace discriminates by what actually happened.
 _BG_GRACE_S: dict[str, float] = {
+    "open_app": 1.5,  # Window read-back/catalog discovery must not stall voice reception.
+    "system_performance": 1.5,  # PC Manager UIA can stall for minutes.
+    "media_coordinator": 1.5,  # Browser/CDP recovery can exceed 45 seconds.
     "self_improve": 0.5,  # median 28ms  / p90 4.6s  / max 68s
     "code_helper": 1.0,  # median 3ms   / p90 61.6s / max 76s  (worst ratio)
     "file_controller": 1.2,  # median 24ms  / p90 588ms / max 68s
@@ -222,6 +227,47 @@ _VOICE_LOCK_ON_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _VOICE_LOCK_WINDOW_S = 60.0
+
+# Session-state tools the MODEL can call on its own initiative. Gemini Live hears
+# ambient audio (a recitation, a film) and has shut Era down, flipped standby and
+# muted the mic with no user input at all (task_trace user_text "" or a TV phrase).
+# Like voice_lock, the model's tool choice is never enough: the user must have SAID
+# or TYPED something that plausibly asks for it. Deliberately generous (EN/FR/AR) —
+# it exists to refuse "nothing was said" and "something unrelated was said", not
+# to second-guess phrasing. Typed, HUD and Telegram inputs pass through the same
+# utterance record, so they ground it too.
+_STATE_TOOL_ORDERS: dict[str, re.Pattern] = {
+    "shutdown": re.compile(
+        r"shut\s*(?:down|off|yourself)|shutdown|power\s*(?:off|down)|turn\s+(?:yourself\s+)?off"
+        r"|\b(?:close|quit|exit|terminate|goodbye|good\s*bye|bye|good\s*night|see\s+you|reboot"
+        r"|restart|re-?launch|that'?s\s+(?:all|it)|i'?m\s+done|ciao"
+        r"|ferme\w*|[eé]teins\w*|arr[eê]te\w*|quitte\w*|au\s+revoir|red[eé]marre\w*)\b"
+        r"|أغلق|اغلق|اطفئ|أطفئ|وداع|مع السلامة|إلى اللقاء|الى اللقاء|اقفل|أقفل",
+        re.IGNORECASE,
+    ),
+    "standby": re.compile(
+        r"stand\s*-?\s*by|\b(?:break|sleep|rest|quiet|silent|silence|hush|shh+|wait|pause|mute"
+        r"|dismiss|later|bye|goodbye|good\s*night|thanks?|thank\s+you|enough|done|nothing"
+        r"|alone|idle|go\s+away|stop\s+listening|that'?s\s+(?:all|it|enough)|see\s+you"
+        r"|dors|repos\w*|attends|tais|merci|plus\s+tard|c'?est\s+tout|rien|veille)\b"
+        r"|اسكت|نم\b|استراحة|كفى|شكرا|شكراً|وداع|مع السلامة|انتظر",
+        re.IGNORECASE,
+    ),
+    "microphone": re.compile(
+        r"\b(?:mic|microphone|mute|unmute|listen\w*|hear\w*|deaf|quiet|silent|activate"
+        r"|deactivate|turn\s+(?:on|off)|switch\s+(?:on|off)|micro|[eé]cout\w*|coupe\w*|active\w*"
+        r"|r[eé]active\w*)\b|ميكروفون|ميك|اسمع|استمع|اسكت|فعل|فعّل",
+        re.IGNORECASE,
+    ),
+}
+_STATE_TOOL_KIND = {
+    "shutdown_era": "shutdown",
+    "close_era": "shutdown",
+    "exit_era": "shutdown",
+    "enter_standby": "standby",
+    "set_microphone": "microphone",
+}
+_STATE_TOOL_WINDOW_S = 60.0
 
 # Granting a per-category HIGH-risk waiver (manage_preference) needs the user's own
 # words: a "don't ask / without confirmation" phrase AND the category named.
@@ -360,6 +406,33 @@ def _user_utterances(era, window_s: float, since_ts: float = 0.0) -> list[tuple[
     return [(ts, t) for ts, t in texts if now - ts <= window_s and ts >= since_ts]
 
 
+def _ungrounded_state_change(era, tool_name: str) -> str | None:
+    """A refusal string when the model called a session-state tool (shutdown,
+    standby, mic) without the user having asked for it, else None.
+
+    "Asked" = an utterance in the last minute that matches the tool's order
+    pattern. An empty record (the model acted on ambient audio or an internal
+    turn) and an unrelated one (a recitation on the TV) both refuse. Phrased
+    without "error"/"failed" so it is not logged as a tool failure. Module-level
+    like _current_user_text: tests bind the gates onto SimpleNamespace stubs."""
+    kind = _STATE_TOOL_KIND.get(tool_name)
+    if kind is None:
+        return None
+    pattern = _STATE_TOOL_ORDERS[kind]
+    if any(pattern.search(t or "") for _, t in _user_utterances(era, _STATE_TOOL_WINDOW_S)):
+        return None
+    heard = _current_user_text(era)
+    log_event(
+        main_logger, "tool.grounding.refused", "WARNING", tool=tool_name, heard=(heard or "")[:80]
+    )
+    print(f"[era] [GROUNDING] refused {tool_name}: no matching spoken order (heard={heard!r})")
+    return (
+        f"Not done: nobody asked for {tool_name.replace('_', ' ')} just now. "
+        "That call came from background audio or an internal turn. "
+        "Say nothing and carry on."
+    )
+
+
 def _sched_clean(text: str) -> str:
     return _SCHED_CORRECTION_PREFACE.sub(" ", (text or "").lower()).strip()
 
@@ -443,6 +516,10 @@ def _user_approved_pending(era, pending) -> bool:
     and that older "yes" predates the arming.)"""
     if pending is None:
         return False
+    from core.approval_execution import remote_approves
+
+    if remote_approves(pending):
+        return True
     recent = list(getattr(era, "_recent_user_texts", None) or [])
     said_at, text = recent[-1] if recent else (0.0, "")
     # Every complete input clears the in-flight buffer, so when one is present
@@ -648,6 +725,17 @@ class ToolDispatchMixin:
 
         memory = load_memory()
         mem_str = format_memory_for_prompt_ranked(memory, top_k=15)
+        try:
+            from memory.memory_context import prompt_context
+
+            mem_str += prompt_context()
+        except Exception as exc:
+            log_event(
+                main_logger,
+                "memory.context.retrieve_failed",
+                "WARNING",
+                error_type=type(exc).__name__,
+            )
         sys_prompt = _load_system_prompt()
 
         now = datetime.now()
@@ -783,26 +871,24 @@ class ToolDispatchMixin:
             f"[LIVE MEDIA TELEMETRY STATES]\n"
             f"- Spotify Application Open/Running: {spotify_active}\n"
             f"- YouTube Browser Content Present: {youtube_active}\n"
-            f"- Note: Spotify window title reflects current playback state â€” when a track is playing, the window shows 'Song - Artist â€” Spotify'. When paused/idle, it shows just 'Spotify'.\n\n"
-            f"CRITICAL CONTEXTUAL ROUTING RULES:\n"
-            f"1. Spotify is your absolute default media application. When the user issues general playback or music controls ('play', 'pause', 'poz', 'resume', 'stop', 'music') WITHOUT naming a specific platform, you MUST always choose Spotify (computer_settings) and trigger 'spotify_play' or 'spotify_pause'.\n"
-            f"2. NEVER auto-route generic commands to YouTube and NEVER ask 'Spotify or YouTube, sir?' regardless of the window telemetry states. Spotify is the strict baseline fallback.\n"
-            f"3. ONLY route commands to youtube_video if the user explicitly specifies 'youtube', 'the video', 'clip', or 'watch'.\n"
-            f"4. For track navigation commands ('next', 'skip', 'previous', 'back', 'next song', 'next track'):\n"
-            f"   - You MUST call computer_settings with action='spotify_next' or action='spotify_previous'.\n"
-            f"5. If the user says 'close this app' or 'minimize this', extract \"{foreground_window}\" as the target parameter for window_control.\n"
-            f"6. NEVER use screen_process (vision) to verify media state. Vision costs 12+ seconds and is unnecessary:\n"
+            f"- Window presence/title does not verify playback; use fresh OS observations or a live status tool.\n\n"
+            f"CONTEXTUAL RULES (media routing itself is in the main prompt: generic music controls go to spotify_control, never YouTube/Netflix, and never ask 'Spotify or YouTube?'):\n"
+            f"1. If the user says 'close this app' or 'minimize this', extract \"{foreground_window}\" as the target parameter for window_control.\n"
+            f"2. NEVER use screen_process (vision) to verify media state. Vision costs 12+ seconds and is unnecessary:\n"
             f"   - To check if Spotify is playing, a playlist/song actually started, or the window state: call spotify_control with action='status'. It reads the real Windows audio session instantly.\n"
             f"   - spotify_control already verifies playback internally before it reports success, so trust its returned message. If it says playback did not start, report that honestly instead of screenshotting.\n"
-            f"7. Window operations on Spotify ('minimize spotify', 'maximize spotify', 'focus spotify') target the DESKTOP APP window. Use spotify_control action='minimize' for minimize, or window_control with title='Spotify' for other window actions. NEVER open the Spotify web player (open.spotify.com) for these commands — the desktop app is already running.\n"
-            f"8. Trust window_control's returned message: it verifies the real window state after acting. Do not follow a successful window action with another tool call to 'check' it.\n\n"
+            f"3. Window operations on Spotify ('minimize spotify', 'maximize spotify', 'focus spotify') target the DESKTOP APP window. Use spotify_control action='minimize' for minimize, or window_control with title='Spotify' for other window actions. NEVER open the Spotify web player (open.spotify.com) for these commands — the desktop app is already running.\n"
+            f"4. Trust window_control's returned message: it verifies the real window state after acting. Do not follow a successful window action with another tool call to 'check' it.\n\n"
         )
         try:
+            from core.system_awareness import format_media_observations
+
             awareness_ctx = (
                 "\n[PHASE-1 AWARENESS LAYER]\n"
                 + format_window_context()
                 + "\n\nRunning process snapshot:\n"
                 + format_running_apps(limit=35)
+                + format_media_observations()
                 + "\n"
             )
             os_vision_ctx += awareness_ctx
@@ -826,8 +912,14 @@ class ToolDispatchMixin:
             "- stale audio from reconnect\n"
             "- song lyrics, singing, music, or TV / video / film dialogue playing nearby\n"
             "- speech clearly meant for someone else (a phone call, another person)\n"
-            "If an input could be media playback or not meant for you, it is TIER 1: stay\n"
-            "silent. Never answer it with 'Sorry, I did not catch that' — that phrase is\n"
+            "Treat intelligible speech as media only when there is evidence it is playback\n"
+            "or clearly meant for someone else. Low volume, headset distortion, a short\n"
+            "command, or a pause alone is not evidence of background media. A request\n"
+            "addressed to Era deserves a response or clarification, even when quiet.\n"
+            "While awake, do not require the user to say your name on every request\n"
+            "or after a period of inactivity. Ordinary intelligible requests deserve\n"
+            "an answer; ask briefly if unclear instead of silently ignoring them.\n"
+            "Never answer actual media with 'Sorry, I did not catch that' — that phrase is\n"
             "only for the user's own unclear request (TIER 3).\n\n"
             "TIER 2 - REAL WORD, VAGUE INTENT (SPECIFIC CLARIFICATION)\n"
             "If the user says a real word with ambiguous intent, ask a specific question.\n"
@@ -981,7 +1073,13 @@ class ToolDispatchMixin:
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
-            input_audio_transcription={},
+            # Language hints (core/voice_mode.input_language_codes): without
+            # them Gemini transcribed English as Japanese on weak Bluetooth audio.
+            input_audio_transcription=(
+                types.AudioTranscriptionConfig(language_codes=input_language_codes())
+                if input_language_codes()
+                else {}
+            ),
             system_instruction="\n".join(parts),
             tools=[{"function_declarations": TOOL_DECLARATIONS}],
             session_resumption=resumption_config,
@@ -1030,17 +1128,46 @@ class ToolDispatchMixin:
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name or "unknown"
+        from app.codemode_runtime import owns_reply
+
+        if owns_reply() and name != "code_mode":
+            return build_function_response(
+                fc,
+                ToolResult.fail(
+                    "CodeMode owns this conversation; the parallel model tool did not run.",
+                    error_type="ReplyOwned",
+                ),
+            )
         print(f"[era] [TOOL] {name}")
         log_event(main_logger, "tool.call.received", "INFO", tool=name, params=fc_args_to_dict(fc))
         # HUD Live Activity: the real call, as it enters and leaves this gate.
         hud_args = fc_args_to_dict(fc)
-        hud_call = hud.tool_started(getattr(fc, "id", None), name, hud_args)
+        import uuid
+
+        claim_id = f"live-{uuid.uuid4().hex}"
+        token, existing = REGISTRY.claim_unique(claim_id, name, hud_args)
+        if existing is not None:
+            log_event(main_logger, "tool.duplicate.in_flight", "INFO", tool=name, cid=existing.cid)
+            return build_function_response(
+                fc,
+                ToolResult.ok(
+                    message=f"This {name} task is already running in Live Activity. No duplicate was started.",
+                    data={"alreadyRunning": True, "liveTaskId": existing.cid},
+                ),
+                types.FunctionResponse,
+            )
+        try:
+            hud_call = hud.tool_started(claim_id, name, hud_args)
+        except BaseException:
+            REGISTRY.finish(claim_id)
+            raise
         # One cancel token per task, keyed by the HUD row's id -- the only task
         # id that already reaches the browser, so the X on that row can address
         # it. The ContextVar carries it down the coroutine chain; crossing into
         # a worker thread needs cancel_registry.offload(), because
         # run_in_executor does not copy contextvars.
-        token = REGISTRY.register(hud_call, name)
+        if hud_call != claim_id:
+            REGISTRY.rekey_claim(token, hud_call)
         token_reset = CURRENT_TOKEN.set(token)
         self.ui.set_state("THINKING")
         self.session_manager.transition_to(
@@ -1087,7 +1214,11 @@ class ToolDispatchMixin:
             # what lets "no, I meant the next track" land while the wrong
             # search is still running. Fast calls never reach the deadline, so
             # nothing about them changes.
-            grace = self._background_grace(name, hud_args)
+            # getattr: detaching is an enhancement layered on execution, so a
+            # partial Era (the stubs several tests build) must fall back to
+            # running inline rather than fail. None here == "stay inline".
+            _grace_of = getattr(self, "_background_grace", None)
+            grace = _grace_of(name, hud_args) if _grace_of is not None else None
             if grace is None:
                 result = await self._execute_tool_result(fc)
             else:
@@ -1211,18 +1342,22 @@ class ToolDispatchMixin:
         if not self.ui.muted and not self._standby_active:
             self.ui.set_state("LISTENING")
 
+        # Every tool: say each thing once, never twice (app/era_live/speak_once.py).
+        # After the HUD and intent memory took the real result — model-facing only.
+        from app.era_live.speak_once import speak_once
+
+        result = speak_once(result, name, fc_args_to_dict(fc), getattr(self, "_live_turn_text", ""))
         return build_function_response(fc, result, types.FunctionResponse)
 
     # ── Crew: run off the receive loop, report the real outcome ─────────────
     def _background_grace(self, name: str, args: dict) -> float | None:
         """Seconds this tool may hold the receive loop, or None to stay inline.
 
+        New live tools also get a bounded grace; omission cannot stall the ear.
         None for every case where an ack is the wrong answer -- a later step,
         another lane or the batch itself needs the REAL result, not a promise.
         """
-        grace = _BG_GRACE_S.get(name)
-        if grace is None:
-            return None
+        grace = _BG_GRACE_S.get(name, 1.5)
         from app.era_live.tool_batch import HALTING_TOOLS
 
         if name in HALTING_TOOLS:
@@ -1266,7 +1401,7 @@ class ToolDispatchMixin:
         safety = getattr(self, "_trace_safety", None)
         self._trace_routed = self._trace_safety = None
 
-        async def _worker() -> None:
+        async def _worker_body() -> None:
             try:
                 result = await task
             except asyncio.CancelledError:
@@ -1281,8 +1416,6 @@ class ToolDispatchMixin:
                     error=f"{name} failed: {type(exc).__name__}",
                     error_type="BotError",
                 )
-            finally:
-                REGISTRY.finish(hud_call)
             if not isinstance(result, ToolResult):
                 result = ToolResult.from_any(result)
 
@@ -1314,9 +1447,90 @@ class ToolDispatchMixin:
                 )
             except Exception:  # noqa: BLE001
                 pass
-            self._deliver_tool_outcome(name, result)
+            if name == "web_search":
+                await self._report_search_outcome(hud_call, hud_args, result)
+            else:
+                self._deliver_tool_outcome(name, result)
+
+        async def _worker() -> None:
+            try:
+                await _worker_body()
+            finally:
+                # Keep a search cancellable while its report awaits the floor.
+                REGISTRY.finish(hud_call)
 
         self._spawn_background_task(_worker(), f"bg-{name}")
+
+    async def _report_search_outcome(self, cid: str, args: dict, result: ToolResult) -> None:
+        """Serialize search reports; never inject one into the user's turn."""
+        from app.era_live.search_report import search_report_prompt
+        from core.model_reply import send_model_text
+
+        lock = getattr(self, "_search_report_lock", None)
+        if lock is None:
+            lock = self._search_report_lock = asyncio.Lock()
+        deadline = time.monotonic() + 120
+        if getattr(self, "_standby_active", False):
+            wake = getattr(self, "_request_completion_wake", None)
+            if callable(wake):
+                wake()
+        async with lock:
+            while not REGISTRY.is_cancelled(cid) and not getattr(
+                self, "_shutdown_requested", False
+            ):
+                tracker = getattr(self, "_model_reply_ownership", None)
+                busy = (
+                    getattr(self, "_is_speaking", False)
+                    or bool(getattr(self, "_inflight_user_text", ""))
+                    # An empty tool-call turn deliberately retains ownership;
+                    # it is awaiting THIS result, not still talking.
+                    or bool(tracker and tracker.active and not tracker.tools_seen)
+                    or getattr(self, "_tools_in_flight", 0) > 0
+                    or getattr(self, "_standby_active", False)
+                )
+                if getattr(self, "session", None) is not None and not busy:
+                    prompt = search_report_prompt(
+                        str(args.get("query") or ""),
+                        result.message or result.error or "",
+                        bool(result.success),
+                    )
+                    try:
+                        if tracker is not None:
+                            # This new text starts the report turn. A retained
+                            # empty-tool flag must not let the NEXT report overlap.
+                            tracker.tools_seen = False
+                        await send_model_text(self, prompt, internal=True)
+                        log_event(
+                            main_logger,
+                            "search.report.submitted",
+                            "INFO",
+                            cid=cid,
+                            success=result.success,
+                        )
+                        return
+                    except Exception as exc:
+                        log_event(
+                            main_logger,
+                            "search.report.retry",
+                            "WARNING",
+                            cid=cid,
+                            error_type=type(exc).__name__,
+                        )
+                if time.monotonic() >= deadline:
+                    self.ui.write_log(
+                        "SYS: Search report deferred: conversation busy or disconnected. Results remain in the HUD."
+                    )
+                    log_event(
+                        main_logger,
+                        "search.report.deferred",
+                        "WARNING",
+                        cid=cid,
+                        reason="busy_or_disconnected",
+                        success=result.success,
+                    )
+                    return
+                await asyncio.sleep(0.25)
+            log_event(main_logger, "search.report.cancelled", "INFO", cid=cid)
 
     def _deliver_tool_outcome(self, name: str, result: ToolResult) -> None:
         """Speak a detached tool's real outcome -- success OR failure.
@@ -1325,11 +1539,11 @@ class ToolDispatchMixin:
         because the session rotated while the work ran, and the HUD and Era can
         never disagree about what happened.
         """
-        if result.success:
-            spoken = result.short_message(600).strip() or "Done."
-        else:
-            reason = result.short_message(300).strip() or (result.error_type or "no reason given")
-            spoken = f"That didn't finish, sir. {reason}"
+        # One plain sentence, never the tool's internals read aloud
+        # (app/era_live/speak_once.spoken_outcome). The HUD keeps the full text.
+        from app.era_live.speak_once import spoken_outcome
+
+        spoken = spoken_outcome(name, result)
         try:
             self._deliver_or_queue_cm_report(spoken, verbatim=True)
         except Exception as e:  # noqa: BLE001
@@ -1390,9 +1604,8 @@ class ToolDispatchMixin:
         self._trace_routed = self._trace_safety = None
 
         async def _worker() -> None:
-            loop = asyncio.get_running_loop()
             try:
-                result = await loop.run_in_executor(None, lambda: run_tool(dict(hud_args)))
+                result = await offload(lambda: run_tool(dict(hud_args)))
             except Exception as exc:  # noqa: BLE001 — a crew crash is still an outcome to report
                 result = ToolResult.fail(
                     message=f"The crew failed: {type(exc).__name__}",
@@ -1514,6 +1727,18 @@ class ToolDispatchMixin:
                 )
 
         label = MODE_LABELS[resolved]
+        if (
+            resolved == MODE_GEMINI_AUDIO
+            and getattr(self, "request_gemini_reconnect", lambda: False)()
+        ):
+            VOICE_CFG.set_mode(resolved)
+            self._tts_primary_retry_at = 0.0
+            self._tts_primary_mode = ""
+            self.ui.write_log("SYS: Gemini is not connected; retrying the cloud voice.")
+            return (
+                "Gemini is not connected. A reconnection was requested; do not "
+                "say it is already running or that the switch succeeded."
+            )
         if VOICE_CFG.mode == resolved:
             # Already speaking in this voice, but possibly only via a transient
             # fallback. Cancel any pending auto-restore and, when this isn't yet
@@ -1629,8 +1854,24 @@ class ToolDispatchMixin:
             # input transcription of its own.
             self._recap_pending_user = text
             self._recent_user_texts.append((said_at or time.time(), text))
-            if len(self._recent_user_texts) > 8:
-                del self._recent_user_texts[:-8]
+            if len(self._recent_user_texts) > 10:
+                del self._recent_user_texts[:-10]
+            try:
+                from memory.memory_context import capture
+
+                owner = getattr(self, "_input_envelope", None)
+                capture(
+                    text,
+                    getattr(owner, "source", "voice"),
+                    getattr(owner, "id", "") if getattr(owner, "text", None) == text else "",
+                )
+            except Exception as exc:
+                log_event(
+                    main_logger,
+                    "memory.context.capture_failed",
+                    "WARNING",
+                    error_type=type(exc).__name__,
+                )
 
     def _user_said(self, pattern: re.Pattern, window_s: float = 120) -> bool:
         """True only if the user themself said `pattern` in the last two minutes.
@@ -2169,6 +2410,9 @@ class ToolDispatchMixin:
 
         Returns whether it was SPOKEN: only then is a bare "yes" an answer to it
         (core/task_scheduler.mark_announced)."""
+        from app.away_calls import automatic_report
+
+        automatic_report(self, text, "scheduled")
         try:
             from app.notify import _tg_notify
 
@@ -2186,6 +2430,19 @@ class ToolDispatchMixin:
                 self.ui.write_log(f"SYS: {text}")
             except Exception:
                 pass
+            if asleep:
+                from core.task_scheduler import current_report
+
+                report = current_report.get() or {}
+                deliver = getattr(self, "_deliver_or_queue_cm_report", None)
+                if deliver is not None and report.get("status") in {
+                    "ok",
+                    "failed",
+                    "partial",
+                    "blocked",
+                    "missed",
+                }:
+                    deliver(text, verbatim=True)
             return False
         self.speak_dispatched(text)
         return True
@@ -2257,22 +2514,50 @@ class ToolDispatchMixin:
         return True
 
     async def _execute_tool_result(self, fc) -> ToolResult:
+        from core.tool_execution_lane import LANE, ToolLaneBusy, resource_tool
+
+        try:
+            with LANE.enter(resource_tool(fc.name, fc_args_to_dict(fc))):
+                return await ToolDispatchMixin._execute_tool_result_owned(self, fc)
+        except ToolLaneBusy:
+            return ToolResult.fail(
+                "Machine automation is running for a Telegram call. Please try again when it finishes.",
+                error_type="ExecutionBusy",
+                tool_name=fc.name,
+            )
+
+    async def _execute_tool_result_owned(self, fc) -> ToolResult:
         """Runs the call under its own id, so an exception a tool catches can
         only ever be attributed to the call it happened in — never to another
         tool, a background thread, or whatever a web page's text points at."""
         from core import handled_exceptions
+        from core.approval_execution import APPROVED_CONFIRMATION, publish_approved_result
 
         try:
             handled_exceptions.install_context_executor(asyncio.get_running_loop())
         except Exception as e:
             print(f"[era] [SELF-HEAL] context executor not installed: {e}")
         token = handled_exceptions.CURRENT_CALL.set(handled_exceptions.new_call_id())
+        approval_token = APPROVED_CONFIRMATION.set(None)
+        result = None
         try:
             # Through the class, not self: the confirmation tests bind this method
             # onto a stub object that has no _execute_tool_result_inner of its own.
-            return await ToolDispatchMixin._execute_tool_result_inner(self, fc)
+            result = await ToolDispatchMixin._execute_tool_result_inner(self, fc)
+            return result
         finally:
             handled_exceptions.CURRENT_CALL.reset(token)
+            cid = APPROVED_CONFIRMATION.get()
+            APPROVED_CONFIRMATION.reset(approval_token)
+            if cid is not None:
+                if not isinstance(result, ToolResult):
+                    # Cancellation after atomic consumption must resolve a parked
+                    # job too; otherwise it waits forever for the missing outcome.
+                    result = ToolResult.fail(
+                        "Approved action was interrupted; completion could not be verified.",
+                        error_type="ApprovalExecutionInterrupted",
+                    )
+                await asyncio.to_thread(publish_approved_result, cid, result)
 
     async def _execute_tool_result_inner(self, fc) -> ToolResult:
         tool_name = fc.name
@@ -2286,6 +2571,21 @@ class ToolDispatchMixin:
             )
         parameters = fc_args_to_dict(fc)
         original_name, original_params = tool_name, dict(parameters)
+        from core.approval_execution import REMOTE_APPROVAL, remote_approves
+
+        remote = REMOTE_APPROVAL.get()
+        if remote is not None and (
+            tool_name != remote.tool
+            or {k: v for k, v in parameters.items() if k not in CONFIRM_META}
+            != {k: v for k, v in remote.parameters.items() if k not in CONFIRM_META}
+            or parameters.get("confirmation_id") != remote.confirmation_id
+            or parameters.get("confirmed") is not True
+        ):
+            return ToolResult.fail(
+                message="Remote approval does not match this action.",
+                error_type="ConfirmationFailed",
+                tool_name=tool_name,
+            )
 
         try:
             user_text = getattr(self, "_last_user_text", "") or ""
@@ -2293,8 +2593,13 @@ class ToolDispatchMixin:
             # model often calls its tool before the turn completes, and "reboot" /
             # "Era One" can arrive in different chunks.
             inflight = getattr(self, "_inflight_user_text", "") or user_text
-            tool_name, parameters = divert_era_reboot(tool_name, parameters, inflight)
-            tool_name, parameters = route_tool_call(tool_name, parameters, user_text)
+            if remote is None:
+                tool_name, parameters = divert_era_reboot(tool_name, parameters, inflight)
+                tool_name, parameters = route_tool_call(tool_name, parameters, user_text)
+                from core.personal_media import divert_personal_song, resolve_song
+
+                tool_name, parameters = divert_personal_song(tool_name, parameters, inflight)
+                tool_name, parameters = resolve_song(tool_name, parameters, inflight)
             if (tool_name, parameters) != (original_name, original_params):
                 print(
                     f"[era] [ROUTE] routed {original_name} {original_params} -> {tool_name} {parameters}"
@@ -2304,6 +2609,19 @@ class ToolDispatchMixin:
 
         print(f"[era] [ARGS] {tool_name}  {parameters}")
         self._trace_routed = (tool_name, dict(parameters))  # for the task trace
+
+        from core.file_arguments import file_argument_error
+
+        argument_error = file_argument_error(tool_name, parameters)
+        if argument_error:
+            log_event(main_logger, "tool.arguments.invalid", "WARNING", tool=tool_name)
+            return ToolResult.fail(
+                argument_error,
+                error_type="InvalidArguments",
+                tool_name=tool_name,
+                action_name=parameters.get("action"),
+                data={"executed": False},
+            )
 
         start = time.perf_counter()
 
@@ -2356,7 +2674,7 @@ class ToolDispatchMixin:
                 duration_ms=duration(),
             )
 
-        if requires_confirmation:
+        if requires_confirmation or remote is not None:
             print(f"[era] [WARN] confirmation required ({risk_level})")
             confirmed = bool(parameters.get("confirmed", False))
             confirmation_id = parameters.get("confirmation_id", "")
@@ -2385,7 +2703,16 @@ class ToolDispatchMixin:
                         action_name=parameters.get("action"),
                         duration_ms=duration(),
                     )
-                pending = self._pending_store.confirm(confirmation_id)
+                if remote is not None and not remote_approves(pending):
+                    return ToolResult.fail(
+                        message="This approval is no longer valid.",
+                        error_type="ConfirmationFailed",
+                        tool_name=tool_name,
+                    )
+                pending = self._pending_store.confirm(
+                    confirmation_id,
+                    **({"expected_created_at": remote.created_at} if remote is not None else {}),
+                )
                 if pending is None:
                     return ToolResult.fail(
                         message="Invalid or expired confirmation.",
@@ -2395,6 +2722,9 @@ class ToolDispatchMixin:
                         action_name=parameters.get("action"),
                         duration_ms=duration(),
                     )
+                from core.approval_execution import APPROVED_CONFIRMATION
+
+                APPROVED_CONFIRMATION.set(pending.confirmation_id)
                 stored_params = {
                     k: v for k, v in pending.parameters.items() if k not in CONFIRM_META
                 }
@@ -2494,8 +2824,24 @@ class ToolDispatchMixin:
             )
 
         try:
-            raw = await self._execute_tool_raw(tool_name, parameters, fc)
+            from core.task_recovery import execute_read_recovery
+
+            raw = await execute_read_recovery(
+                tool_name,
+                parameters,
+                lambda retry_parameters: self._execute_tool_raw(tool_name, retry_parameters, fc),
+            )
             self._last_tool_name = tool_name
+        except CancelledTask as e:
+            # Cooperative cancellation is a user decision, not an engine fault.
+            return ToolResult.fail(
+                message=str(e),
+                error=str(e),
+                error_type="Cancelled",
+                tool_name=tool_name,
+                action_name=parameters.get("action"),
+                duration_ms=duration(),
+            )
         except Exception as e:
             dur = duration()
             traceback.print_exc()
@@ -2543,6 +2889,20 @@ class ToolDispatchMixin:
         result.requires_confirmation = requires_confirmation
 
         result = verify_tool_result(result, tool=tool_name, parameters=parameters)
+        recovery = result.data.get("recovery") if isinstance(result.data, dict) else None
+        if isinstance(recovery, dict) and recovery.get("strategy") == "same_read_once":
+            recovery["verification"] = result.verification_status
+            if not result.success and recovery.get("outcome") == "returned_success":
+                recovery["outcome"] = "verification_failed"
+            log_event(
+                main_logger,
+                "tool.recovery.verified",
+                "INFO",
+                tool=tool_name,
+                action=parameters.get("action"),
+                success=result.success,
+                recovery=recovery,
+            )
 
         if not result.success:
             print(
@@ -2643,6 +3003,32 @@ class ToolDispatchMixin:
         return told
 
     async def _execute_tool_raw(self, tool_name: str, args: dict, fc=None) -> str:
+        if tool_name == "code_mode":
+            from app.codemode_runtime import route
+            from core.codemode import ENTRY, EXIT, get_codemode
+
+            action = args.get("action", "status")
+            if action == "status":
+                return ToolResult.ok(
+                    message="Current CodeMode state", data=get_codemode().snapshot()
+                )
+            owner = getattr(self, "_input_envelope", None)
+            pattern = ENTRY if action == "enter" else EXIT if action == "exit" else None
+            if owner is None or pattern is None or not pattern.fullmatch(owner.text.strip()):
+                return ToolResult.fail(
+                    "CodeMode requires the user's explicit mode command.",
+                    error_type="UserIntentRequired",
+                )
+            route(self, owner.text, owner)
+            return ToolResult.ok(
+                message="CodeMode command accepted", data=get_codemode().snapshot()
+            )
+
+        if tool_name == "telegram_call":
+            from app.telegram_call_runtime import handle_tool
+
+            return await handle_tool(self, args)
+
         # ── Final safety guard before any tool execution ──
         # These holds stop the MODEL acting while muted/asleep or while another lane
         # owns the request. A scheduled task was authorised by the user in advance
@@ -2695,6 +3081,13 @@ class ToolDispatchMixin:
                 "result when it finishes."
             )
         # ─────────────────────────────────────────────────
+
+        # Session-state tools need a matching order from the user, never just the
+        # model's say-so (ambient audio shut Era down and flipped standby/mic).
+        if not scheduled_run:
+            _ungrounded = _ungrounded_state_change(self, tool_name)
+            if _ungrounded:
+                return _ungrounded
 
         # ── System-state awareness gate (pre-command telemetry) ──────────────
         # Before acting ON an application (pause/next/minimize/close/focus/…),
@@ -2805,8 +3198,19 @@ class ToolDispatchMixin:
                 "approve",
                 "ads",
                 "adcreative",
+                "package",
+                "edit",
             ):
                 task_type = _infer_cm_task_type(order)
+            elif task_type != "ads":
+                # The tool description tells the model to pass 'weekly' for any
+                # plan/produce/create order, so "prepare the package" would arrive as
+                # weekly and run the generating, Magnific-using brief. The two
+                # content-workflow lanes are specific enough that the inferred lane
+                # wins over a generic one the model picked.
+                inferred = _infer_cm_task_type(order)
+                if inferred in ("package", "edit"):
+                    task_type = inferred
             brand_in = (args.get("brand") or "").strip()
             brand_key = None
             try:
@@ -2941,8 +3345,15 @@ class ToolDispatchMixin:
             # so memories the user actually asks about rank higher over time.
             from memory.memory_manager import retrieve_context_reinforced
 
-            result = retrieve_context_reinforced(query, top_k=5)
-            return result if result else "No relevant memories found."
+            result = retrieve_context_reinforced(query, top_k=3)
+            if not result:
+                return "No relevant memories found."
+            # Live path only (the agent lane keeps bare lines): Gemini read the
+            # whole result aloud as its reply. Frame it as private input.
+            return (
+                "[Private notes for you, not for speech. Use them to act now; "
+                "never read, list or summarise these lines aloud.]\n" + result
+            )
 
         if tool_name == "list_memory_keys":
             from memory.memory_manager import list_memory_keys
@@ -2999,6 +3410,9 @@ class ToolDispatchMixin:
             pending = self._pending_store.confirm(pending.confirmation_id)
             if pending is None:
                 return "This confirmation is no longer valid."
+            from core.approval_execution import APPROVED_CONFIRMATION
+
+            APPROVED_CONFIRMATION.set(pending.confirmation_id)
             if confirmation_id and confirmation_id != pending.confirmation_id:
                 print(
                     f"[era] [WARN] confirmation id mismatch (got {confirmation_id!r}, "
@@ -3033,9 +3447,7 @@ class ToolDispatchMixin:
         result = "Done."
 
         if tool_name == "open_app":
-            r = await loop.run_in_executor(
-                None, lambda: open_app(parameters=args, response=None, player=self.ui)
-            )
+            r = await offload(lambda: open_app(parameters=args, response=None, player=self.ui))
             result = r or f"Opened {args.get('app_name')}."
 
         elif tool_name == "capability_check":
@@ -3116,8 +3528,8 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "system_performance":
-            r = await loop.run_in_executor(
-                None, lambda: system_performance(parameters=args, response=None, player=self.ui)
+            r = await offload(
+                lambda: system_performance(parameters=args, response=None, player=self.ui)
             )
             result = r or "Done."
 
@@ -3140,8 +3552,9 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "agent_task":
-            from agent.task_queue import get_queue
+            from agent.task_queue import DuplicateTaskError, get_queue
             from agent.types import TaskPriority
+            from app.away_calls import automatic_report
 
             priority_map = {
                 "low": TaskPriority.LOW,
@@ -3150,15 +3563,21 @@ class ToolDispatchMixin:
             }
             priority = priority_map.get(args.get("priority", "normal").lower(), TaskPriority.NORMAL)
             task_speak = getattr(self, "speak_dispatched", None) or self.speak
-            task_id = get_queue().submit(
-                goal=args.get("goal", ""), priority=priority, speak=task_speak
-            )
-            result = f"Task started (ID: {task_id})."
+            try:
+                task_id = get_queue().submit(
+                    goal=args.get("goal", ""),
+                    priority=priority,
+                    speak=task_speak,
+                    on_complete=lambda task_id, outcome: automatic_report(
+                        self, outcome.message, "background", f"{task_id}:{outcome.success}"
+                    ),
+                )
+                result = f"Task queued (ID: {task_id})."
+            except DuplicateTaskError as exc:
+                result = str(exc)
 
         elif tool_name == "web_search":
-            r = await loop.run_in_executor(
-                None, lambda: web_search_action(parameters=args, player=self.ui)
-            )
+            r = await offload(lambda: web_search_action(parameters=args, player=self.ui))
             result = r or "Done."
 
         elif tool_name == "file_processor":
@@ -3184,9 +3603,7 @@ class ToolDispatchMixin:
         elif tool_name == "spotify_control":
             from actions.spotify_control import spotify_control
 
-            r = await loop.run_in_executor(
-                None, lambda: spotify_control(parameters=args, player=self.ui)
-            )
+            r = await offload(lambda: spotify_control(parameters=args, player=self.ui))
             result = r or "Done."
 
         elif tool_name == "spotify_bridge":
@@ -3217,9 +3634,7 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "media_coordinator":
-            r = await loop.run_in_executor(
-                None, lambda: media_coordinator(parameters=args, player=self.ui)
-            )
+            r = await offload(lambda: media_coordinator(parameters=args, player=self.ui))
             result = r or "Done."
 
         elif tool_name == "window_control":
@@ -3257,9 +3672,15 @@ class ToolDispatchMixin:
         elif tool_name == "crew":
             # Laura and the specialists (crew/). One "working on it" if the call is
             # still running after 2.5 s — per call, never per bot turn or handoff.
+            from core.approval_execution import APPROVED_CONFIRMATION
             from crew.runtime import await_with_ack, run_tool
 
-            pending = loop.run_in_executor(None, lambda: run_tool(dict(args)))
+            # Read here, on the loop: run_in_executor does not carry ContextVars into
+            # the worker thread, so a verify_candidate approval would be invisible.
+            approved = APPROVED_CONFIRMATION.get()
+            pending = loop.run_in_executor(
+                None, lambda: run_tool(dict(args), approved_confirmation=approved)
+            )
             if str(args.get("action") or "ask").lower() == "ask":
                 # _say_exactly: in gemini_audio mode speak() feeds the live session, which
                 # would otherwise improvise its own reaction instead of saying this.
@@ -3612,42 +4033,53 @@ class ToolDispatchMixin:
         elif tool_name == "autonomous_development":
             from core import development, feature_engine
 
-            action = args.get("action", "status")
-            if action == "propose":
-                paths = json.loads(args.get("file_paths", "[]"))
-                if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
-                    raise ValueError("file_paths must be a JSON array of strings")
-                job = await asyncio.to_thread(
-                    development.propose,
-                    args.get("request", ""),
-                    paths,
-                    reload=args.get("reload", True),
-                )
-                result = f"Development {job['id']} started in staging. Review verified changes in the HUD; final approval is required."
-            elif action == "inspect":
-                result = json.dumps(
-                    await asyncio.to_thread(development.inspect_request, args.get("request", ""))
-                )
-            elif action == "retry":
-                result = json.dumps(
-                    await asyncio.to_thread(development.retry, args.get("job_id", ""))
-                )
-            elif action == "reject":
-                result = json.dumps(
-                    await asyncio.to_thread(development.reject, args.get("job_id", ""))
-                )
-            elif action == "status":
-                await asyncio.to_thread(feature_engine.restore)
-                result = json.dumps(
-                    {
-                        "jobs": await asyncio.to_thread(development.list_jobs),
-                        "features": feature_engine.catalog(),
-                    }
-                )
-            else:
-                raise ValueError(
-                    "Only inspect/propose/status/retry/reject are allowed; final approval belongs to the user in the HUD"
-                )
+            try:
+                action = args.get("action", "status")
+                if action == "propose":
+                    paths = json.loads(args.get("file_paths", "[]"))
+                    if not isinstance(paths, list) or any(
+                        not isinstance(path, str) for path in paths
+                    ):
+                        raise ValueError("file_paths must be a JSON array of strings")
+                    job = await asyncio.to_thread(
+                        development.propose,
+                        args.get("request", ""),
+                        paths,
+                        reload=args.get("reload", True),
+                    )
+                    result = f"Development {job['id']} started in staging. Review verified changes in the HUD; final approval is required."
+                elif action == "inspect":
+                    result = json.dumps(
+                        await asyncio.to_thread(
+                            development.inspect_request, args.get("request", "")
+                        )
+                    )
+                elif action in ("retry", "reject"):
+                    job_id = str(args.get("job_id", "") or "").strip()
+                    if job_id.lower() in ("", "latest", "last", "newest", "current"):
+                        # The model says "the latest job"; ids are 16 hex chars.
+                        jobs = await asyncio.to_thread(development.list_jobs)
+                        job_id = jobs[0]["id"] if jobs else ""
+                    act = development.retry if action == "retry" else development.reject
+                    result = json.dumps(await asyncio.to_thread(act, job_id))
+                elif action == "status":
+                    await asyncio.to_thread(feature_engine.restore)
+                    result = json.dumps(
+                        {
+                            "jobs": await asyncio.to_thread(development.list_jobs),
+                            "features": feature_engine.catalog(),
+                        }
+                    )
+                else:
+                    raise ValueError(
+                        "Only inspect/propose/status/retry/reject are allowed; final approval belongs to the user in the HUD"
+                    )
+            except (ValueError, FileNotFoundError) as exc:
+                result = {
+                    "success": False,
+                    "message": f"Development request rejected: {exc}. Use status to list valid job IDs.",
+                    "error_type": "ValidationError",
+                }
 
         elif tool_name == "run_feature":
             from core import feature_engine
@@ -3746,6 +4178,18 @@ class ToolDispatchMixin:
 
         elif tool_name == "scheduled_task":
             from actions.scheduled_task import scheduled_task
+            from core.cancel_intent import is_cancel_all_live_order, is_spoken_cancel_task_order
+
+            utterance = getattr(self, "_inflight_user_text", "") or getattr(
+                self, "_last_user_text", ""
+            )
+            if args.get("action") not in {"list", "history", "status", "get", "unread"} and (
+                is_cancel_all_live_order(utterance) or is_spoken_cancel_task_order(utterance)
+            ):
+                return ToolResult.fail(
+                    "That command cancels Live Activity work, not scheduled jobs. Schedules were not changed.",
+                    error_type="BlockedAction",
+                )
 
             st_args = dict(args)
             # Authority comes from what the USER said, never from the arguments.

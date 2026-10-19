@@ -1,0 +1,33 @@
+
+============================================================
+  Era One Doctor � Health Check
+============================================================
+
+  [PASS] Python version � 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]
+  [PASS] Required directories/files
+  [PASS] Core module imports
+  [PASS] API key config � available from local protected configuration
+  [PASS] Voice verification readiness � speaker verification disabled
+  [PASS] Cloudinary media host config � configured � cloud 'jjac38uo'
+  [PASS] Tool registry consistency � 10 issues: 0 errors, 25 main only
+  [PASS] LLM alias registry � 8/8 aliases available � default era.voice, voice era.voice � budget $2.0/day
+  [PASS] LLM provider reachability � claude_cli, gemini, ollama reachable
+  [PASS] Existing test files
+  [PASS] Action module imports � 53 modules
+  [PASS] memory/long_term.json � 20.8 KB
+  [PASS] Memory backups � 12 file(s): backups/learned_patterns.1791892195024.13460.0008 (1.8 KB), backups/learned_patterns.1791892349626.13460.0010 (1.8 KB), backups/learned_patterns.1791892504020.13460.0012 (1.8 KB), backups/long_term.1791849995835.28272.0013 (20.8 KB), backups/long_term.1791885082865.22372.0005 (20.8 KB), backups/long_term.1791889909801.3864.0025 (20.8 KB), backups/runtime_intent.1791892814478.13460.0030 (8.8 KB), backups/runtime_intent.1791892815426.13460.0031 (8.8 KB), backups/runtime_intent.1791892898365.13460.0032 (8.9 KB), backups/user_prefs.1791890266535.3864.0038 (9.3 KB), backups/user_prefs.1791892555812.13460.0013 (9.3 KB), backups/user_prefs.1791892591508.13460.0015 (9.3 KB)
+  [PASS] Logs folder � 35 file(s), era.log 664.9 KB
+  [PASS] Root cleanliness � root clean � no zero-byte junk files
+  [PASS] memory/feedback_memory.jsonl � 1105 line(s)
+  [PASS] Obsidian vault (CM context) � 118 note(s) [00 - Inbox 2, 01 - Daily Notes 34, 02 - Delta Cuisine 20, 03 - Ceram Quartz 13, 04 - Global 27, 05 - Archive 6, 06 - Resources 14, 07 - Brico Kitchen 2] � brands: brico_kitchen, ceram_quartz, delta_cuisine
+  [PASS] Vault consistency (PARA/brand filing) � filed correctly; every note fits the brief budget
+  [PASS] Era day log (01 - Daily Notes) � template present; nothing logged today yet
+  [PASS] CM learned feedback � 12 lesson(s) � ceram_quartz: 5, delta_cuisine: 7
+  [PASS] logs/memory_audit.jsonl � 628 line(s)
+  [PASS] Optional packages � Active integrations available; unused PyAudio/VLC integrations are not required
+  [PASS] Vosk model � model present in local ignored models/ directory
+
+============================================================
+  Errors: 0   Warnings: 0
+  Status: READY
+============================================================

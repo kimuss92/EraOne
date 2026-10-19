@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import subprocess
+import sys
 from pathlib import Path
 
 from core.win_subprocess import NEW_GROUP, NO_WINDOW, no_window
@@ -260,7 +261,15 @@ def test_flags_are_inert_off_windows() -> None:
     assert no_window(NEW_GROUP) == NO_WINDOW | NEW_GROUP
 
 
-def test_a_posix_run_accepts_the_constant() -> None:
+def test_a_subprocess_run_accepts_the_constant() -> None:
     """Proof, not assumption: the patched shape actually runs on this platform."""
-    done = subprocess.run(["echo", "era"], capture_output=True, text=True, creationflags=NO_WINDOW)
+    # echo is a shell builtin on Windows, not a portable executable. Keep this
+    # a real process-creation check without introducing a shell or a window.
+    done = subprocess.run(
+        [sys.executable, "-c", "print('era')"],
+        capture_output=True,
+        text=True,
+        creationflags=NO_WINDOW,
+    )
     assert done.returncode == 0
+    assert done.stdout.strip() == "era"

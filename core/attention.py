@@ -41,7 +41,7 @@ DEFAULTS = {
     "echo_hold_ms": 700,
     # Counted from when Era is DONE (she is never "away" while thinking or
     # replying). 20 s expired mid-conversation in the first live test.
-    "attention_window_s": 45.0,
+    "attention_window_s": 120.0,
     "name_check_s": 1.6,  # speech heard before the name check must decide
     "names": ["era"],  # always accepted, besides the wake word and its aliases
     # Vosk word confidence the name must reach. Measured 2026-10-10 on real
@@ -142,9 +142,13 @@ class ListeningState:
         # of 2026-10-10). Requiring her name on EVERY sentence instead made her
         # deaf mid-conversation with music on (the next fix, same day).
         self._last_explicit = clock()
+        self._explicit_reply_pending = False
 
     def era_finished_speaking(self, interrupted: bool) -> None:
         now = self._clock()
+        if self._explicit_reply_pending:
+            self._last_explicit = now
+            self._explicit_reply_pending = False
         if not interrupted:
             self._hold_until = now + get_listening_config()["echo_hold_ms"] / 1000.0
         self._last_activity = now
@@ -156,9 +160,15 @@ class ListeningState:
         self._last_activity = now
         if explicit:
             self._last_explicit = now
+            self._explicit_reply_pending = True
 
     def echo_hold_active(self) -> bool:
         return self._clock() < self._hold_until
+
+    def note_transcript(self, text: str) -> None:
+        """Recognize an explicit address even while the free window is open."""
+        if addressed_to_era(text):
+            self.note_activity(explicit=True)
 
     def window_open(self) -> bool:
         """Is Era in conversation, or must the next sentence carry her name?
@@ -211,6 +221,7 @@ class AttentionGate:
         self._preroll: list[bytes] = []
         self._speech_s = 0.0
         self._quiet_s = 0.0
+        self._dropped_s = 0.0
         self._rec = None
 
     def _is_speech(self, frame: bytes) -> bool:
@@ -235,6 +246,14 @@ class AttentionGate:
         dur = (len(frame) // 2) / 16000.0
         speech = self._is_speech(frame)
         silence = bytes(len(frame))
+
+        if self.mode in (CHECKING, DROPPING) and self._open(keep_open):
+            # A stale ignored utterance must not survive media stopping, an
+            # explicit wake or an opened conversation. Do not leak held media.
+            self.mode, self._held, self._rec = PASSING, [], None
+            self._quiet_s, self._dropped_s = 0.0, 0.0
+            self._on_event("reopened", "listening context became active")
+            return [frame]
 
         if self.mode == IDLE:
             if not speech:
@@ -278,6 +297,13 @@ class AttentionGate:
         # PASSING / DROPPING until the utterance ends.
         self._quiet_s = 0.0 if speech else self._quiet_s + dur
         passing = self.mode == PASSING
+        if not passing:
+            self._dropped_s += dur
+            if self._dropped_s >= get_listening_config()["name_check_s"]:
+                # Continuous TV/room sound may never have 700 ms of silence.
+                # Re-arm bounded name checks rather than ignoring forever.
+                self.mode, self._dropped_s = IDLE, 0.0
+                self._preroll = []
         if self._quiet_s >= _END_SILENCE_S:
             if passing:
                 self.state.note_activity()
@@ -297,4 +323,5 @@ class AttentionGate:
             return held  # the whole utterance so far, name included, in order
         self._on_event("ignored", heard)
         self.mode = IDLE if ended else DROPPING
+        self._dropped_s = 0.0
         return [silence]

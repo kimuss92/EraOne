@@ -1,6 +1,7 @@
-import json
 import sys
 from pathlib import Path
+
+from core.protected_config import read_config, write_config
 
 
 def get_base_dir() -> Path:
@@ -25,25 +26,20 @@ def config_exists() -> bool:
 def save_api_keys(gemini_api_key: str) -> None:
     ensure_config_dir()
 
-    data: dict = {}
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-
+    # Never overwrite unrelated settings after a corrupt/unreadable config.
+    data = read_config(CONFIG_FILE) if CONFIG_FILE.exists() else {}
     data["gemini_api_key"] = gemini_api_key.strip()
 
-    CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    write_config(CONFIG_FILE, data)
 
 
 def load_api_keys() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        return read_config(CONFIG_FILE)
     except Exception as e:
-        print(f"❌ Failed to load api_keys.json: {e}")
+        print(f"Failed to load API configuration ({type(e).__name__})")
         return {}
 
 

@@ -144,6 +144,8 @@ class ResponseCache:
         if not result.success or spec.id == "nabar" or turn.context.get("review"):
             return False
         data = result.data or {}
+        if any(str(name).startswith("source.") for name in data.get("capabilities_used", [])):
+            return False
         if data.get("effects") or data.get("review"):
             return False
         return set(data.get("capabilities_used") or []) <= _PURE_READ

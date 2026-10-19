@@ -39,7 +39,9 @@ conversation_history: list = []
 def _load_config() -> dict:
     config_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
     try:
-        return json.loads(config_path.read_text(encoding="utf-8"))
+        from core.protected_config import read_config
+
+        return read_config(config_path)
     except Exception:
         return {}
 

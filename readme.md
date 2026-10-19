@@ -190,8 +190,11 @@ categories stay gated to a live user.
 python tools/run_all_checks.py
 ```
 
-`ALL_CHECKS_OK` / `READY` means all systems are operational. Lint, format, and
-tests gate every change:
+The runner's final `ALL_CHECKS_OK` and `GLOBAL_READY: YES` mean its configured
+checks passed. The Doctor's individual `READY` result may appear even when
+another suite fails; use the final summary to assess the whole run. Hardware
+and live-channel acceptance still require the manual checks for each feature.
+Lint, format, and tests gate every change:
 
 ```powershell
 python -m ruff format .          # format
@@ -224,3 +227,14 @@ python -m pytest tools/ -q       # tests
 ## License
 
 Private project — by karimbenattig.
+
+## Local credential storage
+
+On Windows, Era supports user-scoped DPAPI credential values in
+`config/api_keys.json`. Normal settings remain editable; leave protected
+`$era_dpapi_v1` objects intact. The setup writer preserves protection when saving
+new keys. To migrate existing plaintext credentials, close Era and run
+`python -m tools.protect_api_config --apply`. Run without `--apply` to check only.
+Do not share decrypted keys. Protected credentials require the original Windows
+account; re-enter them when moving to another account or PC. Previously synced
+OneDrive versions and external backups are outside this migration.

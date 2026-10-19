@@ -110,3 +110,44 @@ class TestSayExactlyUnwrap:
         from app.text_intents import _unwrap_say_exactly
 
         assert _unwrap_say_exactly("Brave is closed, sir.") == "Brave is closed, sir."
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        r"rename C:\Temp\probe.txt to renamed.txt",
+        r"delete C:\Temp\probe.txt",
+        r"copy C:\Temp\probe.txt to C:\Temp\copy.txt",
+        r"Please overwrite C:\Temp\probe.txt with new content",
+        r"Don't open C:\Temp\probe.txt",
+        r"What happens if I open C:\Temp\probe.txt?",
+        r'Open "C:\Temp\probe.txt" and rename it',
+        r"open C:\Temp\probe.txt then delete it",
+        r"C:\Temp\probe.txt",
+        r"Use file_controller to rename C:\Temp\probe.txt to renamed.txt",
+    ],
+)
+def test_path_mutation_or_discussion_never_becomes_a_direct_open(text):
+    from app.text_intents import _extract_raw_path, _is_path_open_request
+
+    path = _extract_raw_path(text)
+    assert path is not None
+    assert not _is_path_open_request(text, path)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        r"open C:\Temp\probe.txt",
+        r'Please open "C:\Work Folder\notes.txt"',
+        r"Can you open C:\Work Folder\notes.txt",
+        r"Era, show me C:\Temp\probe.txt",
+        r'Open "\\server\share\Work Folder\notes.txt"',
+    ],
+)
+def test_explicit_path_open_keeps_spaces_and_unc_identity(text):
+    from app.text_intents import _extract_raw_path, _is_path_open_request
+
+    path = _extract_raw_path(text)
+    assert path is not None
+    assert _is_path_open_request(text, path)

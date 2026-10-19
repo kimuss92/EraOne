@@ -839,7 +839,7 @@ class TestBreakItOnPurpose:
         t.register("drew", load_specs().specs["drew"])
         res = ask(t, "drew")
         assert_crew_failure_shape(res)
-        assert res.error_type == "BotError" and note(vault) == before
+        assert res.error_type == "LLMUnavailable" and note(vault) == before
         # and the transport is still usable afterwards:
         t._llm = ScriptedLLM({"drew": [final("back")]})
         assert ask(t, "drew").message == "back"
@@ -911,7 +911,9 @@ class TestBreakItOnPurpose:
         [x.join() for x in threads]
         assert note(vault, "00 - Inbox/Scratch.md").count("by drew -->") == 8
 
-    def test_resetting_the_transport_recovers_the_tool(self, vault):
+    def test_resetting_the_transport_recovers_the_tool(self, vault, monkeypatch):
+        # Exercise factory reset independently of the user's Hermes service.
+        monkeypatch.setenv("ERA_CREW_TRANSPORT", "in_process")
         runtime.reset_transport(None)
         first = runtime.get_transport()
         assert first.health().ok and first.capabilities("laura")

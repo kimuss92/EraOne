@@ -35,6 +35,10 @@ import sounddevice as sd
 from app.audio_config import CHANNELS, CHUNK_SIZE, RECEIVE_SAMPLE_RATE, SEND_SAMPLE_RATE
 from app.era_live.local_guards import owner_voice, user_approved
 from app.era_live.tts_text import sanitize_for_tts
+from app.text_intents import _voice_switch_intent
+from core import voice_input
+from core.audio_pcm import amplify_input_pcm
+from core.logger import log_event, main_logger
 from core.mic_mute import is_mic_off_order
 
 _STOP = re.compile(
@@ -125,6 +129,36 @@ class LocalFallbackMixin:
 
     def local_mode_active(self) -> bool:
         return bool(getattr(self, "_local_mode_active", False))
+
+    def request_gemini_reconnect(self) -> bool:
+        """Exit the backup loop; a selected Gemini voice is not a live connection.
+
+        UI callers can arrive on another thread. Announce success only through
+        note_cloud_restored after the run loop actually connects.
+        """
+        if not self.local_mode_active():
+            return False
+
+        def leave() -> None:
+            if self._in_cascade():
+                self._cascade_pause()
+            release = getattr(self, "release_claude_voice", None)
+            if release is not None:
+                release()
+            self._local_exit.set()
+
+        loop = getattr(self, "_loop", None)
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(leave)
+        else:
+            leave()
+        log_event(
+            main_logger,
+            "engine.gemini.retry_requested",
+            "INFO",
+            from_mode=getattr(self, "_local_outage_reason", ""),
+        )
+        return True
 
     def _in_cascade(self) -> bool:
         """This loop is serving the cascade voice mode (app/era_live/cascade.py)."""
@@ -231,9 +265,13 @@ class LocalFallbackMixin:
         self._local_turn_task: asyncio.Task | None = None
         frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=400)
         self._local_frames = frames
+        wearable_gain = False
+        self._wearable_input_active = False
 
         def on_mic(indata, _frames, _time, _status) -> None:
             data = indata.tobytes()
+            if wearable_gain:
+                data = amplify_input_pcm(data)
 
             def put() -> None:
                 if not frames.full():
@@ -269,13 +307,43 @@ class LocalFallbackMixin:
             if first:
                 self.ui.write_log(f"SYS: {_ANNOUNCE.get(reason, _ANNOUNCE['network'])}")
                 await self._local_say(_ANNOUNCE.get(reason, _ANNOUNCE["network"]))
+            mic_index = voice_input.resolve_input_index(sd)
+            detector = getattr(self, "_barge_in", None)
+            if detector is not None:
+                detector.configure_input("")
             with sd.InputStream(
                 samplerate=SEND_SAMPLE_RATE,
                 channels=CHANNELS,
                 dtype="int16",
                 blocksize=CHUNK_SIZE,
+                device=mic_index,
                 callback=on_mic,
             ):
+                try:
+                    actual = sd.query_devices(mic_index, "input")
+                    name = str(actual["name"])
+                    voice_input.note_active_input(mic_index, name)
+                    if detector is not None:
+                        wearable_gain = detector.configure_input(name)
+                        self._wearable_input_active = wearable_gain
+                    log_event(
+                        main_logger,
+                        "voice.input.opened",
+                        "INFO",
+                        device=name,
+                        index=mic_index,
+                        sample_rate=SEND_SAMPLE_RATE,
+                        input_gain=8.0 if wearable_gain else 1.0,
+                        mode=reason,
+                    )
+                except Exception as exc:
+                    log_event(
+                        main_logger,
+                        "voice.input.identification_failed",
+                        "WARNING",
+                        error_type=type(exc).__name__,
+                        mode=reason,
+                    )
                 while time.monotonic() < deadline and not self._shutdown_requested:
                     if self._local_exit.is_set():
                         break
@@ -302,6 +370,13 @@ class LocalFallbackMixin:
         )
 
     async def _local_on_frame(self, frame: bytes) -> None:
+        if self._standby_active:
+            # A voice-muted standby still hears the locally configured wake
+            # word; the same recognizer is used by the normal capture loop.
+            queue = getattr(self, "_wake_queue", None)
+            if self._browser_mic_active and queue is not None and not queue.full():
+                queue.put_nowait(frame)
+            return
         if not self._mic_open():
             return
         if self._local_speaking:
@@ -313,7 +388,10 @@ class LocalFallbackMixin:
             except Exception:
                 pass
             return
-        for segment in self._local_listener.feed(frame):
+        media_frames = getattr(self, "_media_voice_frames", lambda data: [data])(frame)
+        for segment in (
+            segment for sample in media_frames for segment in self._local_listener.feed(sample)
+        ):
             said_at = time.time()
             if not await asyncio.to_thread(owner_voice, self, segment):
                 continue
@@ -323,6 +401,11 @@ class LocalFallbackMixin:
                 await self._local_on_utterance(utt.text, utt.lang, said_at)
 
     async def _local_on_utterance(self, text: str, lang: str, said_at: float) -> None:
+        standby_order = getattr(self, "_handle_auto_standby_order", lambda text: None)(text)
+        if standby_order is not None:
+            if not self._standby_active:
+                await self._local_say(standby_order)
+            return
         if self._standby_active:
             if self._wake_word_found(text):
                 await self._resume_from_standby("local_wake", speak_ack=False)
@@ -345,22 +428,30 @@ class LocalFallbackMixin:
             self._local_cancel_turn()
             self._clear_pending_work()
             return
+        # Handle a deliberate cloud voice order locally even while Gemini is
+        # unavailable. Sending it to the backup brain invites a false "already".
+        if _voice_switch_intent(text) == "gemini":
+            from core.voice_mode import VOICE_CFG
+
+            self.ui.write_log(f"You: {text}")
+            VOICE_CFG.set_mode("gemini")
+            self._tts_primary_retry_at = 0.0
+            self._tts_primary_mode = ""
+            self.ui.write_log("SYS: Gemini is not connected; retrying the cloud voice.")
+            self.request_gemini_reconnect()
+            return
         if self._in_cascade() and await self._cascade_voice_order(text):
             return
         if _RECONNECT.search(text):
             self.ui.write_log(f"You: {text}")
             await self._local_say("Trying the cloud again, sir.")
-            if self._in_cascade():
-                self._cascade_pause()
-            # Closes a Claude window too: left open, the run loop would serve this
-            # same local loop again at once and "reconnect" would not reconnect.
-            release = getattr(self, "release_claude_voice", None)
-            if release is not None:
-                release()
-            self._local_exit.set()
-            return
-        if self._local_turn_task is not None and not self._local_turn_task.done():
-            print(f"[LOCAL] Busy — ignored while thinking: {text}")
+            # Bare test mixins may not mark their loop active; the running loop
+            # always does. Keep the explicit exit for those callers as well.
+            if not self.request_gemini_reconnect():
+                release = getattr(self, "release_claude_voice", None)
+                if release is not None:
+                    release()
+                self._local_exit.set()
             return
         # Attention window (core/attention.py), on the transcript here since the
         # local ear already decoded it. Safety orders above always pass.
@@ -377,6 +468,19 @@ class LocalFallbackMixin:
         )
         if decision.action == "BLOCK_SILENTLY":
             print(f"[LOCAL] Gate blocked: {text!r} — {decision.reason}")
+            return
+        if self._local_turn_task is not None and not self._local_turn_task.done():
+            from app.input_buffer import buffer_for
+            from core.input_envelope import InputEnvelope
+
+            queued = decision.action != "ASK_CLARIFICATION" and buffer_for(self).put(
+                InputEnvelope.create(text, "voice")
+            )
+            self.ui.write_log(
+                "SYS: Voice request buffered for reconnection."
+                if queued
+                else "SYS: Voice request could not be buffered; please repeat it when ready."
+            )
             return
         self.ui.write_log(f"You: {text}")
         from core.autopilot import MAIN, classify
@@ -417,6 +521,11 @@ class LocalFallbackMixin:
 
     # ── a turn: brain -> voice, pipelined ───────────────────────────────────
     async def _local_turn(self, text: str, lang: str = "") -> str:
+        from app.codemode_runtime import route as route_codemode
+        from core.input_envelope import InputEnvelope
+
+        if route_codemode(self, text, InputEnvelope.create(text, "voice")):
+            return ""
         from core.local_tts import guess_lang, synthesize_best
 
         self.ui.set_state("THINKING")
@@ -449,6 +558,15 @@ class LocalFallbackMixin:
                     produced = True
                     pcm, _backend = await synthesize_best(
                         sentence, guess_lang(sentence), allow_fish=fish
+                    )
+                    log_event(
+                        main_logger,
+                        "voice.local.phrase_synthesized",
+                        "INFO" if pcm else "WARNING",
+                        engine=_backend,
+                        audio_bytes=len(pcm),
+                        text_length=len(sentence),
+                        mode=getattr(self, "_local_outage_reason", ""),
                     )
                     await queue.put((sentence, pcm))
                 if not produced:
@@ -506,6 +624,12 @@ class LocalFallbackMixin:
         return spoken
 
     def _local_cancel_turn(self) -> None:
+        mouth = getattr(self, "_codemode_local_mouth", None)
+        if mouth is not None:
+            from core.codemode import get_codemode
+
+            get_codemode()._speech_muted = True
+            mouth.interrupt()
         task = getattr(self, "_local_turn_task", None)
         if task is not None and not task.done():
             brain = getattr(self, "_local_brain", None)

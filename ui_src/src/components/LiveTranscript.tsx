@@ -36,7 +36,7 @@ function loadExpanded(): boolean {
   try { return localStorage.getItem(EXPANDED_KEY) === '1'; } catch { return false; }
 }
 
-function LiveTranscript() {
+function LiveTranscript({ workbench = false }: { workbench?: boolean }) {
   const entries = useHud(s => s.conversation);
   const t = useHud(s => s.transcript);
   const state = useHud(s => s.agent.state);
@@ -58,6 +58,16 @@ function LiveTranscript() {
     if (t.response && !recordedAfter('agent', t.respAt)) {
       out.push({ id: 'live-agent', role: 'agent', text: t.response, live: true, ts: t.respAt ?? 0 });
     }
+    // Local utterances can precede a transcript. Keep them in this same text
+    // surface; never overlay a second copy of a phrase already in the reply.
+    const caption = t.caption;
+    const normalize = (text: string) => text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    const phrase = caption ? normalize(caption.text) : '';
+    const covered = phrase && [t.response, ...out.filter(r => r.role === 'agent').map(r => r.text)]
+      .some(text => ` ${normalize(text)} `.includes(` ${phrase} `));
+    if (caption?.state === 'started' && phrase && !covered) {
+      out.push({ id: `spoken-${caption.id}`, role: 'agent', text: caption.text, live: true, ts: caption.at });
+    }
     return out;
   }, [entries, t]);
 
@@ -69,8 +79,9 @@ function LiveTranscript() {
   const fresh = (r: Row) => !r.live && r.ts > openedAt;
 
   useEffect(() => {
+    if (workbench) return;
     try { localStorage.setItem(EXPANDED_KEY, expanded ? '1' : '0'); } catch { /* private mode */ }
-  }, [expanded]);
+  }, [expanded, workbench]);
 
   // Follow new content only when the reader is already at the bottom.
   const last = rows[rows.length - 1];
@@ -105,7 +116,7 @@ function LiveTranscript() {
   const transcribing = state === 'transcribing';
   return (
     <div className={`transcript relative mx-auto w-full max-w-3xl ${expanded ? 'transcript-expanded' : ''}`}>
-      <div className="transcript-tools">
+      {!workbench && <div className="transcript-tools">
         <button type="button" className="icon-btn icon-btn-sm" title="Full conversation history" aria-label="Full conversation history" onClick={() => setState({ drawer: 'conversation' })}>
           <History className="h-3.5 w-3.5" />
         </button>
@@ -119,7 +130,7 @@ function LiveTranscript() {
         >
           {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
         </button>
-      </div>
+      </div>}
       <div
         ref={boxRef}
         onScroll={onScroll}
@@ -130,7 +141,7 @@ function LiveTranscript() {
       >
         {rows.length === 0 && (
           <p className="px-2 pt-2 text-center text-small t3">
-            The conversation will appear here. Say the wake word, or type below.
+            {workbench ? 'CodeMode shares your live conversation. Speak or type a coding task below.' : 'The conversation will appear here. Say the wake word, or type below.'}
           </p>
         )}
         {rows.map((r, i) => {

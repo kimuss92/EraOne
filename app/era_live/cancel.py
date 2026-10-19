@@ -41,7 +41,12 @@ from __future__ import annotations
 
 from app.hud.events import hud
 from app.text_intents import _say_exactly
-from core.cancel_intent import correction_target, is_cancel_task_order
+from core.cancel_intent import (
+    correction_target,
+    is_cancel_all_live_order,
+    is_cancel_task_order,
+    is_spoken_cancel_task_order,
+)
 from core.cancel_registry import REGISTRY, CancelToken
 from core.logger import log_event, main_logger
 
@@ -50,7 +55,7 @@ from core.logger import log_event, main_logger
 CANCEL_ACK = "Stopped."
 
 # Sources that must stay silent. See ACK POLICY above.
-_SILENT_SOURCES = frozenset({"hud", "abort", "correction"})
+_SILENT_SOURCES = frozenset({"hud", "abort", "correction", "voice_all", "typed_all"})
 
 
 class CancelMixin:
@@ -107,14 +112,42 @@ class CancelMixin:
         actually running: a stray "stop that" with nothing in flight must fall
         through to normal routing rather than be swallowed here.
         """
-        if not REGISTRY.active():
-            return False
         wake = self._wake_words()
         target = correction_target(text, wake)
-        if target is None and not is_cancel_task_order(text, wake):
+        cancel_all = is_cancel_all_live_order(text)
+        cancel_order = (
+            is_spoken_cancel_task_order(text, wake)
+            if source == "voice"
+            else is_cancel_task_order(text, wake)
+        )
+        if target is None and not cancel_order and not cancel_all:
             return False
-        if partial and target is None:
-            return False  # mid-sentence: act only once the order is unambiguous
+        if (
+            source == "voice"
+            and (cancel_order or cancel_all)
+            and getattr(self, "_inflight_user_text", "")
+        ):
+            if getattr(self, "_live_cancel_applied", False):
+                return True
+            self._live_cancel_applied = True
+        if cancel_all:
+            tokens = REGISTRY.cancel_all(source=f"{source}_all", reason=(text or "")[:120])
+            for token in tokens:
+                # One spoken acknowledgement, not one per cancelled task.
+                self._apply_cancel(token)
+            self.speak(
+                _say_exactly(
+                    "Stopped the live tasks." if tokens else "There is no live task running."
+                )
+            )
+            return True
+        if not REGISTRY.active():
+            if cancel_order:
+                self.speak(_say_exactly("There is no live task running."))
+                return True  # Never reinterpret this as deleting a scheduled job.
+            return False
+        # A complete explicit cancel sentence does not need the model's turn
+        # boundary. Waiting there makes repeated "cancel the task" feel ignored.
         token = REGISTRY.cancel_newest(
             source="correction" if target else source, reason=(text or "")[:120]
         )
@@ -158,8 +191,9 @@ class CancelMixin:
             return
         try:
             from core.async_submit import submit_coroutine
+            from core.model_reply import send_model_text
 
-            submit_coroutine(session.send_realtime_input(text=note), loop)
+            submit_coroutine(send_model_text(self, note, internal=True), loop)
         except Exception as e:  # noqa: BLE001
             print(f"[CANCEL] Could not hand the correction to the model: {e}")
 

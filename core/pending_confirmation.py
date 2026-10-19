@@ -4,8 +4,14 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+import weakref
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field
+
+from core.approval_execution import CURRENT_TASK_ID
 
 # Must comfortably exceed Gemini's Live-session rotation interval (~2.5 min).
 # At the old 120s a rotation could outlive the pending confirmation, so a user
@@ -26,6 +32,7 @@ class PendingConfirmation:
         default_factory=lambda: time.time() + _PENDING_CONFIRMATION_TTL_SECONDS
     )
     confirmation_id: str = field(default_factory=lambda: secrets.token_hex(4))
+    task_id: str | None = None
 
 
 class PendingConfirmationBusy(RuntimeError):
@@ -60,10 +67,109 @@ NOT_USER_APPROVED_MESSAGE = (
 
 
 class PendingConfirmationStore:
-    def __init__(self, ttl: float = _PENDING_CONFIRMATION_TTL_SECONDS):
+    def __init__(
+        self, ttl: float = _PENDING_CONFIRMATION_TTL_SECONDS, *, automatic_expiry: bool = False
+    ):
         self._pending: PendingConfirmation | None = None
         self._lock = threading.Lock()
         self._ttl = ttl
+        self._listeners: dict[object, object] = {}
+        self._events: list[dict] = []
+        self._sequence = 0
+        self._automatic_expiry = automatic_expiry
+        self._expiry_timer: threading.Timer | None = None
+
+    def subscribe(self, callback: Callable[[dict], None]) -> Callable[[], None]:
+        """Observe detached lifecycle events outside the approval lock."""
+        token = object()
+        try:
+            listener = weakref.WeakMethod(callback)
+        except TypeError:
+            listener = callback
+        with self._lock:
+            self._listeners[token] = listener
+
+        def unsubscribe() -> None:
+            with self._lock:
+                self._listeners.pop(token, None)
+
+        return unsubscribe
+
+    @contextmanager
+    def _transaction(self):
+        events, listeners = [], []
+        try:
+            with self._lock:
+                try:
+                    yield
+                finally:
+                    events, self._events = self._events, []
+                    listeners = list(self._listeners.items())
+        finally:
+            for event in events:
+                for token, listener in listeners:
+                    callback = listener() if isinstance(listener, weakref.WeakMethod) else listener
+                    if callback is None:
+                        with self._lock:
+                            self._listeners.pop(token, None)
+                        continue
+                    try:
+                        callback(deepcopy(event))
+                    except Exception as exc:
+                        print(
+                            f"[Confirmation] lifecycle listener failed: {type(exc).__name__}: {exc}"
+                        )
+
+    def _emit_locked(self, state: str, pending: PendingConfirmation) -> None:
+        self._sequence += 1
+        self._events.append(
+            {
+                "seq": self._sequence,
+                "state": state,
+                "confirmation_id": pending.confirmation_id,
+                "tool": pending.tool,
+                "reason": pending.reason,
+                "at": time.time(),
+                "task_id": pending.task_id,
+                "created_at": pending.created_at,
+            }
+        )
+
+    def _remove_locked(self, state: str) -> PendingConfirmation | None:
+        pending, self._pending = self._pending, None
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+            self._expiry_timer = None
+        if pending is not None:
+            self._emit_locked(state, pending)
+        return pending
+
+    def _expire_locked(self) -> bool:
+        if self._pending is not None and time.time() > self._pending.expires_at:
+            self._remove_locked("expired")
+            return True
+        return False
+
+    def _arm_expiry_locked(self) -> None:
+        if not self._automatic_expiry or self._pending is None:
+            return
+        expected = self._pending
+        owner = weakref.ref(self)
+
+        def expire() -> None:
+            store = owner()
+            if store is None:
+                return
+            with store._transaction():
+                if store._pending is not expected:
+                    return
+                if not store._expire_locked():
+                    store._arm_expiry_locked()
+
+        timer = threading.Timer(max(0.01, self._pending.expires_at - time.time()), expire)
+        timer.daemon = True
+        self._expiry_timer = timer
+        timer.start()
 
     def store(
         self,
@@ -80,35 +186,42 @@ class PendingConfirmationStore:
         waiting, unless `replace=True`. The old behaviour — overwrite, always —
         is what let one model turn swap what a spoken "yes" would approve.
         """
-        with self._lock:
+        with self._transaction():
             now = time.time()
+            self._expire_locked()
             existing = self._pending
             if existing is not None and now <= existing.expires_at and not replace:
-                raise PendingConfirmationBusy(existing)
+                raise PendingConfirmationBusy(deepcopy(existing))
             pending = PendingConfirmation(
                 tool=tool,
-                parameters=parameters,
+                parameters=deepcopy(parameters),
                 risk_level=risk_level,
                 reason=reason,
                 created_at=now,
                 expires_at=now + self._ttl,
+                task_id=CURRENT_TASK_ID.get(),
             )
+            self._remove_locked("replaced")
             self._pending = pending
+            self._emit_locked("stored", pending)
+            self._arm_expiry_locked()
             return pending.confirmation_id
 
     def get(self, confirmation_id: str) -> PendingConfirmation | None:
-        with self._lock:
+        with self._transaction():
+            self._expire_locked()
             if self._pending is None:
                 return None
             if self._pending.confirmation_id != confirmation_id:
                 return None
-            if time.time() > self._pending.expires_at:
-                self._pending = None
-                return None
-            return self._pending
+            return deepcopy(self._pending)
 
     def confirm(
-        self, confirmation_id: str, *, allow_sole: bool = False
+        self,
+        confirmation_id: str,
+        *,
+        allow_sole: bool = False,
+        expected_created_at: float | None = None,
     ) -> PendingConfirmation | None:
         """Consume the pending confirmation.
 
@@ -118,59 +231,51 @@ class PendingConfirmationStore:
         *which* action is being confirmed. This is what lets a spoken "yes" (and
         model-invented confirmation ids) still confirm the one action in flight.
         """
-        with self._lock:
+        with self._transaction():
+            self._expire_locked()
             if self._pending is None:
-                return None
-            if time.time() > self._pending.expires_at:
-                self._pending = None
                 return None
             if self._pending.confirmation_id != confirmation_id and not allow_sole:
                 return None
-            pending = self._pending
-            self._pending = None
-            return pending
+            if expected_created_at is not None and self._pending.created_at != expected_created_at:
+                return None
+            return self._remove_locked("consumed")
 
-    def cancel(self, confirmation_id: str) -> bool:
-        with self._lock:
+    def cancel(self, confirmation_id: str, *, expected_created_at: float | None = None) -> bool:
+        with self._transaction():
+            self._expire_locked()
             if self._pending is None:
                 return False
             if self._pending.confirmation_id != confirmation_id:
                 return False
-            self._pending = None
+            if expected_created_at is not None and self._pending.created_at != expected_created_at:
+                return False
+            self._remove_locked("cancelled")
             return True
 
     def expire_all(self) -> int:
-        with self._lock:
-            if self._pending is None:
-                return 0
-            if time.time() > self._pending.expires_at:
-                self._pending = None
-                return 1
-            return 0
+        with self._transaction():
+            return int(self._expire_locked())
 
     def is_pending(self) -> bool:
-        with self._lock:
+        with self._transaction():
+            self._expire_locked()
             if self._pending is None:
-                return False
-            if time.time() > self._pending.expires_at:
-                self._pending = None
                 return False
             return True
 
     def peek(self, confirmation_id: str = "") -> PendingConfirmation | None:
-        with self._lock:
+        with self._transaction():
+            self._expire_locked()
             if self._pending is None:
                 return None
             if confirmation_id and self._pending.confirmation_id != confirmation_id:
                 return None
-            if time.time() > self._pending.expires_at:
-                self._pending = None
-                return None
-            return self._pending
+            return deepcopy(self._pending)
 
     def clear(self) -> None:
-        with self._lock:
-            self._pending = None
+        with self._transaction():
+            self._remove_locked("cancelled")
 
 
 # ── Process-wide shared store ───────────────────────────────────────────
@@ -189,7 +294,7 @@ def get_shared_store() -> PendingConfirmationStore:
     if _shared_store is None:
         with _shared_store_lock:
             if _shared_store is None:
-                _shared_store = PendingConfirmationStore()
+                _shared_store = PendingConfirmationStore(automatic_expiry=True)
     return _shared_store
 
 
@@ -202,6 +307,9 @@ def get_shared_store() -> PendingConfirmationStore:
 # app/era_live/tool_dispatch._user_approved_pending). With NO probe — headless, a
 # test — nobody can approve: this fails CLOSED.
 _user_approval_probe: Callable[[PendingConfirmation], bool] | None = None
+SCOPED_APPROVAL: ContextVar[tuple[str, Callable[[PendingConfirmation], bool]] | None] = ContextVar(
+    "scoped_approval", default=None
+)
 
 
 def set_user_approval_probe(probe: Callable[[PendingConfirmation], bool] | None) -> None:
@@ -211,6 +319,23 @@ def set_user_approval_probe(probe: Callable[[PendingConfirmation], bool] | None)
 
 def user_approved(pending: PendingConfirmation | None) -> bool:
     """True only when the registered probe says the USER approved `pending`."""
+    if pending is None:
+        return False
+    from core.approval_execution import remote_approves
+
+    if remote_approves(pending):
+        return True
+    scoped = SCOPED_APPROVAL.get()
+    if scoped is not None:
+        owner, scoped_probe = scoped
+        if pending.task_id != owner:
+            return False
+        try:
+            return bool(scoped_probe(pending))
+        except Exception:
+            return False
+    if str(pending.task_id or "").startswith("telegram-call:"):
+        return False  # Local conversation text cannot approve a call-owned action.
     probe = _user_approval_probe
     if probe is None or pending is None:
         return False

@@ -8,6 +8,770 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ## Phase 0 — Stabilization (week of 2026-09-29)
 
+### 2026-10-18 · Codex session: Chief of Staff requirement audit and proposed design
+
+**What was wrong.** New owner requirements conflict with current source policy:
+live microphone forwarding explicitly bypasses optional attention; the attention
+module itself permits unprefixed conversation and fails open. Reconnect notes
+instruct silent automatic continuation. Spotify automatic minimize accepts a
+successful-looking command result without an independent sustained-playback
+handshake. Absolute silence also conflicts with an immediate reconnect notice
+when no new prefixed command has arrived. Existing Crew deadlines/retry,
+self-heal probation and approved feature staging should be extended, not rebuilt.
+
+**What changed.** Added a reviewable, proposed design at
+`docs/era-enhancement/CHIEF_OF_STAFF_DESIGN_2026-10-18.md`: existing runtime
+boundaries, command authority, fresh evidence, reconnection confirmation,
+Spotify handshake, bounded incident ownership, security/cost constraints and
+candidate deployment on safe relaunch. TODO #48 records the implementation and
+live acceptance owed. The brainstorming skill explicitly requires design
+approval before implementation; an asynchronous user question asks whether
+reconnect notices wait for the next prefix or receive a narrow exception.
+No runtime code/config changes, live restart, playback, external search,
+dependency installation or new paid model request was performed.
+
+**How verified.** Graph navigation followed by current-source checks (graph
+report predates recent edits). Fresh `era_observe --since 30m --json` execution
+returned 269 events, two tool failures (`code_mode.enter: UserIntentRequired`),
+two error-level events and six rotation notes; these are bounded log-window
+observations, not a complete live health claim. Existing attention, disconnect
+classification, Hermes transport, development and Spotify search suites:
+**191 passed, 2 warnings in 18.05s**. No tests added or changed. Proposed design
+self-review checked scope, acceptance criteria and the unresolved policy conflict.
+
+**Not yet proven.** All new requirements remain unimplemented. Existing passing
+tests validate old behavior only. No physical listening, real network fault,
+Spotify handshake, autonomous repair or staged-relaunch acceptance is claimed.
+Other agents' extensive working-tree changes remain intact; no commit made.
+
+### 2026-10-18 · Claude session: Phase 9–11 audit, live "open file" repair, observation tool
+
+**What was wrong.** Picking up after ChatGPT's establishment checklist, the live
+log was read against its claims instead of trusted. Confirmed working since the
+14:49 restart: 0 `awareness.devices.observer_failed`/`read_failed` (276 before it),
+0 `audio.output.write_failed`, 0 `tool.duplicate.in_flight`. One live defect: two
+`file_controller open` calls took 15 s and failed on `'desktop diag_…md'`. The model's
+arguments were right (`name` + `recursive`, no `path`); the dispatcher defaults
+`path` to `"desktop"`, `open_file_or_folder` glued it onto `name`, and
+`_parse_folder_intent` kept it in the query, so the search looked for a file
+*named* "desktop diag…". Behind it a second bug: `FileIndex._score_and_rank`
+defaulted `root_priority` to 0 (the BEST rank, +10) for any path outside
+Desktop/Downloads/Documents, so stale pytest debris in `%TEMP%` (score 0.984)
+outranked the real file in Documents (0.960) and filled all 10 result slots.
+A third finding: `test_conversation_responsiveness` still called `note_reply()`
+alone, but ChatGPT's response-recovery repair made `note_delivered()` the
+acknowledgement (its two sibling fixtures were updated, this one was missed).
+
+**What changed.** `actions/file_controller.py`: a bare location word in `path`
+(`_LOCATION_SHORTCUTS`) is no longer glued onto `name` for the search; new
+`_drop_temp_candidates` ignores `%TEMP%` copies for `open` when a real match
+exists (`find` still lists everything). `actions/file_indexer.py`:
+`_NO_ROOT_PRIORITY = 5` (no bonus) is the default. `tools/test_file_candidates.py`:
+`TestOpenByBareName` (5 tests; the two behavioural ones were proved to FAIL with
+the old values patched back). `tools/test_conversation_responsiveness.py`: the
+stale fixture acknowledges delivery. New `tools/era_observe.py` + 10 tests: one
+command summarises a log window (errors, slow failures, duplicates, reconnects,
+latency p50/p95) and exits 1 on faults wrong in any amount; supervisor faults come
+from `era_crash.log`; a start without a relaunch request is a note, not a fault.
+`model.reply.unattributed` (217 warnings) was read, not changed: informational
+tracking for voice replies, it escalates only for pending Telegram work.
+
+**How verified.** Replayed the real failure: 18.6 s and no hit before, 2.1 s with
+the real file ranked first after. File suites 221 passed. Phase 10 suites
+(self-heal, self-improve, memory, approval, development, CodeMode, autonomy,
+reply ownership) 708 passed. Default-tier gate `tools/era_gate.py`: **8,073 passed,
+4 skipped**, ruff format/lint, manifest and `era_doctor` PASS, 1032 s, with Era live.
+`--all` was not run (it also runs `tools/test_zz_check_gate.py`). Source loaded
+by the running Era (PID 28312, 17:31) predates these edits: **restart owed** to
+load them. No declarations, prompt, UI, dependency or device-preference change.
+
+### 2026-10-18 · Codex session: recover unanswered sessions and release interrupted capture
+
+**What was wrong.** Owner reported Era completely ignoring them after the
+stability baseline. Live PID 29836 was connected, awake/unmuted, with all six
+session workers alive and physical input captured/transcribed. Receive buffers
+held repeated requests without reliable response delivery. Health checks counted
+upstream output/empty turns as replies and partial transcripts moved the timeout,
+so actual undelivered replies could remain unnoticed. Separately reproduced:
+native server interruption without turn_complete left _is_speaking true, closing
+half-duplex microphone forwarding after the server had stopped speech.
+
+**What changed.** `core/live_health.py` tracks a separate delivery deadline,
+cleared by successful output writes, not socket activity/empty turns. Typed
+requests survive incidental voice/empty-turn updates; active speech gets its quiet
+gap. `app/era_live/claude_voice.py` respects deliberate mute/standby and active
+tools/CodeMode budgets, then renews a stalled session with stale output flushed
+and interrupted-turn semantics preventing automatic action replay. Clears the
+server handle and logs a request to repeat after reconnection. `main.py` consumes
+a fresh-session flag before building the next connection, handling a late token
+race. `app/era_live/audio.py` acknowledges successful playback and immediately
+releases speaking state on server interruption while retaining stale-audio
+suppression. Current configured reply patience remains 60s; no arbitrary new
+provider/device policy. Tests: new `tools/test_response_delivery_recovery.py`,
+two legacy healthy-reply fixtures now acknowledge actual delivery. Manifest,
+TODO #47, changelog and establishment/stability pointers updated. Backups:
+`.phase7_backups/response-recovery-20261018/`. No UI build, declarations/prompt,
+dependencies, driver, pairing, billing or media-device preference changes.
+
+**How verified.** Old behavior first failed seven delivery/watchdog cases and
+one independently run interruption regression. Final affected/protected run:
+**570 passed, two warnings (25.68s)**, including required speak_once,
+media_routing, spotify_search, hud_approval, task_scheduler_authority, toolspec;
+also player/capture/barge-in/standby/ownership/session continuity. Separately
+**8 manifest cases passed (20.66s)**. Root Ruff lint/format, regenerated manifest,
+diff whitespace, local doc links and protected prompt BOM/rule pass. Tested
+source hashes unchanged at final check. The earlier 7,971-case full gate predates
+this follow-up and was not repeated. Logs: runtime/response-delivery-final-tests-
+20261018.log and response-recovery-manifest-tests-20261018.log (filenames each
+have no line break), plus red-test logs.
+
+**Live result.** Recovered the stalled session through normal renewal, then
+authenticated HUD restart loaded repair into PID **24028**. Read-only runtime
+inspection confirmed delivery methods loaded. Benign typed probe was superseded
+by the owner's live speech, so not claimed as an isolated typed success. Actual
+owner speech about concise routine responses was accepted and answered;
+completed HUD reply and playback evidence observed (one turn 3,737ms total).
+Owner then explicitly said **"Stand by now."** Era entered standby normally.
+Final check: connected, standby, verified Star Glasses voice route. Keep that
+latest choice; wake with HUD/configured wake word for conversation. Do not force
+another recovery/test while owner is using the conversation. Runtime evidence:
+response-recovery-restart/reloaded/live-probe/live-inspection/final-20261018.json.
+Python 3.14 read-only diagnostic attach used; no debug dependency installed.
+
+**Not yet proven.** Physical audible correctness, repeated conversation and real
+fault recovery while speaking remain owner feedback (#47/#46). No hardware or
+permanent no-silence guarantee. Fresh server recovery retains local recap/memory
+and avoids replay; an isolated clean typed turn and resumed-session acceptance
+remain separate live checks. No change to protected approval truth, speak_once,
+Spotify desktop worker, subscription-only Claude or existing memory/vault.
+Details: `docs/era-enhancement/RESPONSE_RECOVERY_2026-10-18.md`.
+
+### 2026-10-18 · Codex session: software stability baseline verified and running
+
+**What was wrong.** Cut-off spoken phrases could outlive the software queue but
+still be buffered in the audio driver. Provider rotations reopened microphone
+capture, creating avoidable device churn. Spotify activity on nondefault PC
+speakers was invisible to its old default-endpoint reader. A crew model wait
+could exceed the shared deadline and be reported as LLMUnavailable instead of
+StepLimit. Earlier checks and live acceptance were recorded incompletely.
+
+**What changed.** Output-tail-aware speech completion/renewal in
+`app/era_live/audio_output.py` and `audio.py`; new `audio_capture.py` retains one
+healthy explicitly identified input across reconnects for at most 15s, detaches
+idle callbacks, rejects stale callbacks, and closes on faults/device changes,
+expiry/shutdown. Unknown Windows-default inputs reopen to follow route changes.
+`core/voice_input.py` uses owner-bound cleanup; `core/voice_output.py` and
+`main.py` retire retained capture before global device refresh. Spotify reuses
+the existing all-endpoint media session reader; crew rechecks its deadline after
+model wait. Corrected valid-PCM and grounded-standby fixtures without weakening
+authority, added negative/regression cases. Ruff phase-backup exclusion aligned
+with pytest; 116 real files formatted with zero runtime AST changes, two test
+import orders repaired. Tool golden regenerated (59 tools); manifest current
+(403 source modules / 267 indexed tests). Targeted and preformat backups remain
+under `.phase7_backups/stability-20261018/`. Optional HUD sounds switched off to
+isolate UI beeps; no UI source/build or device preference changes. Protected
+approval authority, speak_once paths, prompt BOM/rule, killable Spotify workers,
+subscription-only Claude, remembered media routing and existing memory/vault
+preserved. No dependency/driver/service/pairing changes or new billing setup.
+
+**How verified.** Full Windows `era_gate.py --all` passed: **7,971 passed,
+4 skipped, 3 warnings**, gate 976.9s. All **36 readiness checks** passed (321.4s).
+Final review then reproduced the unknown-default microphone edge, added its
+guard and passed **334 affected/protected tests**, including the six required
+speech/media/Spotify/approval/scheduler/toolspec suites. The full gate/readiness
+preceded that final two-file guard and were not repeated afterward; before/after
+source hashes retain that distinction. Final root Ruff lint/format, manifest,
+prompt protection and documentation links passed; all 670 indexed final-source
+hashes unchanged. Python requirements, production npm audit, three HUD Node
+checks and TypeScript passed. Native six capture leases used one physical
+stream (first 131.5ms, reuse 0–0.2ms); corrected Spotify state read 91.5ms.
+Known-image vision and native local capture passed; current Claude subscription
+auth checked without generation/API fallback. These are individual observations,
+not universal latency/accuracy guarantees.
+
+**Running state.** Normal relaunch/supervisor loaded verified source, PID 26640,
+connected; original standby restored once, without overwriting later choices.
+Final read-only 619.4s observation logged **three real session rotations and
+three input reuses, one initial input open, no error-level events**. Voice
+route verified on Star glass (CY03-CB36); Spotify then detected active on the
+remembered PC speakers; HUD sounds false. Earlier startup snapshot had no active
+media. Existing ownership guard suppressed one unattributed startup reply;
+the guard was retained. Evidence: `runtime/stability-final-live-20261018.json`,
+`stability-full-gate-final-20261018.log`, `stability-readiness-20261018.log`,
+`stability-postreview-tests-20261018.log`, and
+`stability-source-baseline-20261018.json`. This entry supersedes the verification
+in-progress/maintenance checkpoint immediately below.
+
+**Not yet proven / next feedback.** Software baseline is verified, not physical
+acceptance of every phase. Complete audible phrases, Star Glasses beeps/radio
+reconnects, real hotplug and listening through renewal remain owner feedback
+(TODO #46). Separate successful rename/clean cancellation and other recorded
+voice/media checks remain #43/#45; visual polish #44 stays paused. Existing local
+learning/self-heal was audited (stored auto unchanged); optional Jev is still
+unconfigured, not complete. Fresh-machine setup, sustained use and other listed
+live acceptance remain open. Intel BT driver age is a lead, not proof of cause.
+No claim of zero faults or all commands below 500ms. See
+`docs/era-enhancement/STABILITY_RELEASE_2026-10-18.md`,
+`SPEECH_GLASSES_TROUBLESHOOTING.md`, the Phase 10/11 reports and establishment
+checklist; TODO and changelog updated for later feedback.
+
+### 2026-10-18 · Codex session: stability repairs — verification in progress
+
+**What was wrong.** Owner reports cut-off speech despite full logged text and
+Star Glasses reconnect/beeps, and authorizes all remaining phases with later
+physical feedback. Queue-empty completion ignored driver output latency.
+Routine provider reconnects reopened microphone capture. Native all-device
+Spotify read showed active PC-speaker playback while default-device read was
+null. Crew deadline expired during model wait but returned LLMUnavailable.
+
+**What changed so far.** Driver-tail-aware turn completion and renewal;
+`app/era_live/audio_capture.py` retains identical healthy input for at most 15s
+across reconnects, drops idle input and retires old callbacks, closes on fault,
+route/format change, expiry or shutdown. Owner-bound input observation cleanup;
+retained capture closes before global PortAudio refresh. Spotify state reuses
+existing all-endpoint reader. Crew rechecks shared deadline after model wait.
+Two stale fixtures corrected with their authority/PCM assertions retained and
+new negative cases. Ruff phase-backup exclusion aligned with pytest; 116 real
+files formatted with unchanged runtime AST; 2 HUD-test import orders fixed.
+Tool golden regenerated after declaration formatting; manifest now 403 modules,
+59 tools. No prompt, UI source/build, device preference or provider setup change.
+Backup: `.phase7_backups/stability-20261018/`.
+
+**Verified so far.** 294 initial focused tests and 333 expanded focused tests
+passed in separate overlapping runs. Native six capture leases used one physical
+stream, first open 131.5ms / reuse 0–0.2ms; no audio saved/transmitted. Known-image
+vision read 67 / three circles in 3,152.8ms; native local screen capture 349.7ms.
+Ruff clean; Python dependency check and production npm audit clean; 3 HUD Node
+checks and TypeScript pass. First full gate: 7,956 passed / 4 skipped / 1 failure
+(now-repaired ungrounded standby fixture); lint/format debt then repaired.
+
+**Not yet proven / active work.** Final full Windows gate and 2-worker readiness
+run are IN PROGRESS; do not call them passed. Era deliberately stopped via HUD
+for maintenance (normal supervisor stop flag); restart with normal lifecycle
+after verification and restore standby. Saved voice is glasses, media PC speakers;
+do not overwrite newer owner choices. Physical beep elimination, uninterrupted
+speech and user-approved live patch/consent acceptance remain deferred feedback.
+Current Intel BT driver dated 2022; no driver/pairing/power/service changes.
+Jev is optional and unconfigured, not verified. Local learning/self-healing already
+exists (stored self-heal auto unchanged). Details:
+`STABILITY_RELEASE_2026-10-18.md`, `PHASE10_STABILITY_AUDIT_2026-10-18.md` and
+`SPEECH_GLASSES_TROUBLESHOOTING.md` under `docs/era-enhancement/`.
+
+### 2026-10-18 · Codex session: establishment phase and return-check index
+
+**What was missing.** User requested focus on the next phases and a durable way
+to know what to check again or fix. Existing phase reports contain substantial
+implemented work alongside deferred live checks; there was no concise current
+index distinguishing these from the next new delivery phases.
+
+**What changed.** Added `docs/era-enhancement/ESTABLISHMENT_CHECKLIST.md`, indexed
+from Master Plan and TODO. Preserved existing phase numbers: Phase 9 live
+acceptance now; Phase 10 guarded learning/Jev and Phase 11 reviewed cleanup next.
+Recorded exact check IDs, expected evidence, failure investigation areas,
+current limits, known audio/crew/rename defects and a session result template.
+First checks remain #45 source activation then #43 isolated approval/cancellation,
+voice/media acceptance. Owner's visual pause, subscription-only Claude,
+desktop-only Spotify and existing memory/vault decisions retained.
+
+**How verified.** Reconciled newest handoffs, TODO, Master Plan, deferred checks,
+revision/CodeMode reports and Oct 18 operational/Spotify evidence. Documentation
+links and required checklist identifiers checked. No application source changed;
+no runtime, Ruff or test-suite rerun needed for this documentation-only update.
+
+**Not yet proven.** No app restart, new live acceptance, Phase 10 design or
+implementation, Jev compatibility proof, full current Windows suite or cleanup
+performed. Existing passes retain their recorded scope; no TODO item closed.
+
+### 2026-10-18 · Codex session: desktop-only Spotify favorite identity and speed
+
+**What was wrong.** #43 favorite had only title/artist; prior search took
+30,033ms. Existing exact-ID support stopped when optional API/bridge were
+unconfigured, so saving an ID alone would break desktop playback. Owner confirms
+no Spotify API. Audited existing work before implementing this missing route.
+
+**What changed.** `core/spotify_api.py` locally canonicalizes strict public share
+links as well as existing IDs/URIs. `core/personal_media.py` carries saved
+metadata beside the favorite URI. `actions/spotify_control.py` uses one validated
+Windows track-URI launch when API is unconfigured and bridge disabled; observes
+matching title/artist plus active audio, sends bounded explicit Play at most
+once only after metadata matches, and never retries an ambiguous launch.
+`actions/spotify_search_worker.py` owns this killable URI branch before UIA
+imports. Existing search/primary UI branches, named labels, Release Radar and
+search retry preserved. Exact-ID playback retains standing minimization and
+remembered media routing. Added `tools/test_spotify_identity_playback.py` and
+updated saved-metadata expectation in `tools/test_enhanced_directive.py`.
+Saved the catalog-verified favorite URI and desktop/no-API preference through
+existing memory manager after native success; original favorite title preserved.
+No API/bridge enablement, new store/cloud backup, voice selection change, prompt,
+speech, approval, tool-declaration or HUD edits/build. Manifest regenerated.
+Backup: `.phase7_backups/spotify-speed-20261018-130612/`.
+
+**How verified.** One fresh-process real desktop request changed a different song
+to سواد الغيم by Mikasa Music in **3,194ms**; Spotify audio observed on remembered
+PC speakers. Diagnostic child explicitly removed its API token environment
+variable. Memory read-back and favorite resolver returned the exact saved URI.
+**287 passed, 2 warnings** across focused and required six protected suites,
+plus **8 manifest tests passed**; scoped Ruff check/format, compilation and
+manifest freshness pass. Existing search/primary worker diff reviewed against
+session backup. Evidence and exact scope in
+`docs/era-enhancement/SPOTIFY_SPEED_2026-10-18.md` and its runtime logs.
+
+**Not yet proven.** This single measured desktop run is not a cold-start or
+sub-500ms guarantee; native metadata/audio verification does not expose the
+internal playing Spotify ID or prove physical listening. Era was not restarted;
+new route still needs loading and favorite voice-command acceptance (#45/#43).
+Liked Songs/Release Radar, isolated cancellation, successful exact-action
+approval and hardware speech/echo checks remain owed. Known unrelated audio/crew
+failures not changed. Visual polish remains paused.
+
+### 2026-10-18 · Codex session: operational audit, COM observer and path routing repairs
+
+**What was wrong.** Continued #43 before building duplicates. Real device
+observer failed every 15 seconds: `main.py` selects MTA, while `CoInitialize()`
+requests STA and raises RPC_E_CHANGED_MODE. A disposable approval test exposed
+the typed absolute-path shortcut treating rename/delete instructions as opens.
+
+**What changed.** `core/device_awareness.py` borrows an initialized apartment
+only on that exact HRESULT, propagates other errors and releases only owned COM
+initialization. Registration cleanup retained. `app/text_intents.py` adds a
+standalone-open predicate; `main.py` uses it so mutations/compound orders retain
+normal routing and tool gates. Added COM ownership/error regressions and 15
+path cases. AST comparison confirms unrelated main logic and existing text
+helpers unchanged. Scoped Ruff formatted five touched Python files. Regenerated
+manifest; declarations/golden and protected speech, approval-store/HUD, Spotify
+worker and media-routing code untouched. No HUD source changes/build. Backups:
+`.phase7_backups/operational-reliability-20261018/`. The concurrent HUD closeout
+entry below was read and preserved.
+
+**How verified.** Current operational suite **425 passed, 2 warnings**; separate
+directive/personal-control/vision/memory suite **217 passed, 2 warnings**;
+manifest suite **8 passed**. 650 selected cases in three runs, not a full suite.
+Required six protected suites included. Scoped Ruff check/format, compilation
+and manifest freshness pass. Native MTA probe read four endpoints, published
+ready notification coverage, stopped and unregistered. Prompt BOM intact.
+Known audio/crew failures were not weakened or claimed fixed.
+
+**Live findings / not yet proven.** Oct 16 owner heard combined pending/media
+reply; both tools observed. Oct 18 armed rename correctly named by
+`scheduled_task(pending)`. Transcript records "Yes, proceed" before later
+cancellation; row cleared on approval, then rename failed because the model
+used `name` instead of `new_name`. Owner reported cancellation/badge clearance;
+this is NOT clean cancellation/no-execution proof or successful rename. Only
+the unchanged disposable fixture was removed. Standby was restored; owner later
+woke Era and pinned voice to glasses, confirmed by stream evidence, while media
+remains targeted to PC speakers. Preserve that newer choice. Possible acoustic
+pickup remains hardware acceptance. No additional gates/filters were added.
+
+The running process has not restarted for the two new source fixes: #45 records
+load/live acceptance. #43 remains partial, including contexts, exact arguments
+and isolated cancellation. Favorite exists without a Spotify URI/ID; earlier
+name search took 30 seconds. Next speed pass must obtain a verified identity.
+Existing memory/vault, vision, crew, buffers, tools and HUD are inventoried for
+reuse in `docs/era-enhancement/OPERATIONAL_RELIABILITY_2026-10-18.md`, with evidence
+paths and remaining acceptance. Visual polish remains paused for this task.
+
+### 2026-10-18 · Codex session: close out HUD layout and animation verification
+
+**What was owed.** The earlier animated sphere/free-layout request still needed
+final delivery and a shared-log entry. Read the newer October 16 handoffs first;
+their motion preference and scheduling fixes supersede the October 15 default.
+
+**What changed.** Documentation only (`handoff.md`, `TODO.md`). Preserved the
+current cinematic HUD, saved geometry, backend and the other agent's changes.
+The earlier implementation is documented in
+`docs/era-enhancement/luminous-hud-2026-10-15.md`: schema v3 placement for all
+widgets, numeric position/size controls, corner system panels, themed transcript
+under the sphere and state above it.
+
+**How verified today.** Running localhost HUD in a separate installed Edge
+session at 1600×900: all ten position/resize controls present in Arrange; System
+and System Awareness in lower corners; conversation inside the core; old
+PERSONAL INTELLIGENCE text absent. Enabled animations in this isolated session:
+actual core canvas pixels changed across 1.2 seconds and full motion persisted
+after reload. No captured browser runtime errors. All three Node checks passed
+(`test_hud_presentation`, `test_hud_navigation`, `test_hud_cinematic`). Screenshot:
+`C:/Users/nesri/.codex/visualizations/2026/10/14/01a13ba8-e95a-7d32-be66-b2e11a70dd42/hud-final-2026-10-18.png`.
+
+**Not yet proven.** No new build or backend test run was necessary for this
+documentation-only closeout. Earlier move/resize/persistence and 90-test evidence
+remain historical, not rerun today. The owner's existing window's preference,
+sustained CPU/GPU responsiveness and physical voice/quiet-sound acceptance remain
+owed (#44). No engine restart or saved layout mutation today; #43 untouched.
+
+### 2026-10-16 · Codex session: restore HUD animation choice and stop canvas polling
+
+**What was wrong.** Owner reported no animation and slower HUD. Reproduced on the
+live server in installed Edge: Windows reduced motion is true (MinAnimate=0).
+My previous change incorrectly forced this over saved HUD full motion and
+disabled the toggle. A separate CSS rule shortened animations to 0.01 ms even
+when full was explicitly selected. Throttled canvases still woke at 60 Hz each.
+
+**What changed.** `lib/motion.ts`, `ViewNavigation`, `lib/codeTransition.ts` and
+`index.css`/`codemode.css` follow Windows by default but honor explicit HUD on/off
+and keep its control enabled. `lib/canvasLoop.ts`, `NeuralCore`, `CodeModeOrb`
+and `CommandBar` sleep between required draws, with frame/timer cleanup on
+visibility, boot pause and unmount. Palette, geometry and backend unchanged.
+Dist backed up before build; original previous entry retained below as history.
+
+**How verified.** Actual localhost server, separate Edge session with native
+Windows reduced motion: explicit on/off and both reload persistences work;
+loader 2.8 s, status 3 s, Eclipse changes over time. 33 fixture interaction checks
+pass with OS reduced still on. Idle reduced callback count **480 → 73 / 4 s**
+(same eight Eclipse draws); full motion **30 Eclipse draws/s**, 0.5 ms median /
+0.8 ms p95, no long tasks in that short sample. **261 Python tests** (186 required
+protected + 75 CodeMode/focus/layout), three Node checks, tsc and build pass.
+All 16 protected hashes unchanged. Manifest current; scoped diff check clean.
+
+**Not yet proven.** Owner's existing app window must reload (**Ctrl+R**, then
+Animations on if off). Sustained CPU/GPU and perceived responsiveness still need
+owner feedback (#44); short sample is not whole-app proof. Ruff retains two
+existing imports and 124 formatting findings; no Python edited. #43 and known
+audio/crew failures untouched. Recording encoder fell behind, so no video claimed.
+Details: `docs/era-enhancement/CINEMATIC_HUD_FOLLOWUP_2026-10-16.md`.
+
+### 2026-10-16 · Codex session: cinematic purple HUD, boot handover and motion budgets
+
+**What was wrong.** Existing panel entrances finished behind the loading screen;
+the HUD motion switch ignored the OS accessibility preference. Hidden canvases
+kept scheduling callbacks, and the earlier orange CodeMode theme conflicted with
+the owner's new Phase 3 brief. Existing orbit/packet effects were already present
+and were reused. Main layout and theme were explicitly protected.
+
+**What changed.** Frontend presentation only:
+- `BootScreen.tsx`, `App.tsx`, `cinematic.css`: real-readiness boot handover,
+  rotating gradient segment, staggered copy/drawn checks, subtle background drift,
+  dark crossfade/bloom and directional panel/chat entrances at handover.
+- `CoreStage.tsx`, `NeuralCore.tsx`, `core/eclipse.ts`, `core/constellation.ts`,
+  `lib/canvasLoop.ts`, `lib/cinematic.ts`: breathing/arc in the existing canvas,
+  fixed constellation placement, 28-packet cap retained, hover response, pause
+  behind boot, zero hidden/offscreen scheduling and adaptive drawing budgets.
+- `CommandCenter.tsx`: event-driven two-degree panel tilt/glow, disabled during
+  arrangement/reduced motion; saved geometry untouched. `CommandBar.tsx`: bounded
+  send ripple and feedback from actual processing state; no new speech/audio path.
+- `CodeModelSelector.tsx`, `HudHeader.tsx`, `CodeModeControls.tsx`, `CodeModeOrb.tsx`,
+  `codemode.css`: animated keyboard model picker, real mic/link pulses and purple
+  CodeMode. Existing command/provider and approval authority retained. Drawers
+  have an inert 220 ms exit; main drafts/drawer restore after CodeMode.
+- `lib/motion.ts`, `ViewNavigation.tsx`: both OS and HUD reduced motion honored.
+  `main.tsx` loads the scoped motion layer. `tools/test_hud_cinematic.cjs` verifies
+  resource/motion contracts. Production dist backed up before **every** build.
+
+**How verified.** All six requested suites (`test_speak_once`,
+`test_media_routing`, `test_spotify_search`, `test_hud_approval`,
+`test_task_scheduler_authority`, `test_toolspec`): **186 passed, 1 warning**.
+Three Node checks, TypeScript and production build passed. Installed Microsoft
+Edge with synthetic API/socket data: **40 browser checks**, no captured runtime
+errors. All 10 widget rectangles and the main background match the original
+bundle. Idle canvas stays at 30 draws/s; final draw cost **0.7 ms median / 1.1 ms
+p95**, versus original 0.4/0.6 ms, in the four-second headless sample. Hidden main
+canvas schedules zero frames. All **16 protected files are byte-for-byte
+unchanged**, including `core/prompt.txt`'s BOM and the declarations/golden file.
+
+**Checks not green / not yet proven.** No Python edited. Repository-wide Ruff
+reports two existing I001 imports (`test_hud_focus.py`, `test_hud_layout.py`) and
+124 Python files needing formatting; left intact, not weakened. No full-suite
+pass or live voice/device/media/approval acceptance is claimed. Claude's #43 and
+known audio/crew failures remain untouched. New TODO #44 is real Edge-window
+startup and sustained CPU/GPU acceptance. Reload the HUD to load the rebuilt
+bundle; no engine restart was performed for this frontend pass.
+
+Details/evidence: `docs/era-enhancement/CINEMATIC_HUD_2026-10-16.md`,
+`runtime/cinematic-browser-results.json`, `runtime/cinematic-protected-tests.log`,
+`runtime/cinematic-performance-comparison.json`, and
+`runtime/cinematic-protected-hashes.json`. Backup path is recorded in
+`runtime/cinematic-backup-path.txt`.
+
+### 2026-10-16 · Claude session: approvals truth, natural speech, Spotify reliability, media routing
+
+Written by Claude Code for the next agent (Claude or ChatGPT/CodeMode). All of it
+is UNCOMMITTED in the working tree and NOT yet proven live — Karim restarts and
+tests next (TODO #43). Read "Rules for the next agent" before touching these areas.
+
+**1. "Any pending approval?" answered "no" while the HUD said ACTION REQUIRED.**
+- Cause: Era called `scheduled_task(action="pending")`, which read only the
+  scheduler; the armed `manage_preference` waiver lived in PendingConfirmationStore
+  (the store the HUD mirrors). Separately, a Live Tasks row stayed NEEDS APPROVAL
+  forever after its confirmation was approved/declined/expired.
+- `actions/scheduled_task.py`: `pending` now also lists the live confirmation
+  (`_live_confirmation_line`, same store as `app/hud/bus_approval.py`); aliases
+  `list_pending`/`approvals`/`pending_approvals`; `skip` reply tells the model not
+  to narrate what the user just did.
+- `app/hud/bus_approval.py` + `bus_tools.py`: awaiting rows carry `_confirmation_id`;
+  the bus subscribes to the store and settles the row the moment it resolves
+  (approved→success, declined/expired/replaced→cancelled). Recheck timer kept as
+  fallback. Tests: `tools/test_hud_approval.py`, `test_task_scheduler_authority.py`.
+
+**2. Double replies / robotic speech (generalized to every tool).**
+- New `app/era_live/speak_once.py`, applied at the single exit of
+  `tool_dispatch._execute_tool` (model-facing text only; HUD + intent memory keep
+  the real result): if Era already spoke this turn the result tells the model not
+  to repeat/rephrase it; routine actions get "one short sentence"; the
+  "(search: '…')" echo is stripped. Failures and results with their own speaking
+  order ("Say nothing", "say exactly") are untouched.
+- `spoken_outcome()` in the same module: background (detached) tool outcomes
+  used to be spoken VERBATIM ("That didn't finish, sir. … its UI worker was
+  stopped"). `tool_dispatch._deliver_tool_outcome` now speaks one plain sentence
+  ("I couldn't get 'X' playing, sir — Spotify didn't respond in time.").
+- `core/prompt.txt`: new "ONE REPLY, LIKE A PERSON" rule after SILENT ACTION;
+  Spotify verify-then-minimize rule now says never mention verifying/minimizing.
+  BOM preserved. Limit: the sentence Gemini says BEFORE a tool returns is
+  generated by Gemini — only the prompt governs it.
+- Tests: `tools/test_speak_once.py`.
+
+**3. Spotify search / Liked Songs / New Releases slow or failing.** Measured live:
+- Liked Songs/New Releases pressed Play via UIA IN-PROCESS; a hung Invoke() held
+  calls "running" 96 s and 170 s. Now runs in the killable worker
+  (`actions/spotify_search_worker.py` `primary_ui`), which also restores the
+  (auto-minimized) window first.
+- `actions/spotify_ui.py`: with a named context only "Play <label>" may be pressed
+  (`_find_named`, no fallback to the page's first Play — after a URI the old page
+  stays up 1-2 s). Alt+Shift+N is dead in the current client, so New Releases =
+  Release Radar opened from the sidebar (`open_library_row`). Made For You keeps
+  the old unnamed rule (its hotkey may also be dead — unverified).
+- Search matched a STALE result from the previous page ("Konoha Music Station",
+  sharing only "music", off-screen at y=2043). Fixes: generic words don't count
+  for partial matches (`_GENERIC_WORDS`), wait up to 4 s for the page fingerprint
+  to change (`stale_names`, `_PAGE_CHANGE_WAIT_S`; measured swap at 2.6 s),
+  off-screen rows dropped (`_on_screen`).
+- `actions/spotify_control.py`: verify window 2 s→4 s plus a final re-read
+  ("Konoba On Our Knees" played while Era said it failed); budget 12→15 s; a
+  failed first search retries ONCE by itself (the "try again always works" case).
+- Tests: `tools/test_spotify_search.py` (+ existing Spotify suites, 76 passed).
+
+**4. Media routing — the owner's model: voice on the glasses, media on the PC
+speakers, switchable on request and remembered.**
+- Cause: glasses were the Windows default, but Spotify/Edge were held on the
+  speakers by Windows' per-app "Output device"; `set_default` can't move that and
+  Era claimed "the music should be playing there" five times.
+- New `core/media_routing.py`: WHERE = each endpoint's live audio sessions
+  (IAudioSessionManager2); MOVE = IAudioPolicyConfigFactory::
+  SetPersistedDefaultAudioEndpoint (vtable 25, IID ab3d4648… with 2a59116d…
+  fallback, MTA thread). Era's own pid is never routed. Remembered target in
+  user_prefs key `media_output` (unset = "speakers" by form factor; `{"follow":
+  true}` = follow default). `enforce_media_target_async()` runs after Spotify
+  playback actions and YouTube play (skipped under pytest).
+- `actions/audio_control.py`: actions `route_media` (device, app=spotify/youtube/
+  netflix/browser/name/"" for all) and `media_routing`; `set_default` appends a
+  note when media is held on another device. Declaration updated in
+  `app/tool_declarations.py`; prompt section 15 rewritten; `core/audio_devices.
+  routing_summary()` appends a MEDIA OUTPUT line each session.
+- HUD: `app/hud/audio_route.py` adds `media` to `/api/audio`;
+  `ui_src/src/components/AwarenessPanel.tsx` rows are now Era mic / Era voice /
+  Media out. `ui/dist` rebuilt; previous dist backed up in
+  `.phase7_backups/media-routing-hud-20261016/`.
+- Tests: `tools/test_media_routing.py` (fakes only; no real audio touched).
+  Read-only live checks only — no per-app route was executed on the machine.
+
+**Verification.** Full suite: 7,745 passed, 4 skipped; 1 failure
+`test_review_fixes.py::TestCrewRuntimeHardening::test_one_wall_clock_budget_covers_the_whole_call`
+(crew, untouched here). `test_audio_routing_truth.py::test_failed_reclaim_…`
+fails on its own in pre-existing uncommitted audio work (deselected). ruff
+check/format clean on every changed file; TypeScript + vite build passed.
+Golden `tools/golden/tool_declarations_anthropic.json` and `docs/MANIFEST.md`
+regenerated — the golden also picked up declaration changes that were ALREADY
+uncommitted (code_mode, telegram_call, spotify uri/track_id).
+
+**Rules for the next agent (Claude or ChatGPT).**
+- Model-facing tool text goes through `speak_once`; background outcomes through
+  `spoken_outcome`. Don't add new verbatim-spoken paths — route them through it.
+- Media device requests → `audio_control(route_media)`, never `set_default`.
+  "Where is it playing" → `media_routing` (live sessions), never the default.
+- Spotify UIA work belongs in the worker process, never in-process.
+- Any edit to `app/tool_declarations.py` needs the golden regenerated:
+  `python -m core.llm.toolspec --dialect anthropic --out tools/golden/tool_declarations_anthropic.json`.
+- Back up `ui/dist` before every HUD build.
+
+### 2026-10-15 · CodeMode follow-up: external speech and source continuation
+
+- Fixed silence with Gemini selected: CodeMode text now uses independent speech
+  synthesis, preserving normal native Live routing and the selected preference.
+  Missing external audio is reported visibly, never replaced by unrelated Live
+  speech. Real Gemini TTS generated 72,960 PCM bytes; audibility is not claimed.
+- Complete source is preferred within the bounded context window. Validated
+  local read requests continue the same CLI session, with round/deadline limits;
+  CodeMode should not ask the user to upload repository files. Real full reads
+  verified all three voice files mentioned in the user's quoted reply.
+- Nine new focused regressions passed; broader speech/development checks passed
+  206 tests. Final current-source gates and activation status are recorded in
+  docs/era-enhancement/CODEMODE_SPEECH_SOURCE_REPAIR_2026-10-15.md.
+- Final speech/context/schema/manifest suite: 280 passed; Spotify/personal-control
+  suite: 22 passed in a separate process because the combined diagnostics order
+  caused a COM apartment collision. Scoped lint/format/whitespace and Doctor passed.
+- Existing app has a running queued task, so no restart/interrupt was performed.
+
+### 2026-10-15 · Phase 9: approved Claude subscription CodeMode
+
+- Explicit CodeMode entry/exit routes typed, owner Telegram and transcribed voice
+  through one revision owner. Parallel Gemini speech/tools are suppressed. Shared
+  crew work, bounded current hashed source context, live/offline streamed speech,
+  interruption/cancellation and persistent redacted metadata are wired.
+- Pinned CLI account/session, subscription auth check, disabled tools/MCP and
+  safe mode; no silent gateway, billing or profile fallback. Real two-turn read-only
+  auth/generation/stream/resume probe passed. --bare was rejected after proving
+  it skips subscription OAuth; --safe-mode preserves the intended login.
+- Existing Development verification/promotion now supports cancellable owned
+  process trees and session/revision-bound 15-minute approval. HUD approval is
+  sufficient once. Source/current-context checks, stale/cancel/replay protections,
+  fixed gates and existing recovery remain. Transient Windows journal locks use
+  the existing bounded atomic-write retry. CodeMode retries retain its provider.
+- Added controls inside Development and the existing header; accepted layout
+  preserved. Model declarations/golden and manifest contain 59 tools/391 modules.
+  Stream fragments retain exact spacing and final replies enter agent history.
+- TypeScript, production build, scoped lint/format, whitespace and Doctor passed
+  (zero errors/warnings). Final targeted counts and acceptance limits are in
+  docs/era-enhancement/PHASE9_PROGRESS.md. Backend restart and physical voice,
+  owner Telegram and reviewed live-patch acceptance remain; no live patch applied.
+- Corrected broad regression run passed 1,035 tests (three warnings, 130.61 s).
+  Follow-up exact mode-control deduplication/current-source checks passed 137 tests.
+  Final Windows protected-case/resolved/stream alias guards passed 107 focused
+  tests, including all 39 CodeMode tests. Details: PHASE9_PROGRESS.md. No successful
+  full global-runner exit is claimed.
+
+### 2026-10-15 · Phase 8: crew ownership and coordinated source candidates
+
+- Crew root requests and nested handoffs share cancellation, original task, owner
+  and participants. Background crew offload preserves the task token. Duplicate
+  active requests coalesce; cancellation prevents later capabilities/late wrap-up.
+- Six roles can inspect current bounded/redacted source and hashes; five can stage
+  one complete candidate, while Nabar remains read/check only. Protected paths,
+  including internal link aliases, cannot enter generated promotion. Source-based
+  answers bypass the response cache. Hermes remote tools remain disabled.
+- Shared candidates enter the existing isolated verifier, development job slot,
+  exact hash checks, HUD approval, backup and activation path. Live source stays
+  unchanged until approval. Development shows the server-owned team attribution;
+  the accepted HUD arrangement is preserved.
+- CM orders now have independent async cancellation contexts and duplicate claims;
+  the existing cross-process dispatch lock remains. Already-sent external effects
+  cannot be undone; submitted Development verification is independently bounded.
+- CodeMode is a separate concrete proposal, not an enabled runtime feature:
+  docs/era-enhancement/CODEMODE_DESIGN.md. Master Plan requires its review before
+  implementation. Progress, test results and live limitations are recorded in
+  docs/era-enhancement/PHASE8_PROGRESS.md. One Era restart loads the new backend.
+- Final current-source regression run: 591 passed (including 36 new Phase 8
+  tests); personal-control/conversation preservation: 33 passed. TypeScript,
+  production HUD build, scoped lint/format, manifest freshness and whitespace
+  checks passed. Doctor READY, zero errors/warnings. No full global-runner exit
+  or live subscription/CM/call acceptance is claimed.
+
+### 2026-10-15 · Follow-up: Spotify plus signs and memory-first facts
+
+- Native search now prefers verified literal text. Chromium's ignored SetValue
+  falls back to focus-checked Unicode keys, preserving the clipboard. Live search
+  field verified normal spaces in 0.53 s; the bounded UI worker remains.
+- Explicit own-favourite retrieval returns the saved preference ahead of
+  instructions mentioning songs and other people's preferences, without waiting
+  for embeddings. Actual saved title/artist verified for three owner queries.
+- 165 focused tests passed, three skipped; lint/format and manifest freshness
+  passed. Details in PERSONAL_CONTROL_REPAIRS_2026-10-15.md. Restart loads recall.
+
+### 2026-10-15 · Spotify latency, personal recall, native-call registration and HUD approval
+
+- Preserved the user's accepted HUD layout. Native owner-bound `telegram_call`
+  is now model-facing; generated declarations/manifest contain 58 tools.
+- Spotify search runs UIA in a cancellable owned subprocess, uses cached native
+  accessibility reads and URI navigation, coalesces equivalent search commands,
+  and verifies the requested title/artist. Fixed PowerShell UTF-8 output for
+  Arabic titles. Live paused favourite playback verified in 4.44 seconds;
+  already-playing confirmation took 0.63 seconds (individual samples).
+- Personal song references resolve saved memory before execution. Favourite
+  context survives prompt trimming; personal clarification requires memory lookup.
+- HUD decisions bind to the displayed confirmation ID and creation time and
+  reuse exact classified/atomic execution. One click needs no further verbal
+  approval; duplicate clicks produce one action/report and stale cards fail.
+- Broad targeted run: 4,032 passed, three skipped, one stale-manifest failure.
+  Regenerated artifacts; final clean manifest/control/schema/registry/HUD run:
+  52 passed. Doctor READY, zero errors/warnings; scoped lint/format, TypeScript
+  and production HUD build passed. No successful full-suite/gate exit claimed.
+- One Era restart is required for the running backend/model to load these changes.
+  Owner-call speech and physical HUD approval acceptance remain after restart.
+  Next major phase is Hermes/CM/crew coordination and reviewed CodeMode design;
+  existing deferred hardware and richer-widget follow-ups remain tracked.
+- Details and evidence: `docs/era-enhancement/PERSONAL_CONTROL_REPAIRS_2026-10-15.md`.
+
+### 2026-10-15 (14:45) · HUD polish 4: borderless window, state-pulsing wordmark dot, Outfit transcript, empty header left
+- **Borderless window:** the HUD runs in an Edge `--app` window (`Chrome_WidgetWin_1`). Edge paints its title bar INSIDE the window, so stripping `WS_CAPTION` does nothing (tested). Instead:
+  - `lib/windowFrame.ts` measures the caption and the invisible border from the page: `side = (outerW - innerW)/2 * dpr` and `top = (outerH - innerH) * dpr - side`.
+  - It sends `POST /api/window`, and `app/hud/window_frame.py` applies `SetWindowRgn` to clip them. It re-syncs on resize, focus and fullscreen changes.
+  - The module acts only on the FOREGROUND window titled `ERA ONE`, class `Chrome_WidgetWin_1`, whose process is a known Chromium browser. It allows only `frame`, `minimize`, `maximize`, `close` and `drag` (drag = `ReleaseCapture` plus `WM_NCLBUTTONDOWN`/`HTCAPTION`), with insets limited to 0–200.
+  - The header shows min/max/close when the clip is active. Its empty space drags the window, and a double-click toggles maximize.
+  - Customize has a "Borderless window" toggle (localStorage `era_hud_borderless`, default on).
+  - Tested on a throwaway "ERA ONE" Edge window: frame, maximize, restore and close all work; the user's HUD was untouched. `tools/test_hud_window_frame.py` adds validation tests.
+  - **Needs an Era restart** for `/api/window` (until then the call 404s, which is a harmless no-op).
+- **Wordmark:** `.era-state-heading::before` (the dot above it) is hidden. The ERA·ONE dot pulses in `--sh`/`--ss`: 3.6 s at rest, 2.2 s while listening, 1.7 s while working, 1.4 s while speaking, 6 s in standby.
+- **Header and transcript:** the connection dot was removed from the cockpit header (the user reserves that space; LINK DOWN still shows when the backend is down). The transcript uses Outfit (`@fontsource-variable/outfit@5.2.6`) for both speakers, with no italics.
+- **Tests:** `test_hud*` passes 158. Nothing committed.
+
+### 2026-10-15 (14:15) · HUD polish 3: wordmark above the agent state, centred header, compact result pop-up, live audio in/out
+- **Header:** the ERA ONE wordmark moved from the header into `CoreStage` (`hero` only) as `.era-wordmark` in Orbitron. This adds the new dependency `@fontsource-variable/orbitron@5.2.8`, bundled offline.
+  - The header keeps the link dot. Model, voice, tools and connection are centred via `.hud-header-centered` (grid `1fr auto 1fr`, widths of 1200 px and up only, because 800 px crowded the Development button).
+- **Result pop-up (`ResultSurface`):** now 15 s instead of 30. It is 34% wide with a max height of 46%, translucent, and firms up on hover or focus.
+- **Audio in/out:** a new `GET /api/audio` (`app/hud/audio_route.py`) returns `{input, output}`.
+  - Input comes from the new `core.voice_input.note_active_input`, called where `audio.py` and `local_fallback.py` open the mic and cleared on a mic failure in `audio.py`.
+  - Output comes from `status.audio_output()`.
+  - `AwarenessPanel` polls it every 3 s. On a 404 (backend not yet restarted) it falls back to `/api/status` `audioOutput` every 15 s, so output already shows live (Star glass, PINNED). **Audio in shows N/A until Era restarts.**
+- **Tests:** 247 pass (`test_hud*` plus the voice-input, local-fallback and barge-in tests). Nothing committed.
+
+### 2026-10-15 (14:00) · HUD polish 2: inline Cancel, voice-synced fibres, real sound FX, themed transcript, panel-colour hovers, Eclipse launch splash
+- **Cancel:** `TaskProgress` takes `onCancel` (shown for the running tool, on the header line). `ToolCard` was split into a header button plus a `.tool-status-row` (chip · route · Cancel · details chevron), so no button sits inside another.
+- **Fibres:** these follow `live.amplitude` whatever the state label says (the label lags the first syllable).
+  - EQ attack is 45 and release 11.
+  - Bands form a mirrored spectrum: bass at the bottom of the rim, highs at the top (`fBand`), plus a loudness term and brighter strokes.
+- **Sounds (`lib/sounds.ts`):** 10 distinct synthesized cues: wake, toolStart, tool, error, ready, focus (noise sweep), notify, approval, plus hover and click on every control. Master gain is 0.2, versus 0.012 per tone before.
+  - Cues are muted only while the mic captures the user (listening/transcribing); wake is exempt.
+  - Only hover and click play while Era speaks.
+  - Why the user heard nothing before: the gain was nearly silent, and every cue was muted in any voice state. `runtime/hud_settings.json` already has `hud_sounds: true`.
+- **Transcript and hovers:** transcript colours derive from `--ah`; Era uses the theme hue, and the user's words use its complement in italics. Every button inside a panel hovers in that panel's `--wc`, except Cancel, which hovers red.
+- **Splash:** the `app/hud/launcher_ui.py` splash is now a Tk canvas in the Eclipse look: animated ring, fibres and orbit arcs, and a bar filled by stages that are up (`3/6 READY`) with staggered row fade-ins. The `run_with_splash` signature is unchanged; `tools/test_hud_launcher.py` passes 11.
+- **Verified** on a preview on port 8799 and a simulated splash; `pytest tools/test_hud*.py` passes 150. Backup: `.phase7_backups/hud-polish2-20261015/before/`. Nothing committed.
+
+### 2026-10-15 (13:15) · HUD polish: 15 s notices, free transcript, one-line time+weather, panel colours, new progress bar, full-height side panels
+- **Karim:** notifications must leave by themselves after 15 s and be small and see-through; the conversation must not sit in a box; time and weather on one line; each widget its own colour in the theme palette; a modern animated task progress bar; no empty black strips bottom-left/right.
+- **Notifications:** `lib/notifications.ts` gives every kind, errors and approvals included, `NOTICE_TTL_MS = 15000`.
+  - The countdown is the hairline's CSS animation (`.notice-timer`, `onAnimationEnd` closes the notice). Hover or focus pauses it with `animation-play-state`.
+  - A reduced-motion override keeps the timer at its real length. Without it, the global `*{animation-duration:.01ms}` rule would dismiss notices instantly.
+  - The approval itself still lives in `ApprovalPrompt` and the backend.
+  - The rail sits below the view tabs in cockpit mode.
+- **Layout:** at widths of 1200 px and up, `.era-cmd-dock` (the command bar wrapper in `App.tsx`) is absolutely positioned over the bottom of the centre column (left 25%, right 25% + 10px). The canvas now fills the full height, and the core stage reserves `padding-bottom: 62px`.
+- **Other changes:**
+  - `WeatherSection({inline})` provides the one-line Time & weather widget.
+  - `TaskProgress.tsx` was rewritten (`tp-*` classes). The old `liquid-*` CSS was removed from `index.css`.
+  - Per-widget `--wc` colours are in `eclipse.css`.
+- **Verified** on an isolated preview (port 8799, `hud.error`): the notice was gone after 15.2–15.3 s and stayed while hovered. tsc is clean and `pytest tools/test_hud*.py` passes 150.
+- **Backup:** `.phase7_backups/hud-polish-20261015/before/`. Nothing committed.
+
+### 2026-10-15 (12:50) · HUD "Eclipse" redesign: voice orb + tool constellation, customizable, cheaper than before
+- **Karim:** make the HUD look like the two Dribbble shots (George Railean's AI Policy dashboard node graph; Gleb Kuznetsov's "Voice AI visual design" eclipse), with Era's real tools and graphs, user-adjustable position, scale and so on, without costing any speed.
+- **Core (frontend only):** `NeuralCore.tsx` now uses three modules under `components/core/`:
+  - `eclipse.ts`: a black void, a luminous ring and inward fibres.
+    - Fibres follow Era's real voice bands (speaking) and the real mic RMS (listening).
+    - The ring tilts in 3D while routing, thinking or running a tool, with streaks pulled toward it.
+  - `constellation.ts`: the `/api/capabilities` categories as a node graph.
+    - Node size = real tool count; labels show that count.
+    - The running tool's spoke and node glow, and recently used categories fade over 10 min from real `startedAt` values.
+  - `sprites.ts`: cached ring, void, glow and label bitmaps, at most one expensive build per frame.
+  - The 1100-dot shell is gone.
+- **Theme and states:**
+  - `eclipse.css` (loaded after `index.css`, which is already 815 lines): navy and electric-blue tokens, hairline panels, staggered panel entrance, boot eclipse that fills with real readiness.
+  - `STATE_HUE` working states moved to the eclipse blues. Approval, error, complete and standby are unchanged.
+- **Customize:** a new button in the workspace bar opens `AppearancePanel.tsx`, backed by `lib/appearance.ts` (localStorage `era_hud_look_v1`).
+  - Colour preset (only working-state hues shift).
+  - HUD scale via CSS zoom.
+  - Sphere size, glow, animation speed, detail, panel opacity.
+  - Toggles for constellation, labels, animations, sounds and light theme.
+  - Arrange mode gained corner-drag resize, saved through the existing `/api/layout` placement within the backend bounds.
+- **Graph:** `TelemetryGraph.tsx` + `lib/telemetry.ts` show a CPU, GPU and RAM history from real `system_metrics` samples. It redraws only per sample and replaces the CPU-only sparkline.
+- **Measured** (headless Edge 1600×900, A/B on two isolated preview servers, same scripted states):
+
+  | | Old | New |
+  |---|---|---|
+  | Core CPU per frame (avg) | 2.03 ms | 0.67 ms |
+  | Core CPU per frame (max) | 2.49 ms | 1.34 ms |
+  | Page main-thread CPU | 30.4 % | 12.4 % |
+
+  Live pane baseline before the change: 4.94 ms/frame (standby).
+- **Verified:** tsc clean; 150 HUD tests + 49 frontend-reading tests pass. Corner resize saved h 6→11 on the preview server's temp layout. Screenshots in all states.
+- **Backup:** `.phase7_backups/hud-eclipse-20261015/before/`. Built onto the uncommitted HUD work dated 2026-10-14/15 (CommandCenter, LayoutEditor, BootScreen…), which was not logged here and was not reverted. No backend change, so no Era restart is needed: reload the HUD.
+
 ### 2026-10-10 (17:45) · Music made Era deaf: a name opens a normal conversation
 - **Log 17:31-17:35:** with Spotify on, the attention gate ignored almost everything; the voice lock was off. Two causes:
   1. My 17:40 media rule required her name on EVERY sentence, so follow-ups were ignored.

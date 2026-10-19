@@ -85,11 +85,33 @@ class TestShippedCrew:
     def test_nabar_cannot_write_anything(self, report):
         nabar = report.specs["nabar"]
         assert nabar.write_zones == ()
-        assert set(nabar.capabilities) == {"vault.read", "vault.search", "code.check"}
+        assert set(nabar.capabilities) == {
+            "source.inspect",
+            "source.read",
+            "vault.read",
+            "vault.search",
+            "code.check",
+            "diagnosis.list",
+            "diagnosis.read",
+        }
 
     def test_cody_cannot_write_the_vault_or_the_repo(self, report):
         cody = set(report.specs["cody"].capabilities)
-        assert cody == {"code.propose", "code.check", "vault.read", "vault.search"}
+        assert cody == {
+            "source.inspect",
+            "source.read",
+            "source.stage",
+            "code.propose",
+            "code.check",
+            "vault.read",
+            "vault.search",
+            "diagnosis.list",
+            "diagnosis.read",
+        }
+
+    def test_only_cody_and_drew_may_stage_source(self, report):
+        holders = sorted(b.id for b in report.specs.values() if "source.stage" in b.capabilities)
+        assert holders == ["cody", "drew"]
 
     def test_only_drew_may_propose_replacing_a_note(self, report):
         holders = [b.id for b in report.specs.values() if "vault.replace_staged" in b.capabilities]
