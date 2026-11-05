@@ -146,14 +146,23 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    """Plain atomic replace: a derived store needs no versioned backups, and the
-    memory folder is under OneDrive, where backup copies + retries cost seconds."""
+    """Atomic replace with no versioned backups (a derived store).
+
+    A short retry stays: on Windows an antivirus or OneDrive handle can hold a
+    just-written file for a moment, and without it the lesson was silently lost
+    (seen as an intermittent test failure). This runs on the lessons worker,
+    never the receive loop, so the pauses cost the live path nothing."""
     try:
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                time.sleep(0.05 * (attempt + 1))
     except Exception:  # noqa: BLE001 — a lesson is never worth a broken task
         pass
 
