@@ -55,3 +55,35 @@ def trace(kind: str, **fields) -> None:
             f.write(line)
     except Exception:
         pass
+    if kind == "tool" and fields.get("app") == "era":
+        _learn(fields)
+
+
+def _learn(fields: dict) -> None:
+    """Every finished Era tool call is also a lesson candidate (core/task_lessons.py).
+
+    Here rather than at each call site so the inline AND detached paths both
+    teach. Only enqueues: the learning itself runs on a background worker, because
+    this is called on the live receive loop. Never raises.
+    """
+    try:
+        from core.task_lessons import observe_async
+
+        # The routed tool goes with the routed args. Falling back to the REQUESTED
+        # args under the routed tool's name would key the lesson to the wrong call.
+        if fields.get("tool"):
+            tool, args = fields["tool"], fields.get("args") or {}
+        else:
+            tool, args = fields.get("requested", ""), fields.get("requested_args") or {}
+        observe_async(
+            fields.get("user_text", ""),
+            tool,
+            args,
+            bool(fields.get("ok")),
+            fields.get("error_type"),
+            fields.get("result"),
+            fields.get("verification"),
+            fields.get("safety"),
+        )
+    except Exception:
+        pass

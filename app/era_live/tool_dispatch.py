@@ -994,6 +994,15 @@ class ToolDispatchMixin:
                 parts.append(learning_str)
         except Exception as _learn_err:
             print(f"[era] [LEARN] prompt injection skipped: {_learn_err}")
+        try:
+            from core.task_lessons import format_lessons_for_prompt
+
+            lessons_str = format_lessons_for_prompt()
+            if lessons_str:
+                parts.append(lessons_str)
+        except Exception as _lessons_err:
+            print(f"[era] [LESSONS] prompt injection skipped: {_lessons_err}")
+
 
         parts.append(ANTI_HALLUCINATION_INSTR)
 
@@ -1323,6 +1332,7 @@ class ToolDispatchMixin:
         hud.tool_finished(
             hud_call, name, hud_args, result, routed_to=(_routed[0] if _routed else None)
         )
+        self._learn_routed = _routed
         self._trace_routed = self._trace_safety = None
         if result.success:
             log_event(
@@ -1347,7 +1357,39 @@ class ToolDispatchMixin:
         from app.era_live.speak_once import speak_once
 
         result = speak_once(result, name, fc_args_to_dict(fc), getattr(self, "_live_turn_text", ""))
+        # Through the class: partial test stand-ins borrow this method without the mixin.
+        result = ToolDispatchMixin._attach_learned_fix(self, result, name, fc)
         return build_function_response(fc, result, types.FunctionResponse)
+
+    def _attach_learned_fix(self, result, name: str, fc):
+        """A failed call that Era has failed (and recovered from) before gets the
+        known fix attached, so she retries the right way in this same turn
+        (core/task_lessons.py). Model-facing only; never raises."""
+        try:
+            from dataclasses import replace
+
+            from core.task_lessons import hint_for_failure
+            from core.tool_result import BENIGN_ERROR_TYPES
+
+            if result.success or result.error_type in BENIGN_ERROR_TYPES:
+                return result
+            # The routed tool, not the requested name: lessons are keyed by what ran.
+            routed = getattr(self, "_learn_routed", None) or (name, fc_args_to_dict(fc))
+            hint = hint_for_failure(
+                getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", ""),
+                routed[0] or name,
+                routed[1] if isinstance(routed[1], dict) else fc_args_to_dict(fc),
+                result.error_type,
+            )
+            if not hint:
+                return result
+            return replace(
+                result,
+                message=(result.message + chr(10) + hint).strip(),
+                error=((result.error or "") + chr(10) + hint).strip(),
+            )
+        except Exception:  # noqa: BLE001
+            return result
 
     # ── Crew: run off the receive loop, report the real outcome ─────────────
     def _background_grace(self, name: str, args: dict) -> float | None:
