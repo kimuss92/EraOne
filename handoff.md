@@ -6,7 +6,1255 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 
 ---
 
+> **EVERY AGENT, BEFORE ANY EDIT:** read `docs/PROTECTED_FIXES.md` and follow
+> `AGENTS.md` §0. The gate re-runs every protected fix's guard tests.
+
+### 2026-11-16 · Claude · PF-034: only real conversation re-anchors the window; PF-008: voice unmute after any mute
+
+**Wrong (live logs, UTC):** owner voiceprint verification is disabled, so all
+room audio reaches the attention gate. 17:59-18:07 music played and no
+`attention.ignored` was logged: every passing segment re-anchored the window.
+18:04:44 Era answered unnamed speech 5 min after the last order: the 18:00/18:03
+scheduled reports put her in PROCESSING, the busy exemption let room audio pass,
+and the passing segment re-opened the expired window. PF-032 (Codex) does not
+cover this. Separately, 18:03 local: after "microphone off" the owner said
+"activate mic" for 40 s; a voice mute armed no listener by design (old PF-008).
+
+**Changed:** `core/attention.py` `_reanchor_passing` (only a really open window,
+no media), `era_finished_speaking(internal=)`; `main.py`
+`_speaking_for_internal_turn`; `app/era_live/audio.py` `_attention_keep_open`
+ignores internal requests. `app/era_live/mic_mute.py`: every mute arms the
+local unmute listener (owner changed the rule); `core/mic_mute.py` adds "activate
+the microphone", "turn on the mic/microphone".
+
+**Verified:** Windows: `tools/test_reanchor_sources.py` (6 new), attention /
+session / HUD / inactivity suites 109, mic suites 48, typed/standby suites;
+all protected guards 398 passed; registry OK; ruff clean. Live: after a restart,
+voice-mute then "start listening" unmuted (18:58:57 local).
+**Not verified / owed:** idle > 2 min then unnamed speech ignored (with music and
+across a scheduled report); "activate the microphone" by voice. With speaker
+verification disabled, a stranger saying an unmute phrase can reopen the mic.
+
+### 2026-11-16 · Codex · PF-033: visible HUD inactivity indicator
+
+**Wrong:** the listening window expired without any HUD indication that a name
+was required. **Changed:** `app/hud/status.py::listening_mode` reads the existing
+engine clock (never creates or reanchors it), preserving busy exemptions and
+separate standby/muted/off/unavailable results. `app/websocket_server.py` sends
+the reading on greeting and the existing two-second metrics cadence. Frontend
+`store.ts`, `transport.ts`, `CoreStage.tsx` show an amber INACTIVITY MODE indicator
+and "Say Era or Era One to wake", clearing on active/disconnect. Rebuilt
+`ui/dist/index.html`; no listening or timer logic changed.
+
+**Verified:** 7 HUD mode tests, all 392 protected Windows guards, registry OK,
+Ruff clean, TypeScript check and production Vite build pass. Agent-browser
+isolated Vite preview visually checked the badge and confirmed it disappears on
+active state; preview used synthetic store values, not live engine proof.
+Screenshot: `C:\Users\nesri\.openrig-install\tasks\inactivity-hud-preview.png`.
+**Owed:** normal Era reload and live timeout/wake HUD observation; installed
+running engine was not restarted. See PF-032 for pending listening review.
+
+### 2026-11-16 · Codex · PF-032: enforce automatic inactivity in the existing attention gate
+
+**Wrong:** `AttentionGate` could remain PASSING forever when background sound
+never produced 700 ms of silence. Missing/crashed Vosk also passed raw audio
+outside the existing configured session window. An arbitrary second-word name
+("new era") could authorize a wake.
+
+**Changed:** `core/attention.py` now checks the existing session expiry while
+PASSING, routes expired audio back through local name checking, and emits zeros
+when wake recognition is unavailable outside the window. Name matching requires
+a leading name (existing hey/ok/okay and Vosk unknown-token handling retained).
+SessionWindow/config, busy/confirmation exemptions, manual standby and mic
+logic are unchanged. At the owner's explicit request, inactive fail-open is
+replaced with fail-closed; active-window fail-open is preserved. Tests in
+`tools/test_inactivity_mode.py` and strengthened existing attention checks.
+PF-032 registered; removed a pre-existing inline method annotation from PF-008's
+Files list because the registry parsed it as a nonexistent file (no rule or
+guard changed). Pre-edit attention/test copies and exact incremental candidate
+are under `C:\Users\nesri\.openrig-install\backups\inactivity-20261116` and
+`C:\Users\nesri\.openrig-install\tasks\inactivity-candidate.diff` respectively.
+
+**Verified:** Windows Python: 92 focused attention/session/inactivity tests;
+all 385 protected guards pass; registry OK; Ruff clean. Synthetic frames and
+injected clocks cover noise/quiet tails, both wake names, follow-up, next expiry,
+dynamic duration, unavailable/crashed recognizer and incidental/near-miss names.
+**Not proven:** no live microphone/restart exercise performed; current running
+Era still needs a normal reload. Existing busy/confirmation exemptions remain.
+An unavailable wake recognizer blocks inactive audio; a typed/UI explicit
+interaction is needed until the local recognizer is restored.
+**Review:** owner reassigned implementation to Codex desktop and asked Claude
+to review later. Exact candidate queued to dev-build as
+`qitem-20261116174920-3a2e3c5caaa99776`, review pending its usage reset. Earlier
+implementation row must not trigger a duplicate implementation. Owner's builder
+draft and running conversations preserved. Independent dev-review diagnosis
+was read-only; it is not acceptance of this diff.
+
+### 2026-11-16 · Claude · PF-031: "screen one" means screen one
+
+**Wrong (live logs 17:54-17:55):** "Move Brave to screen one", "move it to screen
+one", "to screen one" all reached `window_control move_to_monitor` as
+`screen="primary"`. The primary monitor is Windows display 2, so Era answered
+"already on screen 2" four times; only "the other screen" worked. Brave was also
+minimized and stayed minimized. Same complaint in feedback memory 2026-10-03 and
+10-14.
+
+**Changed:** `actions/monitor_move.py` adds `spoken_screen` / `ground_screen`: a
+screen number in the owner's sentence (last mention wins) replaces the model's
+`screen` for move_to_monitor / tab_to_monitor; `core/self_healing_router.route_tool_call`
+applies it. A window already on the target but minimized is restored there
+(reported "Moved … (restored it from minimized)" only after read-back).
+Declarations say "'Screen one' means '1', never 'primary'"; golden regenerated.
+
+**Verified:** Windows Python: `tools/test_monitor_move.py` (+4 PF-031 guards),
+toolspec and completion-evidence suites pass; all protected guards 373 passed;
+registry OK; ruff clean.
+**Not verified / owed:** live after restart: "move Spotify to screen one" lands on
+display 1; "move Brave to screen two" while minimized restores it. Not fixed:
+"Um breve screen one" (mis-heard) went to the HUD; first "play my track" at 17:56
+was not confirmed within 12 s and succeeded on retry.
+
+### 2026-11-16 · Claude · PF-030: "couldn't confirm it took effect" only for real unconfirmed actions
+
+**Wrong (live logs, Era running):** 10:33 "new releases" played Release Radar and
+the fresh telemetry read "playing", but `_expected()` had no expected state for
+`liked_songs`/`new_releases`/`made_for_you`, so it stayed NOT_VERIFIED. 10:44
+"What's news about Protocol One?" ran `protocol_one report` (a read), which was
+detached after 10 s and spoken "… sir — though I couldn't confirm it took
+effect": the completion contract classed tools only, so any read on a tool
+outside `INFORMATIONAL_TOOLS` was "unverified". The trace showed the same for all
+window move/focus calls (11/11 over 2 days), Era's own mic/voice/shutdown switches
+and every status/list/report read.
+
+**Changed:** `core/completion_contract.py` adds `is_read_only(tool, action)`
+(`READ_ACTIONS`, per-tool `TOOL_READ_ACTIONS`, `ERA_STATE_TOOLS`); the verdict uses
+the action. `core/live_app_state.py` makes playlist starters expect playback
+`playing` and names the collection, and keeps a handler's own `window_native`
+read-back as the verdict. The new `actions/window_evidence.py` turns
+minimize/maximize/move_to_monitor results the handler read back from Windows, and
+focus/show/restore confirmed by the real foreground window, into verified
+results. `task_trace.outcome_word` uses the same read rule.
+
+**Verified:** Windows Python: `tools/test_completion_evidence.py` plus the
+PF-009/022/027 suites: 141 passed. All protected guards: 351 passed; registry
+OK; ruff clean; manifest regenerated.
+**Not verified / owed:** live after restart: "new releases" -> "Spotify is
+playing your Release Radar"; "move Brave to screen one" -> no "couldn't
+confirm"; "what's new about Protocol One" -> no "couldn't confirm". Still
+without real telemetry: Spotify volume_up/down and like_track (UI keystrokes,
+no read-back), Netflix open/fullscreen, audio_control device switches.
+**Follow-up same day:** Spotify volume up/down now read the Windows session
+volume back (`spotify_exact.confirm_volume_step`); `audio_control` passes
+`core.audio_endpoints`' existing hardware read-back through as evidence; Netflix
+fullscreen confirmed by CDP window state is verified (F11 fallback is not);
+Era's voice-output pin is her own state. 38 PF-030 tests, 362 guards pass.
+"Open Netflix" is now verified by the tab's own address read after navigation
+(profile gate settled). Still without telemetry: Spotify like_track (no API
+token, bridge dormant; would need a UIA read of the heart button) and the blind
+F11 fallback. NOTE: like_track sends Alt+Shift+B, a TOGGLE, so "like" on an
+already-liked song unlikes it (not changed; owner decision).
+**Final verification (Windows Python 3.14):** full suite `pytest tools/` ->
+9123 passed, 1 skipped, 0 failed; 365 protected guards pass; registry OK; ruff
+clean; manifest regenerated. `computer_settings`' routed-device reply stays text
+(its contract); `tools/test_audio_endpoints.py` reads `.message` for the direct
+`audio_control` call. Not live-tested; independent review requested.
+**Review finding fixed (dev-review P1, qitem-20261116142304-75f98066):** focus
+proof accepted any foreground window of the same process or with a caption
+containing the name (a second Brave window or "notes about Brave.txt" passed).
+Now `window_control` records the exact HWND it acted on (thread-local, reset per
+call) and `_foreground_is` accepts only that HWND or a window it owns. Tests use a
+fake win32gui with two same-process windows and a misleading caption.
+**Review: ACCEPTED** by dev-review 2026-11-16 15:15 (qitem-20261116151532-d5336c7d):
+no new blockers; accepted with the documented limits (Spotify like_track, Netflix
+F11 fallback). Reviewer did not independently run the Windows tests. Full suite
+after the fix: 9126 passed, 1 timing flake (test_vision_proactive_completion,
+unrelated, 3/3 on rerun). Uncommitted. Live checks still owed after Era restart. Live owed as above, plus
+"Spotify volume up" and "glasses volume 40".
+
+### 2026-11-16 · Codex · PF-029: team shortcut recovers after Windows/WSL restart
+
+**Wrong:** `open-era-one-team.cmd` only attached two existing tmux sessions.
+After the Windows restart both panes displayed `no sessions`; daemon state was
+stale. OpenRig still had both original histories, work queues and an automatic
+snapshot (`01M7H0MSBKZVWBSZXKEF8JFCFP`, 2026-11-16 01:48:14).
+
+**Changed:** canonical recovery/view implementation in
+`tools/open_era_one_team.ps1`; the existing external PS1 delegates to it, and
+the external CMD uses installed PowerShell 7 with visible failure handling.
+Both deployed files remain under `C:\Users\nesri\.openrig-install`, with old
+versions saved under `backups/launcher-before-recovery-20261116`.
+The shortcut starts a stopped daemon without adding kernel agents, inspects
+the existing team and exact sessions, and restores only with
+`rig up era-one --existing` when both are positively absent. Live seats are
+left intact; partial/unknown/deliberately stopped states refuse. There is no
+fresh/spec fallback and no automatic acceptance of native trust/login prompts.
+A named mutex serializes simultaneous opens. Recovery errors remain visible.
+
+**Live:** restored both original conversations and queued work. Owner approved
+the restored Codex workspace-trust prompt; both seats now report running and
+startup ready. The installed CMD opened a real two-pane Windows Terminal;
+both native pane PIDs stayed unchanged across launcher calls (549 and 615).
+No reboot or live-agent termination was used to exercise the cold branch.
+
+**Verified:** `tools/test_openrig_launcher.py` **17 passed** (real PowerShell
+flow with isolated native stubs); all protected guards **324 passed**, registry
+OK, Ruff clean. Guards reject temporary mutants for the old attach-only flow
+and for accepting every tmux exit-1 error as absence. Independent review
+`qitem-20261116094614-b666a33165dadc5d` found that latter classifier flaw; fixed
+it with anchored absence diagnostics and four error scenarios. Focused recheck
+`qitem-20261116094941-0a8b6fa37aae4bfc` accepted the correction without further
+findings. Reviewer did not independently rerun Windows tests or reboot.
+
+**Not proven:** a second physical reboot followed by the repaired shortcut,
+or OS shutdown during a restore. Those require normal-use observation, not
+interrupting the owner's resumed work. Application behavior is unchanged.
+
+### 2026-11-16 02:35 · Claude (dev-build@era-one) · First live evidence after the 01:10 restart, and one PF-027 regression fixed
+
+**Live, from logs; not a soak:**
+- **PF-024:** "reboot Era One" at 01:10 relaunched with `forced: false` in 5 s. At 20:53 it had been `forced: true` after 26 s.
+- **PF-026:** over 78 min with the mic MUTED throughout (`voice.input.level` paths `muted`), there were 10 connections. Each lived to a planned ~9 min GoAway renewal ("idle between turns"), with **zero 1008 idle closes**. The only close was one server 1011 at 246 s, with `keepalive_frames=90`. Before, there was one idle-1008 every ~120 s while muted. The 24 h soak and the 50 forced drops are still owed. No `engine.continuity.replayed` has occurred yet.
+- **PF-027:** live verdicts read "Netflix is paused." and "Netflix is playing." "Open Spotify" and "chill music" have not been tried live yet.
+
+**Regression found and fixed (PF-027).** At 02:02, `window_control` move/focus by window title ("ERA ONE", "Era One - Claude builder") was answered "Era one is not running".
+- Cause: the title matched no process, and the generic probe replaced the tool's own result. The old text replaced it too, but made no claim.
+- Fix: when nothing was asked of the app's state, the tool's result stays first, followed by `Now: <status>`. A status line now says "I don't see X running", never "X is not running".
+- Guard: `test_a_window_move_keeps_its_own_result_and_never_claims_not_running`.
+- Checks: 1558 related tests passed, 308 PF guards passed, and the mutation check fails without the fix.
+- **Restart Era to load it.**
+
+### 2026-11-16 · Claude (dev-build@era-one) · PF-028: Era never starts music nobody asked for
+
+The owner approved ("proceed") the open decision from PF-027.
+
+**Change:** `app/era_live/tool_dispatch._ungrounded_media_start` sits beside the session-state grounding and is skipped for scheduled runs.
+- It refuses `spotify_control` play/resume, and `media_coordinator` play/resume for Spotify, music or no target, unless an utterance from the last 60 s asks for playback (EN/FR/AR words: play, music, song, resume, put on, listen, playlist…).
+- "Open Spotify" alone is never an order to play.
+- The refusal tells the model playback was NOT started.
+
+**Verified (Windows):**
+- 103 dispatch/media test files: 3978 passed. The manifest was then regenerated.
+- PF guards: 307 passed.
+- Mutation check: disabling the gate fails its 4 tests.
+
+**Owed:**
+- Live: "Open Spotify" leaves the window open with no music; "play some chill music" still plays.
+- Review of this change (dev-review was out of credits).
+
+### 2026-11-15 · Claude (dev-build@era-one) · PF-027: Era says plainly whether a task happened; the playback reader finally works
+
+**Owner report, live 23:06.** "Open Spotify" got the reply "spotify: process running; window minimized, sir — though I couldn't confirm it took effect." The task trace shows two calls:
+- `open_app` was VERIFIED but spoke raw telemetry.
+- `spotify_control play`, added by the model and never asked for, was NOT_VERIFIED with "Playback unknown; audio session unknown".
+- The minimize-after-use rule hid the window the owner had asked to open.
+
+**Root cause, measured read-only on Windows.**
+- `core/live_app_state._native_spotify_playback` imports `winrt`, which has no CPython 3.14 wheel. It raised every time and the probe swallowed the error, so playback was always "unknown" unless Spotify was audible. Nothing involving play or pause could ever be confirmed.
+- The repo's warm PowerShell GSMTC host, which PF-002 and PF-025 already use, reads the real state ("paused") in 0.37 s cold and 3–8 ms warm.
+- IPC was not slow: a full probe takes 0.04 s warm, process enumeration 0.37 s, WASAPI 0.09 s.
+- The verification window was 2 s with reads 0.2 s apart, while Spotify reports a new state 2–3 s late.
+
+**Fix (PF-027).**
+- `outcome_sentence` and `status_sentence` give every live-verified app/media command one plain verdict ("Spotify is open on screen." / "I sent play to Spotify, but it is paused, so it did not take effect."). The telemetry follows after "Observed:" for the model. `spoken_outcome` speaks the verdict.
+- "Open" now requires a window that is not minimized. `open_app` close now expects the process gone.
+- A missing `winrt` falls back to the host.
+- Playback checks take 3 reads over 3.5 s; other checks are unchanged.
+- `playback_unreadable` is now logged.
+- The minimize rule skips an app opened in the last 60 s.
+- The unrequested `play` itself is NOT blocked; that is an owner decision (see TODO).
+
+**Verified (Windows):**
+- 2527 tests pass across the affected suites.
+- PF guards: 292 passed.
+- Mutation checks: removing the verdict fails 8 tests; removing the host fallback fails its guard.
+- Era's own probe now reads "paused" on this machine.
+- The manifest was regenerated.
+
+**Owed:** a live "Open Spotify" (expect "Spotify is open on screen, sir." with the window left visible), plus live play/pause verdicts.
+
+### 2026-11-15 · Claude (dev-build@era-one) · Five reliability repairs built (PF-023..026); Brave already healthy
+
+Queue item `qitem-20261115204241-28ac231e8e8465b3`. Nothing committed. The exact candidate, verified against the pre-assignment bytes, is under `~/.openrig/workspace/five-repairs-baseline/` (`candidate.diff`, `pre/`, sha256 manifest).
+
+1. **Brave CDP: no source bug and no restart.** The outage had already been fixed by configuration recovery. Read-only recheck at 21:58 local:
+   - 127.0.0.1:9222 is LISTEN, owned by PID 14352, the owner's `brave.exe` with `--remote-debugging-port=9222` and the default profile (no `--user-data-dir`).
+   - `/json/version` answers Chrome/157.0.8103.79, protocol 1.3. One page is open.
+   - The https `open_app` fallback is unchanged, and `tools/test_live_app_state.py` passes.
+2. **Gemini G0 (PF-026).** Code is in a new `app/era_live/session_stability.py`, hooked from `audio.py` `_send_realtime`/`_receive_audio`, `main.py` (close record and handle policy) and `core/session_manager.py`.
+   - Keepalive while a privacy gate holds the mic: constant zero frames only, 5 × 40 ms every 10 s (`ERA_LIVE_KEEPALIVE_S`, `ERA_LIVE_KEEPALIVE_FRAMES`). Nothing is sent while reconnecting.
+   - 40 ms / 16 kHz chunks were already in place (`CHUNK_SIZE` 640), now pinned by a test.
+   - The resumption handle now lasts 2 h − 5 min instead of 15 min. Failed attempts alone no longer discard it; a server refusal still does (`handle_rejected`).
+   - `engine.connection.closed` now logs `close_kind` (1008-inactivity/lifetime/other), `conn_age_bucket`, `keepalive_frames` and `continuity_frames_kept`.
+   - Up to 3 s of owner audio that was sent but got no answer is replayed once into the next session. It is never replayed after any model output or tool call, and is discarded if a gate is closed at replay time.
+   - Live capture during the 2–5 s reconnect hole is **not** buffered: the mic stream is per-connection, and changing that would be the forbidden transport rewrite. The doc's "I lost you" announcement was not added; the existing assistant-side continuity is unchanged.
+   - Superseded test: `test_session_persistence.py::test_expired_token_is_dropped` now uses a 3 h token, and a 1 h token is now restored.
+   - SDK: google-genai 2.23.0, `send_realtime_input(audio=Blob)`. A re-fetch of Google's session-management page timed out, so the 2 h figure relies on the doc's prior citation.
+3. **Spotify mood (PF-025).** Reproduced from `logs/eraone.log` 20:56:57 and 20:57:56 today: "chill music" pressed a result and still got PlaybackNotVerified.
+   - Root cause: `_wait_for_new_track` (and the `settle_spotify` re-check) required the playing track to contain the words "chill" and "music".
+   - Now the worker reports the control it pressed (`clicked: Play Chill Hits`). A pressed track row must be that exact track playing. A pressed playlist, album or artist must have changed the playing track. The old song still playing, or nothing playing, is rejected.
+   - The result is a `spotify_native` ToolResult carrying `previous_media_observation`. Named songs keep the strict PF-004 matching. No API is used.
+4. **Relaunch zombie (PF-024).** Evidence: at 20:53:39 local, "reboot Era One" ran `os._exit(0)`, yet Era was still alive 26 s later and was force-killed (`forced: true, exit_code: 0`). The likely cause is a hang in `ExitProcess` DLL teardown; this is an inference.
+   - Era now exits through `era_relaunch.hard_exit`: flush, then `TerminateProcess`.
+   - Supervisor `kill_tree` is bounded and never raises.
+   - `--wait-pid` kills only a verified Era (a Python running this repo's `main.py`; a reused PID is left alone) and halts rather than start a second Era.
+   - The supervised loop refuses a replacement while the old process lives.
+5. **Netflix Enter (PF-023, owner-authorized behaviour change).**
+   - During the 120 s Netflix failure window, a bare Enter is held only when the foreground window is Netflix. Any other app gets it immediately. An unreadable foreground falls back to fresh Netflix evidence.
+   - Three superseded tests that read the real foreground now pin a Netflix tab. There is a new cross-app/same-app class.
+
+**Verified (Windows Python 3.14):**
+- `protected_fixes.py check`: OK. `protected_fixes.py run`: **273 passed** (baseline 221).
+- Focused suites: Live/session 915 passed; Spotify 112 plus 38; routing 269; relaunch 81 (including real-subprocess supervisor tests).
+- Mutation checks: each new guard fails with its fix removed; the files were restored with sha256 verified.
+- `tools/era_gate.py --changed <17 files>`, Windows, 13 min: ruff, manifest, era_doctor and protected fixes all PASS. Tests: **4697 passed, 2 failed**. The failures are `test_vision_router_policy.py::...test_blocking_path_stores_vision_result` and `test_vision_screen_process_async.py::...test_blocking_fallback_stores_latest`.
+  - Both take a REAL screen capture, which "came back blank after 3 tries (screen may be locked/asleep)" mid-run.
+  - Both pass when run alone. Neither touches a changed file.
+  - So the gate is red on an environment-dependent vision test, not on these repairs. Rerun the gate with the screen awake to get it green.
+
+**Not proven (owed live):**
+- 24 h muted/standby soak with 0 idle-1008 closes. Whether sparse silence resets Google's timer is UNVERIFIED. If `keepalive_frames>0` closes still show `1008-inactivity`, raise the burst or interval.
+- 50 forced drops.
+- "reboot Era One" ending `forced: false`.
+- "play some chill music" verified.
+- Enter in Notepad during a Netflix failure.
+- Era is currently stopped by the owner's 21:05 stop flag and was not restarted here.
+- Review: `dev-review` Codex hit its usage limit until 01:59. Review request `qitem-20261115205457-80fb9feb9f54a034` covers #4 and #5; #2 and #3 follow in a second request.
+
+### 2026-11-15 · Codex desktop · Five reliability repairs assigned to the live OpenRig team
+
+**Owner request:** fix Brave debugging, Gemini 1008 idle churn, Spotify mood
+verification, relaunch zombies, and Netflix failure swallowing Enter in other
+apps. The last item explicitly authorizes changing the old cross-app cooldown
+behavior while retaining genuine Netflix safeguards.
+
+**Durable assignment:** builder `dev-build@era-one` claimed
+`qitem-20261115204241-28ac231e8e8465b3`; reviewer `dev-review@era-one` claimed
+`qitem-20261115204249-59aafe71ca62d973` and requested the exact candidate and
+Windows evidence. Complete brief and evidence:
+`docs/era-enhancement/OPENRIG_RELIABILITY_2026-11-15.md`. Builder finishes its
+already active icon task before repairs. No duplicate team launched or seat
+identity assumed. Reviewer informational usage-warning dialog dismissed.
+
+**Verified before repair:** Windows `python tools/protected_fixes.py run`:
+**221 passed**, 2 warnings, 15.88 s. Brave CDP is already live: port 9222 is
+bound to 127.0.0.1 by Brave PID 14352, matching its executable and debugging
+flag; `/json/version` responds. No browser restart performed by this chat.
+
+**Not yet proven:** no reliability source fix or final acceptance is claimed
+by this dispatch. Builder owns implementation, PF entries/guards, Windows
+validation and updated live proof; reviewer owns independent exact-diff review.
+Gemini silence resetting the idle timer remains an inference in the source
+plan; 24 h soak / 50 forced drops must be reported honestly as owed until run.
+
+### 2026-11-15 · Codex · OpenRig mixed team live and both agents responding
+
+**Result:** owner completed subscription sign-in; live WSL auth reports
+Claude Pro / claude.ai. Launched the prepared `era-one` team: builder
+`dev-build@era-one` (Claude Code; observed claude-opus-5-5 response), reviewer
+`dev-review@era-one` (Codex, gpt-6-astra). Both report running, startup ready,
+idle, verified identity and a recorded native conversation. Both answered
+onboarding and await a concrete assignment; no application change assigned.
+
+**Startup repairs:** the Nov 9 Linux copy of ChatGPT credentials had expired.
+Preserved it as `/home/nesri/.codex/auth.before-openrig-20261115.json`, copied
+the current same-user Windows ChatGPT credentials with mode 0600, and relaunched
+only the reviewer, which had no conversation or assigned work. Builder stayed
+running. Owner approved the roster file once; `rig roster list` confirms both
+members. WSL lacked `python`, so project hooks failed non-blockingly; added
+`/usr/local/bin/python -> /usr/bin/python3`. Both protected-path/notice hooks
+now exit 0 on a harmless read probe. No safety hook was removed or disabled.
+
+**Files/effects:** OpenRig added managed guidance/hooks and runtime resources.
+Pre-existing AGENTS.md/CLAUDE.md text and local permission allow rules verified
+preserved against `~/.openrig-install/backups/20261115-210104-before-team`.
+No Era application source edited for this setup. Updated external team culture
+with protected-fix rules, and external `TEAM.md`; saved
+`C:\Users\nesri\.openrig-install\open-era-one-team.cmd` plus its PowerShell
+helper to attach the existing conversations without relaunching agents.
+
+**Verified:** protected guards **221 passed**, registry OK; two live tmux
+clients attached and matching Windows Terminal window found and maximized.
+OpenRig's own `terminal open --window` cannot detect this Windows/WSL host;
+the native Windows Terminal attachment provides the actual visible view.
+
+**Not yet proven:** a substantive builder-to-reviewer task, Windows application
+acceptance, suspend/reboot recovery or long-running stability. Kernel/operator
+was not launched; this is the requested two-seat team using the manual path.
+Supersedes the earlier pending-login entries below. Do not replay the initial
+`rig up <spec>` while this team is already running.
+
+### 2026-11-15 · Claude · PF-022 — Era knows what her tools really did
+
+**Live symptom:** "type instagram.com in Brave" never happened and Era did not
+know. **Root causes (replayed against `route_tool_call`, not read from prose):**
+(1) `memory/runtime_intent.json` kept `last_media_app: "netflix"` forever and the
+V8B/V8C guards turned ANY `computer_control` type/press/hotkey/click into
+`netflix_control` (49 s Netflix search for a URL); the reply "Netflix state:
+unknown" re-stamped the flag, so it renewed itself. (2) The model got that reply
+under the name of the tool it had asked for. (3) Calls slower than ~1.5 s are
+detached; the model only saw "STILL RUNNING" and no outcome event was logged (8 of
+14 calls). (4) `TurnLatency.note_tool` had no callers, so `turn.latency` always
+said `tool_count: 0`. (5) Era had no way to read back what had happened.
+(6) The model said `action="key"`, which `computer_control` rejected.
+
+**Changed:** `core/intent_memory.netflix_context_fresh` (15 min TTL, only real
+successful Netflix use counts) now gates all five router checks. `_attach_route_notice`
+prefixes `ROUTING NOTE` when the tool that ran differs from the tool asked for
+(never alters success/verdict). Detached calls log `tool.execution.detached` and a
+completed event; tool time is counted. `core/task_trace.recent_tool_calls` +
+`protocol_one action=recent` read the trace back (CONFIRMED / NOT CONFIRMED /
+FAILED), and a `[RECENT TOOL OUTCOMES]` block is injected on each (re)connect.
+`key` is accepted as a keypress alias. Prompt: TASK PROOF RULE. Guard tests:
+`tools/test_tool_truth.py` (23). Registry: PF-022.
+
+**Verified:** live-state replay + targeted suites green; Protocol Zero drift check
+60 tools, none changed. Full gate: see the next TODO line.
+
+**Not proven / owed:** restart Era, then ask "did you do it?" and check she calls
+`protocol_one action=recent`. Brave still needs a full quit + relaunch with
+`--remote-debugging-port=9222` (user action); until then `open_app` with a full
+https URL is the fallback. A genuine Netflix failure still swallows a bare Enter
+for 120 s (pinned by `test_browser_media_routing`).
+
+### 2026-11-15 · Codex · OpenRig mixed-team launch prepared; Claude sign-in required
+
+Owner reports Claude subscription active and authorizes resuming the prepared
+`era-one` team (Claude builder + Codex reviewer). OpenRig 0.7.5 remains installed
+in WSL `OpenRig-Ubuntu`. Live `claude auth status` still reports loggedIn=false
+in WSL and on Windows with API credentials excluded. Opened a visible WSL
+`claude auth login` window (PowerShell PID 29812); owner must complete sign-in.
+Codex reports ChatGPT login available. Started daemon without kernel while
+waiting; `rig ps --json` is empty. No project agents or operator launched.
+
+Backed up current guidance/settings to
+`C:\Users\nesri\.openrig-install\backups\20261115-210104-before-team`.
+Updated `/home/nesri/openrig-teams/era-one/CULTURE.md` with the new protected-fix
+rules and onboarding-only boundary. Plan resolves with no errors and default
+floor permissions for both seats. Protected guards: **209 passed**; registry
+check OK. No Era application code edited; no new bug fix/PF entry claimed.
+
+**Owed:** successful Claude subscription login in WSL, launch the mixed team,
+resolve actual startup prompts with owner input, verify both agents answer,
+open the visible team workspace, and record the live result. Do not substitute
+the existing Windows API key or claim subscription reactivation proves login.
+
+**Follow-up, same day:** owner reported sign-in finished, but both live checks
+still show loggedIn=false. The previous login process ended without a usable
+session. A diagnostic login explicitly prompted `Paste code here if prompted`.
+Automatic opening of its OAuth URL was rejected by tool policy (generic
+`blocked by policy`); that diagnostic process was cancelled. Opened a new
+visible PowerShell login window PID 17588 with automatic browser opening
+disabled: owner must click the terminal's link and paste the code back into
+that same terminal. Latest WSL check remains unauthenticated; no agents started.
+Owner could not find that window; reopened sign-in in PowerShell PID 23576
+with explicit title OpenRig - Connexion Claude - COLLER LE CODE ICI and
+instructions to use its fresh link and paste the code only there.
+
+### 2026-11-15 · Claude · Protocol One reports the truth, and Era can read it (PF-020, PF-021, PF-008 restored)
+
+**Audit of `protocol_one_20261114_173906.md`:** the headline counts were right
+but four things were not. (1) Identical lint hits were merged into one
+signature, so the count under-stated them. (2) Every test cause was cut to
+"Asser…" (console width). (3) A ROLLED-BACK autofix was invisible: the file's
+own tests were red, so the loop did a silent `continue`. (4) "Full suite" ran
+`pytest tools/` only, which skips the root-level tests (8,911 collected
+instead of 9,002 bare; the cycle now runs the project's own testpaths).
+Separately, Era could not read the report at all: `hive.briefing()` drops any
+detail over 120 characters.
+
+**Changed:**
+- `core/protocol_checks.py`: `Finding.count/also_at`; `check_tests` reads a
+  junit XML for real causes and records `last_test_stats()`.
+- `actions/protocol_one.py`: skip/rollback notes on autofix, test-scope line,
+  log-scan timing line, stated section caps, a "Since the previous cycle"
+  section (`runtime/protocol_one/last_cycle.json`, flags FEWER tests), and
+  `read_report(section)` / `report_digest()`. `status` now ends with a pointer.
+- New read-only tool action `protocol_one action=report [section=errors|risks|
+  staged|applied|changes|accepted|noise]` (tool_dispatch branch, declaration,
+  golden file regenerated, `core/prompt.txt` rule + routing row; Protocol Zero
+  check_drift: 60 tools, no drift). The answer states the report's age and how
+  many source files changed since.
+- **PF-008 regression found and restored:** `mute_microphone` armed the unmute
+  listener after a VOICE mute, and the two guard tests had been rewritten to
+  bless that. Code and `tools/test_activate_mic.py` are back to the rule
+  (voice mute = no listener).
+- **PF-021:** a mood/genre request ("play me some chill music. chill rap
+  music") is not a song title; `personal_media.explicit_track` no longer
+  grounds it over the model's own query.
+- `core/state_listener.py` made lint-clean and its tests real (7 pass). It is
+  still NOT wired into `main.py`.
+- PF-020 and PF-021 added to the registry; `protected_fixes.py check` OK,
+  `run` 209 passed.
+
+**Verified:** a real cycle (no model fixes) wrote
+`protocol_one_20261115_202528.md`: 9,025 tests run, 9,023 passed, 1 failed,
+0 errors (was 3 failed + 4 errors). The 1 failure was manifest freshness
+(source moved during the run); regenerated, `test_era_manifest.py` 8 passed.
+The report carries the test-scope line, the changes section and a log-scan
+timestamp, as designed.
+
+**NOT proven:** Era calling `protocol_one action=report` live (restart owed:
+ask "what did Protocol One find" and watch for the tool call); the "Since the
+previous cycle" diff needs a second cycle; generic Spotify mood searches still
+end in `PlaybackNotVerified` (the verifier wants a specific track; needs live
+Spotify). Open in that report, none touched here: Netflix search got a URL
+(`instagram.com`), `scheduled_task` "Which task?" ambiguity, Brave running
+without remote debugging. Protocol Zero's relay of One's last cycle shows a
+stale date (cosmetic, hidden by the 120-char cap). Nothing committed.
+
+### 2026-11-12 · Claude · Semantic recall no longer goes word-only after Ollama idles (PF-018)
+
+**Problem:** `memory/semantic_recall.available()` probed with a 1.5 s embed.
+After Ollama idle-unloaded `all-minilm` (default keep-alive 5 min; a cold load
+measured 16.3 s), the probe timed out, read the model as ABSENT and cached that
+for 60 s. Every first question after an idle period was recalled by words only,
+silently, and that turn also paid 1.5 s for a probe that could not succeed.
+
+**Changed (`memory/semantic_recall.py`):**
+- `available()` first asks `/api/tags` (installed?) and `/api/ps` (loaded?).
+  Neither call loads a model.
+  - Installed but not loaded: start ONE background warm-up (`_start_warmup`,
+    90 s budget) and return False immediately.
+  - The warm-up's True is never overwritten by a stale False. That race was
+    found while writing the tests.
+  - Not installed: no probe and no warm-up.
+  - Metadata unknown (proxy or old Ollama): the old probe, unchanged.
+- Every embed sends `keep_alive` (`KEEP_ALIVE`, default `30m`, env
+  `ERA_EMBED_KEEP_ALIVE`).
+- Recall still never blocks on the load. The current turn stays lexical, and
+  the first turn after the load is semantic.
+
+**Verified:**
+- `tools/test_semantic_recall.py`: 32 passed, 3 runs in a row. 10 new tests;
+  the `enabled` fixture pins the metadata endpoints to "unknown" so the old
+  tests stay hermetic.
+- Mutation check: disabling only the warm-up fails exactly the 2 cold-model
+  tests.
+- Live, against local Ollama with the model unloaded: the cold call returned
+  False in **0.11 s** (it was 1.53 s), the warm-up loaded in 0.6 s, and the next
+  call was **True**. `/api/ps` shows the model resident 30 min out.
+- `era_gate --changed`: GATE PASSED (70.3 s), including the new protected-fixes
+  step. Registered as PF-018.
+- Full suite: **8,991 passed, 0 failed, 1 skipped** (the paid Lyria opt-in),
+  15:56.
+
+**NOT proven:** inside a running Era (restart owed). After a restart and more
+than 5 min idle, ask a paraphrase like "what do I do for a living". The log
+should show `[SEMANTIC] all-minilm loaded`, and the next recall should be
+`matched_by: meaning`.
+
+### 2026-11-12 · Claude · Protected-fixes registry + suite fully green
+
+**Asked:** stop agents breaking each other's fixes (Spotify was the latest), and
+make the whole suite green: the 6 failures and 3 skips.
+
+**System built:**
+- `docs/PROTECTED_FIXES.md`: 17 entries (PF-001…PF-017). Each one has the rule
+  that must stay true, why it broke, its files, and real guard-test node IDs.
+- `tools/protected_fixes.py`: `show <file>` / `list` / `check` / `run`.
+  `check` fails on a deleted or renamed guard, a missing file, or a guard
+  marked `skip`/`xfail`/`skipif(True)`. An environmental `skipif`, such as
+  "Node.js not installed", is allowed.
+- `tools/test_protected_fixes.py` (12 tests): the registry must stay enforceable.
+- `tools/era_gate.py`: **every tier now runs all guard tests** (about 15 s),
+  whatever changed, and prints the rules for any changed protected file.
+- `.claude/helpers/protected_fix_notice.py`: a PreToolUse hook registered in
+  `.claude/settings.json`. It never blocks; it injects the rules when a
+  protected file is edited. Claude Code only. Other agents rely on
+  `AGENTS.md` §0, the gate and the suite.
+- Pointers added to `AGENTS.md` §0, `CLAUDE.md`, `LUNAR_HANDOFF.md` and the
+  top of this file.
+
+**Failures fixed:**
+- **Real bug, cross-tool:** `utils/media_match.py` ran the new spelling-variant
+  check *before* the exact-match check. An exact title is trivially its own
+  variant, so every exact match scored 0.86, not 1.0, across Spotify, YouTube
+  and Netflix. The variant can now only raise a weak score (PF-017). This was
+  not in the Codex gate's list; the full suite found it.
+- **6 stale tests updated to the new stricter behaviour.** No production code
+  changed for these:
+  - The `TestYoutubeVideoVerification` tests (×3) now supply the owned page
+    and playback evidence. 2 new tests: no progress → False, no page → False.
+  - `test_spotify_exact_ids_cache_and_no_mutation_replay`: the fake API now
+    answers the read-back, and the test asserts exactly one PUT.
+  - `test_organic_watch_link…`: the fixture lambda now accepts `page=`.
+  - `test_media_and_attention_filters…`: uses the REAL `AttentionGate` in an
+    open window and asserts every frame passes in order. The attention gate
+    stays.
+- **3 skips fixed:** `test_semantic_recall` skipped whenever Ollama had
+  unloaded `all-minilm`. A cold load takes 16.3 s and the probe allows 1.5 s.
+  The fixture now warms the model first: 22 passed from cold.
+- `runtime/manifest.json` regenerated (448 modules).
+
+**Still skipped on purpose:** `test_music_generate.py:300` makes a REAL,
+paid Lyria call (`ERA_LIVE_TESTS=1`). It stays opt-in.
+
+**Production finding, NOT fixed (owner's call):** `memory/semantic_recall.available()`
+has the same 1.5 s probe. After Ollama unloads the model (default 5 min idle),
+Era's recall silently falls back to lexical-only for up to 60 s, until a probe
+lands on a warm model.
+
+**Verified:** full suite before: 8,954 passed, **10 failed**, 4 skipped. After:
+**8,981 passed, 0 failed, 1 skipped** (the paid Lyria opt-in), in 17:15.
+`protected_fixes.py run`: 176+ guards green in about 13 s. `check`: REGISTRY OK.
+Ruff format and lint are clean on every touched file. The hook was exercised
+via stdin: a protected file gets the context, an unprotected file gets
+nothing, and bad input exits 0.
+
+**NOT proven:** that the hook's `additionalContext` actually appears in a fresh
+Claude Code session; the settings change loads on the next session. Codex,
+ChatGPT and Lunar do not run Claude hooks, so for them enforcement is
+`AGENTS.md` §0 plus the gate plus the suite. Nothing committed.
+
+### 2026-11-12 · HUD typed confirmation replies now consumed immediately (this fix)
+
+**Problem:** When a user typed "yes", "approve", "confirm" (or "no", "cancel") in the HUD text input to answer a pending high-risk action confirmation, Era did not detect it as a confirmation reply. The typed text was sent to the model as a regular message instead of consuming the pending confirmation. The voice path handled this via `_user_approved_pending` checking `_inflight_user_text`, but typed input had no equivalent short-circuit.
+
+**Root cause:** `_handle_text_command` in `main.py` passed all typed input through the safety gate and then to `_route_text_through_lanes` without checking for confirmation replies first.
+
+**Changed:** Added a typed-confirmation short-circuit in `_handle_text_command` (main.py:1244–1310), placed right after input acceptance and before the safety gate / lane routing. It:
+- Checks `self._pending_store.is_pending()` and peeks the pending confirmation
+- Uses `_approves_pending(text)` (from tool_dispatch) to detect affirmative replies ("yes", "approve", "confirm", "go ahead", "oui", "vas-y", etc.)
+- Uses `_sched_refused(low)` + `_SCHED_APPROVE_COMMAND` to detect negative/cancel replies ("no", "cancel", "stop", "never mind", etc.)
+- On affirmative: consumes the confirmation via `store.confirm(allow_sole=True)` and submits `_execute_tool_result` with `confirmed=true` + `confirmation_id`
+- On negative: cancels the confirmation via `store.cancel()` and notifies user/Telegram
+- Both paths `return` early, so the reply never reaches the model
+
+**Also verified:** The existing HUD approval buttons (`ApprovalPrompt.tsx` → `/api/approval` → `submit_decision` → `execute_approved`) already use the same confirmation store and execution path. Both typed text and HUD buttons now consistently:
+- Consume/cancel from the single-slot `PendingConfirmationStore`
+- Execute the tool via `_execute_tool_result` with `confirmed=true` + `confirmation_id`
+- Never route the reply through the model
+
+**Follow-up fix (same session):** When user presses "Cancel" on HUD approval prompt OR types "no"/"cancel", Era now **speaks "Action cancelled."** so the user hears confirmation. Previously the cancel was silent (only log entry), and the model's prior response ("Awaiting your confirmation, sir. Shall I restart the system?") would still play, making the user think cancel didn't work.
+- `app/hud/approval.py:20–28` — HUD cancel now speaks "Action cancelled." via `engine.speak()`
+- `main.py:1301–1308` — Typed-text cancel now speaks "Action cancelled." via `self.speak()`
+
+### 2026-11-12 · Spotify playback fixes (non-API desktop path)
+
+**Superseded:** This attempt was incomplete. See the Nov 12 Codex entry at the
+top of Phase 0 below for the corrected root causes, tests and live proof.
+
+**Problem 1:** "Spotify playback failed: desktop ID playback needs the saved track title and artist" — when using `play_uri` with a saved track URI (no API key), the model didn't provide the `value`/`query` parameter (track title/artist), so `_spotify_play_uri` failed immediately.
+
+**Problem 2:** "Track unconfirmed, sir" — after `next`/`play`/`previous`, the completion contract added "though I couldn't confirm it took effect" because `spotify_control` had no verifier in the action_verifiers map.
+
+**Root causes:**
+1. `_spotify_play_uri` required `query` parameter for GSMTC verification, but desktop URI playback doesn't have a pre-provided query.
+2. `spotify_control` was missing from `_VERIFIER_MAP` in `core/action_verifiers.py`, so all actions fell to "No verifier registered" → unconfirmed.
+
+**Changed:**
+- `actions/spotify_control.py:826–866` (`_spotify_play_uri`): Made `query` **optional**. Opens the URI first, then reads what GSMTC reports is playing. If query provided, verifies match; if not, trusts GSMTC (we opened the exact URI). On timeout, reports what GSMTC says is playing.
+- `core/action_verifiers.py`: Added `verify_spotify_control` async verifier (lines 232–330) and registered it in `_VERIFIER_MAP`. It:
+  - For playback actions (play, play_uri, search, next, previous, liked_songs, new_releases, made_for_you, resume): verifies via GSMTC (`media_observation.settle_spotify` or `media_observation.spotify`)
+  - For status actions (status, current_track, playback_state, etc.): returns fresh GSMTC telemetry
+  - For other actions (volume, like, minimize, queue, seek): uses message verification
+
+**Verified:** Syntax/lint/format clean for both files. No test run (test env permission issue); live verification needed after restart.
+
+**NOT proven:** live — restart Era, then:
+- "play my track" with saved URI → plays without "needs saved track title" error
+- "next track" → plays next AND speaks confirmed track name (no "Track unconfirmed")
+- "play [song name]" → searches, plays, verifies via GSMTC
+- "what's playing" → returns fresh GSMTC telemetry
+
 ## Phase 0 — Stabilization (week of 2026-09-29)
+
+### 2026-11-12 · Codex · Spotify root causes repaired and desktop/HUD playback proven
+
+**Problem / causes:** The preceding Spotify entry was untested and incomplete.
+`play_uri` opened the correct Spotify page but did not press its track's Play
+control, leaving the previous song playing. Removing the metadata requirement
+then falsely reported that old song as success, including at timeout. Personal
+song resolution excluded `play_uri`, letting a model-supplied ID bypass the
+owner's saved ID/title. The newly registered verifier was async while
+`verify_action_result` calls synchronous functions; generic OS state also cannot
+prove that a next-track command actually changed tracks.
+
+**Changed:** `core/personal_media.py` reads the saved URI/title together and
+resolves personal references even when the model supplies `play_uri`.
+`actions/spotify_control.py` recovers omitted metadata only for the matching
+saved URI, opens it once, activates its named track-page Play control once when
+needed, and requires matching metadata plus active playback. No timeout success
+for the unrelated old track. `actions/spotify_search_worker.py` adds bounded
+track-page activation using the existing named UIA control, without search or
+URI replay. Native next/previous now compare GSMTC samples before/after the
+command and return evidence and the confirmed title. `core/live_app_state.py`
+preserves that evidence (including a failed track-change check) and recovers
+saved metadata for URI readback. `core/action_verifiers.py` now honors the
+synchronous verifier contract; a playing sample alone cannot verify a skip.
+
+**Verified:** Reproduced two failures in the previous native identity suite.
+After repair: **130 passed** across native identity, fresh media observations,
+live app state, Spotify search, personal controls, Spotify memory and completion
+evidence suites; ruff check/format clean. Broader affected gate (100 files,
+started before the final track-page activation edit) finished **3,810 passed,
+6 failed, 3 skipped**; ruff, manifest and Doctor passed. Final-code validation
+is the 130-test run plus live checks below. Five reds match existing handoff
+debt: three `test_browser_media_routing` YouTube URL checks,
+`test_enhanced_directive::test_spotify_exact_ids_cache_and_no_mutation_replay`
+(old API receipt expectation), and `test_youtube_direct_play` (dict vs
+ToolResult). The sixth, `test_open_gemini_input::test_media_and_attention_filters_never_consume_live_requests`,
+also fails alone: its fixture forbids `_attention_gate`, which the prior
+listening-session work now calls intentionally. No Spotify control is involved
+in that failure; the audio file/test were not changed in this repair.
+Fresh-process LIVE proof with the Spotify access token removed and all Spotify
+Web API calls forbidden: saved URI **without a title argument** changed
+Tele3 El Amar → **سواد الغيم by Mikasa Music**, then one next command changed
+the track again; both returned `VERIFIED` / completion `proven`. Existing
+minimize and media-output preferences were honored.
+
+Normal HUD/supervisor restart completed at **13:56:45 Africa/Lagos** (`forced:
+false`); replacement backend PID **31100**, Gemini connected. Real HUD command
+"Era, play my track on Spotify." played the saved song and returned its verified
+title. "Next track." changed it to **Moulat Lkhala by Eljoee**; HUD reply
+**"Track skipped."**, `logs/era.log` 12:58:04Z has `spotify_control`
+`verification_status: VERIFIED`. No Spotify credentials were added or changed.
+
+**NOT yet proven:** owner's microphone/ASR and audible-response acceptance after
+this restart; cold-start/slow-network page activation, previous-track live
+acceptance, and duplicate consecutive tracks with identical GSMTC metadata.
+Identical/unchanged metadata deliberately remains unconfirmed. Separate named
+song search failures from the earlier media work remain open. The six broader
+test failures above remain owed; do not remove the attention gate just to make
+the obsolete no-gate fixture pass.
+
+### 2026-11-11 · Claude · "Era standby" closed the session and never woke: it was entering the standby STATE
+
+**Live evidence (eraone.log, 23:12–23:14, process started 23:09:16 — the session
+build WAS loaded):** `23:12:21 enter_standby` → `[SEND] Dropping audio: standby
+without wake word` on every frame; `23:14:48 [SAFETY] Blocked text input: 'era' —
+Standby without wake word`; `23:14:52` the same for `'shazam'`; HUD stayed on
+STANDBY. No `[ATTENTION]` accepted/ignored lines at all: the audio never reached
+the gate.
+
+**Cause (mine, from the session slice):** `_close_listening_session` reused
+`EraState.STANDBY` and `ui.set_state("STANDBY")`.
+`session_manager.transition_to` derives
+`"standby_active": current_state == EraState.STANDBY` (session_manager.py:305);
+`_send_realtime` drops every frame when that snapshot flag is set
+(audio.py:381) and `input_safety_gate` refuses typed orders with
+`STANDBY_NO_WAKE` (input_safety_gate.py:623). So the one-mode close reproduced
+the old teardown at the state layer even though `_standby_active` stayed False.
+
+**Changed:** `_close_listening_session` now transitions to
+`EraState.ONLINE_IDLE` and sends HUD `IDLE`; `app/hud/bus_legacy.py` clears its
+latched `_standby` on `IDLE`/`ONLINE`/`READY` so the HUD cannot remain on
+STANDBY; the `enter_standby` tool result now tells the model to say
+"System offline." once when standby mode is disabled (there is no code-spoken
+notice in that path).
+
+**Verified:** `test_standby_policy` now asserts `ONLINE_IDLE`, no STANDBY HUD
+state, mic still active, session closed. 129 session/attention/standby tests +
+278 neighbouring (state grounding, confirmation, main bridge, input gate, local
+fallback, response recovery) + 72 HUD tests. `SessionManager.transition_to
+(ONLINE_IDLE)` snapshot proves `standby_active` is False. ruff clean.
+
+**NOT proven:** live after the fix — restart owed. No end-to-end test yet of
+"standby, then 'Era, …' answered"; that is the acceptance step.
+
+### 2026-11-11 · Claude · Listening session: one wake word, a rolling window, standby off
+
+**Asked:** stop requiring "Era" before every task; make "Era, do X" work after
+inactivity like Siri; disable standby until the session wake is proven; keep
+"shazam" primary (voice-settable); make the session duration voice-settable
+(default 2 min); UI-mute voice-unmutable but a voice mute not; stop ambient
+noise activating the mic or entering standby; upgrade the ears.
+
+**Root causes:** three clocks answered "is Era listening?" differently —
+`attention_window_s = 45 s` and only while media played
+(`core/attention.py`), the standby wake listener with its own word
+(`main.py`), and Gemini's 120 s idle close. The UI mic button was a HARD-off
+(`_browser_mic_active = False`), so local capture stopped and voice unmute was
+physically impossible; a voice mute kept the Vosk unmute listener armed, so
+ambient noise could reopen the microphone — the two rules were exactly
+backwards relative to the owner's intent.
+
+**Changed:**
+- `core/session.py` (new): one rolling window, default **120 s**, every accepted
+  utterance re-anchors it; `standby_enabled` defaults **false**;
+  `parse_duration` ("2 min", "90 seconds", "1 minute 30 seconds") and
+  `set_window_from_text`; config `config/session.json`, read on every call so a
+  voice order applies to the next utterance; atomic write.
+- `core/attention.py`: `ListeningState` now composes `SessionWindow`. The
+  window applies **whether or not media plays** (one rule everywhere); Era's
+  own reply re-anchors only after an explicit address (keeps the 2026-10-10
+  lyric loop closed); `close_session()` is the one-mode "standby".
+- `main.py`: `_close_listening_session(era, …)` module-level helper;
+  `enter_standby` when standby is disabled closes the window and returns — no
+  mic teardown, no Vosk listener, no reconnect; `_auto_standby_due` returns
+  False while disabled. UI mic button now routes through
+  `mute_microphone("ui")` and keeps local capture, so "activate mic" works.
+- `app/era_live/mic_mute.py`: the mute SOURCE decides the local listener.
+  `voice`/`restored` → no listener (a privacy mute cannot be undone by a
+  phrase, including by ambient noise); `ui`/`typed` → owner-verified listener.
+  Source persisted in `core/user_prefs` (`mic_mute_source`).
+- `manage_preference`: new actions `set_session_window` (seconds, or a spoken
+  duration string) and `get_session_window`; declaration updated; prompt teaches
+  the command and the new mute rule; standby prompt text rewritten (no resume
+  greeting, next words carry her name).
+- `app/audio_config.py`: `CHUNK_SIZE 1024 → 640` (64 ms → **40 ms**, the Live
+  API's recommended 20-40 ms range) — a real ears change, not a model swap.
+- `actions/spotify_control.py`: a pre-existing red test in the dirty tree
+  (`tools/test_spotify_search.py`, Codex's uncommitted media work) asserts the
+  "not yet confirmed" message reads as a failure; it now leads with
+  `Spotify search failed:` while keeping every asserted phrase.
+
+**Verified:** `tools/test_session_mode.py` (25 new), `test_attention.py` (57,
+rewritten for one window), `test_activate_mic.py` (3, rewritten for the two
+mute rules), `test_mic_mute.py` (45), `test_standby_policy.py` (44),
+`test_audio_pcm.py`. Golden declarations and the manifest regenerated (447
+modules, 60 tools). Targeted gate on the ten changed modules: **4,808 passed,
+5 failed** — every failure is pre-existing dirty-tree media work, not this
+slice: `test_browser_media_routing` (3 YouTube URL checks),
+`test_enhanced_directive::test_spotify_exact_ids_cache_and_no_mutation_replay`
+(`core/spotify_api.execute` now returns `PlaybackNotVerified` where the test
+expects an accepted URI), and `test_youtube_direct_play`
+(`youtube_video._handle_play` now returns a dict where the test reads
+`.success`). `git status` shows both `actions/youtube_video.py` and
+`tools/test_youtube_direct_play.py` modified by the prior Codex work. ruff
+format/lint, manifest and `era_doctor` all PASS.
+
+**NOT proven:** live — Era was running the previous code, so a restart is owed.
+No voice order has yet set the window end to end through the model; the model
+must pass `seconds` for `set_manage…` (the phrase fallback is tested directly).
+The deeper ears upgrade (a better ASR model / a second opinion) is **not**
+done: the mishearing the owner reported was mostly ambient noise triggering
+voice-unmute and standby, which the source/authority rules above remove.
+Remaining known cost: while muted, `_send_realtime` still sends no frames, so a
+long mute can let the Live session idle-close; unmute then pays a reconnect
+(~2.2 s median). Keepalive is the next Gemini win, not part of this slice.
+
+### 2026-11-11 · Claude · Sprint 1 slice 1: evidence-gated completion, verified approvals, fail-closed unknown actions
+
+**Root causes (from a full audit, docs only so far):** a tool returning `None`
+became `success=True, "Done."`; eight tools counted as "verified" because a
+generic verifier says "returned without raising"; the
+`confirm_pending_confirmation` branch returned `_execute_tool_raw` directly, so
+the one action that needed the user's approval (delete / send / overwrite) was
+the one action never postcondition-checked; `file_controller(action=
+"organize_desktop")` matched no safety rule and ran at LOW, bulk-moving the
+Desktop with no confirmation.
+
+**Changed:**
+- `core/completion_contract.py` (new): one judgement for "can this success be
+  claimed" — `proven` (evidence-based verifier), `informational` (the result IS
+  the answer), `unverified`, `failed`. `annotate()` writes
+  `result.data["completion"]`; it never changes `success` and never raises. A
+  `generic` verifier is explicitly **not** evidence. `is_unconfirmed()` reads
+  only the tag, so any `ToolResult` built outside dispatch keeps today's
+  behaviour exactly.
+- `app/era_live/tool_dispatch.py`: new module-level `finalize_tool_result()`
+  (convert → verify → tag → log). The ordinary path uses it. The confirmed
+  branch now records `(pending.tool, stored_params)` in `_confirmed_action`,
+  and `_execute_tool_result_inner` finalizes under the **real** tool name —
+  before, `verify_action_result` looked up a verifier for
+  `"confirm_pending_confirmation"`, found none, and reported an unverified
+  success. Module-level on purpose: the repo's duck-typed test doubles bind
+  individual mixin methods and would otherwise need a new attribute.
+- `core/main_tool_bridge.py`: the FunctionResponse carries `completion` and, for
+  an unverified side effect, `completion_instruction` ("NOT CONFIRMED … do not
+  say it worked"). This is the code half of the prompt rule at
+  `core/prompt.txt:45`/`53`.
+- `app/era_live/speak_once.py`: `spoken_outcome()` appends "— though I couldn't
+  confirm it took effect." to an unconfirmed success. Proven and untagged
+  results are unchanged (pinned).
+- `core/safety_guard.py`: `_KNOWN_ACTIONS` for `file_controller`; an action
+  outside the declared vocabulary is now MEDIUM + confirmation ("failing
+  closed"). `desktop_control` already sends unknown actions to the HIGH planner
+  rule, `vault_bridge` already BLOCKEDs, and `gmail_control` is classified per
+  action — so those are deliberately not duplicated.
+
+**Verified:** `tools/test_sprint1_evidence_gate.py` (16 new) + the affected
+confirmation/hotkey/recovery/telegram suites (**238 passed**).
+`era_gate.py --changed` on the five files: **GATE PASSED, 2,959 passed**,
+ruff/format/lint/manifest/doctor green (113.3 s). Manifest regenerated: 446
+modules, 60 tools.
+
+**NOT proven:** live. Era was running (PID 23724) on the previous code, so a
+restart is owed. The full `pytest tools/ --all` was **not** run (the suite
+expects Era stopped). No live session has yet seen the NOT CONFIRMED instruction
+change what Era says. The generic verifier still sets `verified=True` for
+`code_helper`/`dev_agent`/`screen_process`/`reminder`/`youtube_video`/
+`desktop_control`/`flight_finder`/`game_updater`; the contract downgrades it,
+but the verifier itself is not removed yet (next slice).
+
+**Also recorded:** `docs/era-enhancement/GEMINI_SESSION_STABILITY.md` — the
+measured cause of the 1008 churn (120 s client inactivity while muted/standby:
+246 of 255 closes, `conn_age_s` 119.8–120.0), the five cheapest wins, and the
+transport/brain split. No Gemini code changed.
+
+### 2026-11-11 · Codex · Media/HUD contract repair and live negative-case evidence
+
+**Root causes:** HUD feature invented dispatch/type payload while core engine only exported apply; permissive fake-dispatch tests passed. YouTube navigation/HTTP scrape claimed Playing without advancing-video proof. Spotify stale model query could override explicit correction; native search blindly retried uncertain clicks and accepted partial title matches. Crew prompts lacked source-to-pipeline verification requirements.
+
+**Changed:** core/visual_engine.py canonical panel catalog/action; features/hud_panel_visibility.py real apply default, parser, fail on absent success evidence; core/autopilot.py and core/self_healing_router.py route HUD requests; app/era_live/tool_dispatch.py uses complete accumulated transcript and rejects non-object visual commands; app/tool_declarations.py and docs/MODEL_COMMANDS.md document real payload. ui_src/src/lib/views.ts/transport.ts handle drawer visibility; ui/dist rebuilt after backup. core/personal_media.py preserves named titles/corrections. actions/youtube_video.py uses DOM results, same-page play and progressing-video readback; radio parameters stripped from organic video targets. actions/spotify_control.py/actions/spotify_ui.py stop blind retries/weak partial matching; utils/media_match.py supports conservative delimited Latin spelling variants. Optional core/spotify_api.py adds exact search/URI readback; **owner clarified Spotify uses desktop NO API KEY: native path remains default, OAuth not required**. core/live_app_state.py/core/action_verifiers.py preserve stronger provider identity evidence. core/task_lessons.py records bounded diagnostic cases and retires a failed fix on first miss; crew role prompts require RCA, connected tests and honest deployment status.
+
+**Verification:** combined affected suites 354 passed before last spelling/filter refinements; subsequent focused runs 74 and 49 passed (overlap, not additive). TypeScript, UI build, Node HUD navigation and scoped Ruff passed. Tool golden and manifest regenerated. Actual Laura/Drew/Cody/Nabar calls saved in runtime/crew_reliability*_20261111.json: Drew confirmed real contract and identified additional gaps corrected here. Laura handoff exhausted steps; Cody/Nabar hit provider limits and fell back to Claude with unrelated staged-file claims. Those are NOT independent acceptance proof.
+
+**Live negative test:** desktop Spotify query `Velvet Comet Espresso 7391` returned no matching accessibility result. Windows metadata before/after was the same track; no substitute was played. Evidence runtime/spotify_nonexistent_20261111.json.
+
+**NOT proven / still failing:** live positive `Sabr El Rijal` search on Spotify reports no matching visible accessibility result although full tree includes `Saber Elrjel | صبر الرجال` (visibility/selection boundary still needs investigation). YouTube still returns VideoSelectionRequired after DOM search; runtime/youtube_reliability_20261111.json. No success claimed. No Era restart or fresh microphone-to-live-action test performed. HUD frontend rendering after restart/reload and sustained playback remain owed. No commit; preserve prior dirty work.
+
+
+### 2026-11-10 · Era Fabric F3: declared fallback pathways (`config/fabric/pathways.yaml`)
+
+**Asked:** "next" after F1, with Karim's §12 answers: self-review = Claude via `claude_cli`; disclose a fallback only when quality differs; do not commit yet.
+
+**Built (behind `ERA_FABRIC`; `=0` keeps today's paths):**
+- `config/fabric/pathways.yaml` + `core/fabric/pathways.py`. The loader refuses the whole file if a fallback would widen rights, the last step isn't deterministic, a fail-closed component appears, or a provider is repeated. The runner skips OPEN breakers at 0 s and stops at any terminal fault (Denied/NeedsConfirmation/Cancelled), so a gate is never routed around. Cancellation propagates. Each hop is a `task.step` event and a TaskContext step.
+- **review_change** (`crew/review_pathway.py`; only crew asks whose context carries a staged dev job): crew (with F1's Hermes→local fallback) → Claude via `claude_cli` (read-only text review, budget-checked, **refused under pytest**) → a deterministic verifier summary. A Claude answer opens with "The crew was unreachable, so I reviewed it with Claude." A held review (ReviewPaused / ConfirmationRequired) never reaches Claude.
+- **web_search**: the same Gemini → DDG → honest-empty chain, now with breakers. After 3 quota failures Gemini is skipped instead of costing time on every search. The old chain is kept as `_legacy_search` for `ERA_FABRIC=0` or an unusable yaml.
+- **speak / voice_brain**: declared `wired: existing` and pinned to the code that already does this. Not re-routed (live voice hot paths).
+
+**Also changed:** `tools/test_fabric_context.py::test_the_crew_is_handed_the_staged_change` now expects the pathway hop `("crew","ok")` before `("crew:cody","ok")`. That is the intended new step; the assertion's intent is unchanged.
+
+**Verified:** `tools/test_fabric_chaos.py` (34). Mutation-checked: allowing an alternative after a gate fails 6 tests; disabling the breaker skip fails 9 (F1 + chaos). Fabric, crew, Hermes, web_search, toolspec and manifest suites: 741 passed after the F2 assertion update. Manifest regenerated (440 modules). Full `pytest tools/`: **8,723 passed, 4 skipped, 1 failed** (16:37). The failure was the manifest freshness guard, fixed by regenerating after the last test edit; `test_era_manifest.py` now passes (8). **Not verified:** live. After a restart: stage a change and ask "have Cody review the change before I approve" with Hermes stopped **and** the in-process model failing. You should hear the Claude review with its opening clause, and `logs/fabric/events-<today>.jsonl` should show `task.step` crew fault → llm.claude ok. This costs one Claude CLI call (about $0.06–0.6).
+
+### 2026-11-10 · Era Fabric F1: health registry + circuit breakers (`core/fabric/health.py`)
+
+**Asked:** build F1 of `docs/era-enhancement/ERA_FABRIC_DESIGN.md`: a health registry with breakers fed by the §5.2 signals and the F0 events, a HUD panel, `capability_check` reading it. Acceptance: Hermes refused → a crew ask answers in < 1 s in-process.
+
+**Built (behind `ERA_FABRIC`; `=0` is exactly yesterday's behaviour):**
+- `core/fabric/health.py`: one breaker per component. 3 health faults (Unavailable/Timeout/Exhausted/EmptyResult) in 2 min → OPEN. OPEN is skipped by `allow()` with no timeout paid. After 60 s (OmniRoute 120 s; Exhausted: the quota's own reset) ONE probe goes through, and its result closes or re-opens the breaker. Denied/NeedsConfirmation/Cancelled/NotFound/BadInput never trip one. Transitions are `health.*` events. Thresholds: the §12 proposal, **confirmed by Karim 2026-11-10** (in `POLICY`).
+- Fed by the F0 events (`tool.result`, `crew.step`, `crew.result`; `install()` at startup in `main.py`, next to the crew warm-up) and one `health.note()` each in `quota_failover._latch`, `LiveHealth.note_reply/note_upstream_error`, `tts_router.stream` (Fish), the `vault_bridge` lock-busy branch, and OmniRoute `try_first`. Not fed yet: Kokoro, browser CDP.
+- **Skipping, only where a fallback already existed:** (1) `crew/fallback.py`. If the Hermes breaker is OPEN, Hermes is not called. If Hermes refuses before the turn (`TransportDown`/`MissingCredential`), the same turn runs in-process with the same BotSpecs, disclosed in one clause plus `data.provenance`. A mid-turn Hermes failure is not re-run, and neither is a terminal fault. (2) OmniRoute `try_first`: if OPEN, `claude_cli` goes straight to the subscription accounts.
+- `capability_check`: `summary()`/`check()` append a LIVE HEALTH paragraph only when something is down. A healthy answer is unchanged, and that is pinned.
+- HUD: Diagnostics drawer → **COMPONENT HEALTH** (`/api/diagnostics` → `fabricHealth`). `ui/dist` backed up to `.backups/ui-dist-20261110-fabric-f1/` before the rebuild.
+
+**Cost, stated:** until the breaker opens, a refused ask still pays Hermes' probe retries (~1.2 s) before falling back. From the 4th ask in 2 min, it pays 0 s.
+
+**Verified:** `tools/test_fabric_f1.py` (37), incl. the acceptance (breaker open → no request to the gateway, < 1 s) and four gate kinds never re-run. 31 neighbouring suites: 1,146 passed. tsc clean, HUD built. Manifest regenerated (438 modules). Full `pytest tools/`: **8,688 passed, 4 skipped, 0 failed** (16:10). `ruff check .` is clean. `ruff format --check` flags 2 files, both pre-existing and outside F1: `core/telegram_call_setup.py` and a code block in the design doc. **Not verified:** live. `ERA_CREW_TRANSPORT=hermes_agent` is set in HKCU, so this path is live after a restart. Live check: open Diagnostics → COMPONENT HEALTH; stop the Hermes gateway, ask the crew 4 times; the first 3 answer via the local loop with the disclosure, and the 4th answers without touching 8642. Judge with `python tools/era_observe.py --since last-start` and `logs/fabric/events-<today>.jsonl` (`crew.step` / `health.open`).
+
+### 2026-11-10 · Era Fabric F0: one fault language, a bulkhead, a typed event log (`core/fabric/`)
+
+**Asked:** build F0 of `docs/era-enhancement/ERA_FABRIC_DESIGN.md` after F2.
+
+**Built (no behaviour change; log-only):**
+- `faults.py`: the 12 fault kinds. Every crew `ERROR_TYPES` maps 1:1 (pinned). Other `error_type` names map by exact name, then suffix. Exceptions classify by class. An unclassified failure is `Internal`, never success. Denied, NeedsConfirmation and Cancelled are terminal: `make()` forces `alternative: False`, and every `BENIGN_ERROR_TYPES` gate classifies terminal (pinned).
+- `events.py`: closed topic set (`dev.rejected`/`dev.cancelled` added), written to `<log_dir>/fabric/events-YYYYMMDD.jsonl` before fan-out. Events are redacted at emit time and each subscriber is isolated. `bind_ctx()` carries the ctx_id, and `ERA_FABRIC=0` switches the bus off.
+- `boundary.py`: the §5.1 decorator for sync and async functions. `fail_mode` has no default. `long=True` acks now and emits the result event later. Internal faults go to `log_crash` (what self_heal reads). KeyboardInterrupt/SystemExit and an asyncio task's own cancellation are recorded and then re-raised. **It wraps no live call site yet.** A sync function cannot be pre-empted, so `timeout_s` is only measured for it.
+- Live emitters: every Era tool call → `tool.result` (in `core/task_trace`, next to `_learn`); crew ask → `crew.asked` + `crew.result` on its ctx; Development → `dev.proposed` + its end state. Nothing subscribes in production yet.
+
+**Verified:** `tools/test_fabric_f0.py` (58) + F2 (31). Neighbouring and task_trace-using suites: 828 passed. Full `pytest tools/`: **8,649 passed, 4 skipped, 0 failed**. Manifest regenerated (436 modules). **Not verified:** live. After a restart, `logs/fabric/events-<today>.jsonl` should gain one `tool.result` line per tool call. Next: F1 health registry + breakers fed by these events.
+
+### 2026-11-09 · Era Fabric F2: the crew is handed what a task is ABOUT (`core/fabric/context.py`)
+
+**Asked:** build F2 of `docs/era-enhancement/ERA_FABRIC_DESIGN.md` first (started 2026-11-06 on another account, which stopped mid-way; finished here).
+
+**Bug it fixes:** asked to review staged change `e46dc`, the crew answered that the change was "missing", and Era said she "cannot generate the content of that change". The ask carried only a sentence.
+
+**Built:**
+- `TaskContext` + `ArtifactRef` (`dev_job` / `diag_report` / `file`), persisted append-only to `<log_dir>/fabric/ctx-YYYYMMDD.jsonl`.
+- Crew `run_tool(..., user_text=)` finds artifacts in the owner's words + task and opens one context per ask. A dev-id prefix needs 5+ hex with a digit and a letter. "The change" with no id implies the newest live candidate, flagged implicit. Credentials and dotfiles are refused.
+- The bot's prompt gets an ARTIFACTS block that names the capability reading each one, or says honestly that the bot lacks it. Labels are fenced, and raw artifacts never land in CONTEXT. Hermes inherits this through the same `_user()`, and handoffs pass it to the child bot.
+- `development.propose` opens the job's context (`ctx_id` stored on the job). `report_finished` adds the end state as a step on that same context.
+- `python scripts/task_log.py --ctx <id>` prints one context with its artifacts and steps.
+- Every fabric call is wrapped: a fabric failure leaves the crew ask and the dev job exactly as before.
+
+**Deferred (recorded in design §3.5):** re-keying `task_lessons` by intent moves to F4, because it changes what Era learns. Big tool outputs as artifacts also move to F4. `deadline`/`cancel_token` go with F0 `boundary`.
+
+**Also fixed:** `tools/test_crew_background_honesty.py` stubbed `run_tool(params)` without keyword args. After F2 every stub raised `TypeError`. `test_a_crashing_crew_still_reports_a_failure` had been passing for that reason rather than for its own crash. Manifest regenerated for the new package.
+
+**Verified:** `tools/test_fabric_context.py` (31 tests). Development, report-outbox, crew, Hermes, toolspec, codemode, workbench, self-heal and task_lessons suites: 669 passed. Full `pytest tools/`: 8,590 passed, 4 skipped, 1 failed (the manifest freshness guard, fixed by regenerating; it now passes). **Not verified:** live. After a restart, stage a change and say "have Cody review the change before I approve". Cody should read it via `development.read`, and `task_log.py --ctx <ctx_id from the crew result>` should show the step.
+
+### 2026-11-05 · Era learns from her own failed tasks (`core/task_lessons.py`)
+
+**Asked:** when a task fails, find out why and do it right next time, without being told.
+
+**Gap:** self-heal fixes crashes in her code, and self_learning turns spoken corrections into rules. A call that failed because she picked the wrong tool, action or arguments taught her nothing. 26 of 137 tool calls failed on 2026-11-05.
+
+**Built:** every Era `tool` line written by `core/task_trace.trace` also goes to `task_lessons.observe`. A failure gets a cause from structured fields only. If a different approach then succeeds within 180 s on a related request, that pair becomes a lesson on trial. It is confirmed when the fix works again on a genuinely similar request (same tool) or when the failure-then-switch happens again (another tool). It is retired after 2 misses. A failure repeated 3 times with no recovery becomes a warning. Lessons are used twice: `_attach_learned_fix` adds a known fix to a failed tool result, so she retries correctly in the same turn, and `format_lessons_for_prompt` goes into the session prompt after self_learning. Store: `memory/task_lessons.json`, seeded from all `logs/task_trace-*.jsonl` (6,088 calls, giving 3 proven, 42 on trial and 3 retired).
+
+**Rules the real-trace replay forced (each has a test):** `ConfirmationBusy` and any `Confirmation*` or `Approval*` error is a gate, not a failure. Consent actions (approve, confirm, waive, reject) are excluded on every tool: the replay would have taught "run_now failed, approve worked". Safety, self-edit and lifecycle tools are excluded. A HIGH-risk call is never stored as a fix. A different tool counts as the fix only for the same request (3+ words, similarity 0.6 or more), and it is offered only after it recurs. Result text never enters a lesson, only a diagnosis category. Long or structured argument values are reduced to their key.
+
+**Security review (security-reviewer agent), all 10 findings fixed, each with a test:**
+- Argument values never enter a lesson: only the tool, the action name and the argument key names.
+- Action and key names must be identifiers, otherwise they become `?`.
+- A fix must re-classify as LOW with no confirmation under `classify_action` without waivers. MEDIUM click, close and move do not qualify, and code runners are never a fix.
+- Refusal-style error types are ignored: `*Refused`, `*Required`, `*Busy`, `*Abort*`, `Tainted*`, `*Expired`, `*Mismatch`.
+- No hint is attached to a held or refused call.
+- Only proven lessons and warnings enter the prompt, under an "advisory only" header.
+- `observe` runs on a background worker queue, so `trace` only enqueues.
+- A plain success writes nothing, and writes use a plain atomic replace.
+- Malformed store rows are dropped.
+- The routed tool is paired with the routed args.
+
+The store was rebuilt after the schema change: 3 proven, 38 on trial, 3 retired. **Verified:** `tools/test_task_lessons.py` (49), full `pytest tools/`. **Not verified:** a live failure then recovery producing a hint in a voice session; restart owed.
+
+### 2026-11-05 · Floating icon: returns on workspace close, magnet, active-state buttons
+
+**Cause:** the launcher quit after 3 slow polls, i.e. 3 s timeouts while Era was busy (`logs/launcher.log` 15:48, 15:52), and nothing restarted it on close. **Changed:** timeouts no longer count toward quitting. `HudServer._restore_launcher_after_close` shows the icon again 4 s after the last HUD websocket closes, and restarts the launcher if it had died. Drag-release snaps the icon to the nearest screen edge (`floating_magnet`, default on), and its position is kept in `runtime/floating_launcher_pos.json`. Tray Show/Hide are a checked radio pair, with a new "Magnet To Screen Edge" toggle. The HUD buttons carry `aria-pressed` with a filled ✓ state. `conftest.py` sets `ERA_NO_BROWSER=1`, so a test socket can never spawn the real launcher. **Verified:** launcher and HUD suites, full gate 8463 passed. **Not verified:** in the real app; restart owed.
+
+### 2026-11-05 · Third live web_api test: she got the list and still did not retry
+
+**Evidence:** `logs/task_trace-20261105.jsonl` 15:42:38: `op: rating` again, list delivered, no second call. `calls.jsonl` has no new entry. `core/prompt.txt:91` says "If a tool fails, report the failure... Do not loop", so a failed result that says retry contradicts her rules. The transcript and voice restart were right this time ("Reboot Era One", 15:41:39).
+
+**Changed:** `_recover_guessed_operation` in `actions/api_anything.py`: one value plus exactly one read-only search with one required parameter runs that search through the same dry-run check; anything less clear returns the list as `success: True` starting "No answer yet"; declaration carries a Goodreads example.
+
+**Verified:** `tools/test_api_anything.py`, `era_gate`, and the logged call replayed through the real CLI and result path. **Not verified:** a voice call after a reboot.
+
+**Noted, not changed:** 15:39:55 `engine.gemini.unresponsive` kind `deaf`: speech with no transcript for 31 s. 15:42:03: right after the restart the model called `shutdown_era {relaunch}` again with no user text; the grounding check refused it, which is what stopped a restart loop.
+
+### 2026-11-05 · "reboot Era One": she said "Restarting" and nothing happened
+
+**Evidence:** `logs/task_trace-20261105.jsonl` 14:51:07, 14:51:25, 14:52:11, 15:10:41: `shutdown_era {relaunch: true}` refused with "nobody asked". Heard: "Tributi erawan", "Tribut i rawan", "Tribute era one", typed "rebot era one". `era_lifecycle.jsonl` has no `relaunch.requested` for them; the 14:52:27 restart came from the HUD.
+
+**Cause:** the model understood each order, but `_ungrounded_state_change` judges the separate, worse transcript, and none of those words matched. The refusal then told her "Say nothing", which left an already spoken "Restarting" standing.
+
+**Changed:** `is_reboot_command` accepts those mishearings, whole utterance only; the shutdown grounding check and `divert_era_reboot` use it, so a plain `shutdown_era` on those words restarts instead of leaving Era down; a refused restart with real speech now tells her to correct herself.
+
+**Verified:** `tools/test_era_relaunch.py`, `tools/test_state_tool_grounding.py`, `era_gate`. **Not verified:** a live voice restart. Other mishearings will still be refused, but she should now say so.
+
+### 2026-11-05 · Second live web_api test: no prompt, but the answer could never reach Era
+
+**Evidence:** `logs/era.log` lines 1367–1372, 13:53 UTC. The prefix fix worked (LOW, no confirmation). She sent the invented op `rating` again and got "Retry with a name from available_operations", then made no second call.
+
+**Cause:** `tool_result_to_response_payload` sends the model `message`, plus `data` only when it is under 1000 characters; `ToolResult.from_any` turns a text `data` into nothing. So the list never arrived, and a correct call would have reached her as "Done." Also, `era_workbench`'s 1.5 s grace would have detached any 2 s search, and detached results are spoken verbatim as a first sentence: fence text. The earlier tests called `run()` directly, so they could not see any of this.
+
+**Changed:** `actions/api_anything.py` puts answers and failure detail in `message` and lists real operations compactly; `_WEB_API_GRACE_S = 8.0` for web_api; `spoken_outcome` never reads fenced text aloud. New tests go through `ToolResult.from_any` and `tool_result_to_response_payload`, the real path.
+
+**Not verified:** a voice call after a reboot. **Same limit may affect other workbench capabilities:** any result whose extra keys total 1000+ characters is dropped for the model, REA `evidence` included. Read from the code, not tested live, not changed here.
+
+### 2026-11-05 · First live web_api test: ten "yes" answers and no answer
+
+**Evidence:** `logs/era.log` 13:37–13:41 UTC, `logs/task_trace-20261105.jsonl`. Every call was `era_workbench {capability: web_api, action: "web_api/site_call", arguments: {site: goodreads, op: rating}}`. No request reached Goodreads (`calls.jsonl` has no new entries).
+
+**Cause:** (1) the model prefixes the action with the capability, so the gate saw an unknown action, classified it HIGH and asked, then `build_command` refused the name after each "yes". (2) It skipped `site_search` and invented the op `rating`, which would have failed next anyway. (3) The tests only ever used the correct name, so neither showed up before a live run.
+
+**Changed:** `workbench_action()` in `core/safety_guard.py` removes an exact capability prefix, shared by the gate and `era_workbench` so the judged name is the name that runs; a wrong op name returns the real list in `available_operations`; declaration and prompt say to use the bare action and never guess an op.
+
+**Also seen, no change needed:** the model tried to grant itself waivers from "yes" (`manage_preference waive_high_risk_confirmation`, once with category `close`). The grounding check refused them; `list_risk_waivers()` is empty afterwards.
+
+**Verified:** the logged call replayed through the real gate and CLI, new tests in `tools/test_api_anything.py`, `era_gate`. **Not verified:** a voice call after a reboot; the prompt change may or may not stop the guessing, but a guess now recovers in one retry.
+
+### 2026-11-05 · Protocol Zero "removed" era_workbench, and Era said the web tool was gone
+
+**Evidence:** Protocol Zero's backup `runtime/protocol_zero/backups/prompt_20261105_142245_475446.txt` against the live prompt: the only tool line it dropped was `- era_workbench`. The web_api rules were never touched. No `era_workbench` call appears in the 2026-11-05 trace after the launch.
+
+**Cause:** three things, the first from the web_api work. (1) The new prompt rule named `era_workbench`; `entries_for` treats a named tool as hand-documented, and its `action` has no enum to check, so the whole index line left. (2) The report said "removed 1 (era_workbench)", and Era told the user a tool was removed and invented the reason, which was the opposite of the truth. (3) `capability_check` cuts each description at 140 characters, which for era_workbench only ever shows Office files, so asked about reading websites she could not see the answer.
+
+**Changed:** hand-written `EXTRA CAPABILITIES` line in `core/prompt.txt` listing every capability; `SyncReport.covered` and a summary that separates "still fully available" from tools that no longer exist; `_relevant_summary` in `core/capability_index.py` adds the matching sentence, and the full list names each capability.
+
+**Verified:** new tests in `tools/test_protocol_zero.py`, `test_capability_index.py`, `test_api_anything.py`; `check_drift` reports in sync with 60 tools; `era_gate` on the changed files. `ci.check("read data from websites with no official API")` now shows the web_api sentence.
+
+**Not verified:** Era has still made no live web_api call. Reboot owed to load the prompt and report changes.
+
+### 2026-11-05 · Era can read websites through api-anything (`era_workbench` capability `web_api`)
+
+**Asked:** install github.com/goodnight000/api-anything and make Era able to use it.
+
+**Installed:** `api-anything@0.3.2`, pinned, in `~/.era/tools/api-anything` (`tools/install_era_capabilities.ps1`). `setup` was NOT run, so no other agent's config was touched. Era's data folder is `~/.era/tools/api-anything/home`, with catalog sharing forced off.
+
+**Changed:** new `actions/api_anything.py`; `web_api` branch in `actions/era_workbench.py`; `core/safety_guard.py` (five reads LOW, `site_learn` MEDIUM with a confirmation naming the host); declaration, golden file, and a routing rule plus fence line in `core/prompt.txt`.
+
+**Security review changed the design.** The first version trusted the package's `readOnly` flag and address guard. The review showed a learned op has no address guard (a redirect could save an op pointing at Era's CDP port 9222), CLI `pull` drops the package's agent protections, and Playwright runs Chrome unsandboxed. So: every call is dry-run first and only a public GET/HEAD is sent; `site_pull` removed (`call` auto-pulls with the agent mark); a learn that lands somewhere private is rolled back and returns nothing; the site name comes from the URL's host, so a learn cannot replace `goodreads`; the wrapper patches `dist/browser.js` to turn the sandbox on and refuses to run if the patch no longer applies; child env is an allowlist; captures are cleared after each learn.
+
+**Verified:** `tools/test_api_anything.py` (79 tests), `era_gate` passed on the changed files. Live through `era_workbench`, sandbox on: Goodreads search, Google Flights TUN→CDG, a Gutenberg `site_learn` (12.5 s); `site_pull` and the Goodreads POST `getReviews` refused.
+
+**Not verified:** no call has come from the live voice model yet; Era needs a reboot to load the declaration and prompt. The review was not repeated after the fixes.
+
+**Known limits:** POST reads are refused (6 of 107 bundled ops, including Goodreads reviews). No signed-in sites. A learned op's public URL can still redirect to a private address at call time, and DNS can rebind, which the host confirmation only partly covers. `site_search` text goes to the public catalog, and `site_learn` sends the domain there, even with sharing off.
+
+### 2026-11-04 · Lock screen said "done" and never locked
+
+**Evidence:** `logs/task_trace-20261104.jsonl`: 19:22:02 and 19:24:41 `computer_settings {"action": "lock_screen"}` → `Done: lock_screen.`, `VERIFIED`, 66–140 ms. 19:26:24, after Karim said to press Windows+L, `computer_control {"action": "hotkey", "keys": "win+l"}` → `Hotkey: win+l`, `VERIFIED`. Karim reports the PC stayed unlocked. No action-name reroute: the call reached the right function. `DisableLockWorkstation` is absent in HKCU and HKLM, so no policy blocks locking.
+
+**Cause:** both paths ended in `pyautogui.hotkey("win", "l")`. Injected Win+L raises nothing and did not lock. `lock_screen()` returned None, so `computer_settings` answered its generic `Done: {action}.`, and the message-only verifier passed it because nothing looked at the session. That the injection itself is what Windows ignores is inferred from the trace plus the absent policy; it was not re-fired to test it.
+
+**Changed:** new `core/workstation_lock.py`: `lock_workstation()` calls `LockWorkStation`, then polls the session flag (`WTSQuerySessionInformationW` / `WTSSessionInfoEx`) for up to 5 s, because a nonzero return only means the request was accepted. Refused, never locked, and unreadable state all return messages that `looks_like_failure` classifies as failures. `lock_screen()` and both hotkey paths (`computer_control._hotkey`, the `computer_settings` hotkey branch) now use it for Win+L in any spelling. Other chords still go to the keyboard. Tool declarations unchanged, so no golden regeneration. Manifest regenerated.
+
+**Verified:** `tools/test_workstation_lock.py` (17 tests; the lock call and flag are faked, so nothing locks) covers the action and hotkey paths through the real classifier and verifier. **Live:** Karim restarted Era at 19:34 and said "Lock the screen" at 19:35:24 and 19:36:11; both traces read `Screen locked. Windows confirms the session is locked.`, `VERIFIED`, about 150 ms. `session_is_locked()` read False unlocked and True while locked afterwards.
+
+**Noted, not changed:** at 19:22:02 the trace's user text was "Can you look my my screen?" and the model picked `lock_screen`. That was harmless while the lock did nothing; a mishearing like it will now really lock the PC.
+
+### 2026-11-04 · Hotkeys send the keys asked for, or say they could not
+
+**Asked:** Era should use hotkeys correctly, on request and on its own when easy, e.g. screen recording.
+
+**Found:** (1) pyautogui silently drops names it has no key for: `control+c` pressed a bare `c`, `windows+r` typed `r`, and an empty hotkey pressed nothing, all reported as success. `command` and `option` are in `KEYBOARD_KEYS` but map to None on Windows, so the check reads the OS key map. (2) Mouse in a screen corner raises `FailSafeException`; `computer_settings` had nothing around it. (3) `_focus_window` always claimed success and pasted the title into PowerShell text. (4) The prompt taught no shortcuts. (5) Game Bar is not installed and `GameDVR_Enabled=0`, so `win+alt+r` cannot work here; Snipping Tool 11.2608 is, so recording is `win+shift+r`. That opens an area picker, so it does not start recording by itself.
+
+**Changed:** new `core/hotkeys.py` handles parsing, aliases, validation and sending for both tools. `computer_settings`' second, unreachable hotkey branch removed. `hotkey` takes `title`: focus first, re-read the foreground, and send nothing if the window did not come forward. Result reads `Hotkey sent: x` plus the focused window on a second line, so a window titled "Error" cannot read as failure. Title goes to PowerShell by environment variable. KEYBOARD SHORTCUTS rule added to `core/prompt.txt`; `keys`/`title` declarations updated, golden regenerated (only `computer_control` differs).
+
+**Safety (security-reviewer ran on the first version and found real gaps, all below fixed):** chord gate now covers both tools and all press/hotkey actions, compared as canonical sets. `ROUTINE_CHORDS` allowlist runs unconfirmed; everything else is MEDIUM and asks, because set equality alone had lost `win+r+a` (pyautogui presses in order, so Win+R fires first). Left/right and duplicate names alias to one key. `resolve_keys` is the single field reader for gate and senders, closing `{"value": "ctrl+c", "keys": "alt+f4"}`. `open_run`, `task_manager` and `close_app` (respects the close waiver) now confirm; lone `win` confirms.
+
+**Verified:** `tools/test_hotkeys.py` and `tools/test_workstation_lock.py`, 117 passed with a recording stand-in for the keyboard. `era_gate.py --changed ...` GATE PASSED (ruff, manifest, doctor, tests). Full suite not run.
+
+**Not verified:** no real chord has been confirmed delivered: the session was locked during the `RegisterHotKey` probe, and Windows does not deliver injected keys then. `win+shift+r` has not been fired. Avoid probing `win+shift+f23`: it is the Copilot key's chord.
+
+**Screen check (Karim chose "Skip for routine ones"):** `jit_vision_capture` delayed every hotkey about 5.0 s (19:26:19.7 to 19:26:24.7) waiting on a screen analysis that can time out. It now skips `computer_control` hotkeys whose chord is in `ROUTINE_CHORDS`, read through `resolve_keys` so a harmless field cannot hide the real chord. Lone keys keep the check, although `is_routine_chord` passes them, because Enter submits forms; so do off-list chords, `press` and `browser_control`. Cost: a routine chord no longer gets a fresh look, so `ctrl+v` or `ctrl+s` on a sensitive screen is not raised by vision unless a result under 7 s old is already stored. Delay removal not measured live. `tools/test_hotkeys.py` covers both call sites; `era_gate.py --changed` GATE PASSED.
+
+**Open, not changed:** remaining LOW paths an injected instruction could chain: `win+e` then `ctrl+l` then type then `enter`, `type` and `press enter` generally, and `close_tab`. Scheduled reminder "check on that hotkey command issue" (created 19:27) is still pending and can be dismissed.
+
+**Owed:** restart Era to load this, then a live "record my screen".
+
+### 2026-11-04 · Codex: guided Telegram setup and direct voice restart
+
+**User evidence:** Owner reports recovered Telegram calling works perfectly. Requested interface guidance and repair of first-request restart acknowledgement without action.
+
+**Changed:** New `core/telegram_setup_wizard.py` runs in the existing isolated Telegram environment; `app/hud/telegram_setup.py` exposes it through the existing authenticated/origin-checked HUD API. Separate DPAPI-protected draft, private stdin/stdout, safe status/errors, resumable code/password/owner steps, configured owner ID restoration, strict existing identity checks, ciphertext backup before explicit enable. Existing calling account remains unchanged until successful enable. New `ui_src/src/components/TelegramSetup.tsx` opens via Set up / Repair Telegram, uses a body portal to avoid card clipping, hides inputs, isolates keyboard focus, explains development credentials, and provides restart after activation. Updated CLI completion text and panel guidance. Built UI and regenerated manifest.
+
+**Restart findings/change:** Whole-utterance matcher previously accepted only reboot Era One. Voice backstop waited for model turn completion. `_shutdown_era` ignored `_arm_relaunch` failure and `_arm_relaunch` ignored flag-write failure. Broadened safe explicit phrases in `core/era_relaunch.py`; act on finished user transcription in `app/era_live/audio.py`, suppress late model speech after shutdown is scheduled. `app/era_live/tool_dispatch.py` keeps Era running and reports failure if restart cannot be armed; announces Restarting Era One now, reserves online wording for reconnect. Busy-job confirmation preserved. Exact historical first failed utterance was not recovered; these are verified code defects, not a proven reconstruction of that turn.
+
+**Verified:** 205 affected setup/coordinator/relaunch/reload/HUD/manifest tests passed. After final voice suppression and owner-ID fallback, 102 affected audio/relaunch/setup tests passed (overlap, not additive). Ruff checks passed; TypeScript and production build passed. Real browser with simulated setup service walked details → code → password → owner → enable → done; inspected screenshot and corrected clipping. Real isolated worker read-only status verified current account configured and no secrets returned. No live Telegram login or calls made by automated checks; working credentials untouched. Global diff check has unrelated existing whitespace in config/api_keys.example.json; scoped check clean.
+
+**Owed:** Restart running Era to load new backend/voice handling, verify first-request spoken restart and a real future login through the wizard. Browser tests used simulated Telegram responses. Overall full suite not run. Preview server/browser closed; screenshot at runtime/telegram-setup-preview.png. Approved design recorded in docs/superpowers/specs/2026-11-04-telegram-and-restart-design.md.
+
+
+### 2026-11-04 · Codex: Telegram recovery authenticated and calling enabled
+
+User completed wizard: Era account authenticated and owner bound. Ran existing daily-mode enable tool to restore requested calling; protected read-back confirms authenticated, owner_bound, calls_enabled and auto_receive_calls true, calling_enabled validation passes. No call placed. Restart to load settings and incoming/outgoing audio acceptance still owed. Wizard completion text about unfinished bridge is stale relative to implemented daily mode. Reboot wording fix remains deferred.
+
+
+### 2026-11-04 · Codex: restore Telegram owner verification reference
+
+Recovered login is readable and account_authenticated, with session saved; username fallback failed OWNER_UNVERIFIED because fresh setup lacked expected_owner_user_id. Restored that field from existing process TELEGRAM_CHAT_ID after positive/private ID and distinct-from-Era checks. Protected write/read verified, no secret values printed. Reopened local wizard; identity comparison remains enforced, calls disabled. User must finish username verification; live calling still owed.
+
+
+### 2026-11-04 · Codex: local Telegram login recovery opened
+
+User reports repair shop removed Windows password and requests sign-in guidance. Confirmed saved account still raises ProtectedConfigError. Renamed only that unreadable account.json to a timestamped account.before-recovery backup in the same private directory; no encrypted content discarded. Opened interactive PowerShell with isolated Telegram setup interpreter. User input, successful authentication, owner binding, activation and live calls remain pending. No call placed.
+
+
+### 2026-11-04 · Codex: Telegram protected-login failure diagnosis
+
+**Wrong:** Existing local Telegram account payload raises ProtectedConfigError; runtime swallowed it and displayed account needs setup.
+**Changed:** app/telegram_call_runtime.py preserves a safe credentials_unreadable diagnostic; core/telegram_call_coordinator.py and ui_src/src/components/TelegramCallPanel.tsx explain Windows cannot unlock saved sign-in. Rebuilt ui/dist.
+**Verified:** 78 coordinator tests passed; live create_service correctly reports credentials_unreadable with calls disabled; UI production build passed.
+**Not proven:** Credential recovery and live calling. Protected account file preserved. Restart required for backend diagnostic update. Owner must restore original Windows credential access or complete local reauthentication; no call placed.
+
+
+### 2026-10-27 · Codex: compact floating icon and working launcher exits/menu
+
+**What was wrong.** The 72px orb was too large. Its closeEvent deliberately
+ignored window-close events, but QApplication.quit also sends those events:
+Exit Launcher Only and automatic cleanup after backend shutdown were vetoed.
+Live evidence: backend/supervisor already absent, launcher PID 16488 remained
+and repeatedly logged connection failures. Hide also reset itself every poll
+when no workspace was open, and menu requests ignored accepted=false responses.
+
+**What changed.** `app/hud/floating_launcher.py` uses a proportional 48px orb;
+explicit exit stops timers, hides orb/tray/menu and calls QApplication.exit.
+Workspace-close restoration now checks for a previously open workspace, so a
+subsequent Hide remains respected. Menu work/polls run serially, successful
+settings changes update Qt immediately, checkbox values are captured on the Qt
+thread, and rejected actions report an error. Exit Launcher Only keeps the
+backend/workspace; Quit still uses the guarded backend shutdown route.
+Added actual Qt event-loop/menu subprocess tests in
+`tools/test_floating_launcher.py` and a no-workspace Hide regression in
+`tools/test_hud_launcher.py`. Regenerated `docs/MANIFEST.md`/runtime manifest.
+
+**Verified.** Targeted HUD gate tests: 167 passed. Final launcher, lifecycle,
+self-improvement reload and no-window suites: 86 passed (overlapping suites,
+not an additive unique count). Ruff lint/format and manifest generation passed.
+Qt tests exercise every menu action, click/drag, explicit exit, backend loss,
+confirmation cancellation and rejected requests with an isolated backend stub.
+Native Windows Qt menu test passed; 48px capture:
+`runtime/launcher-48px-native.png`. A real Chromium app on a separate QA profile
+opened, focused the same HWND, and closed via Close Workspace. Removed only
+the verified stale launcher PID 16488; preserved the already stopped backend.
+
+**Not yet proven.** Overall gate is NOT green: era_doctor reports unreadable
+API credentials (`ProtectedConfigError`), unrelated to these edits. No credential
+files were modified. Full production Quit/Restart with a connected voice engine
+remains owed after credential access is restored. Physical tray click and
+multi-monitor/DPI acceptance remain owed; no full-suite run claimed.
+
+### 2026-10-22 · Codex: animated app logo and reuse the existing HUD window
+
+**What was wrong.** Floating/tray launcher displayed an E placeholder. Clicking
+it opened another interface because `browser.open_hud` only checked existing
+windows when callers supplied a positive WebSocket client count; the tray did not.
+
+**What changed.** `app/hud/floating_launcher.py` now uses the real
+`assets/eraone.ico` for both floating and tray icons. The floating logo gently
+breathes with a cyan rotating highlight at 30 fps; its animation timer stops
+while hidden. Drag/right-click behavior remains. `app/hud/browser.py` always
+attempts focus/restore first, uses pointer-sized Windows HWND declarations, and
+serializes/coalesces rapid launch clicks during Chromium startup. New regression
+tests in `tools/test_hud_launcher.py` cover no client count, concurrent clicks
+and retry after the startup guard. Manifest regenerated.
+
+**Verified.** 25 launcher/HUD/no-window tests passed; Ruff lint and format passed.
+Restarted only the floating helper, leaving backend PID 20532 connected in standby.
+Real Windows smoke test captured differing animation frames, minimized existing
+HUD HWND 460288, double-clicked the icon, and verified the same single HWND was
+restored and foreground (no new interface). Screenshot:
+`runtime/era-animated-logo-a.png`. Tray shares the same corrected open callback
+and uses the app icon; a separate physical system-tray click is not claimed.
+
+**Not yet proven.** Long-duration resource use and multi-monitor/DPI placement
+need normal-use observation. No voice/session restart or other UI redesign.
+
+### 2026-10-22 · Codex: Brahma-inspired Workbench, Connect and floating launcher
+
+**Request and approach.** Owner authorized deep comparison and implementation,
+excluding Spotify MCP. Inspected Brahma commit
+`c8d9c0f8f1b14b67baf4c258a15be631793a7381` outside this repo. Its restrictive
+source license prevented a wholesale transplant; these are Era-native additions.
+Inventory/design: `docs/era-enhancement/BRAHMA_INTEGRATION_2026-10-20.md`.
+
+**What changed.** Added `era_workbench` to the live declaration/dispatcher and
+existing safety/background/cancellation paths (60 tools). New action modules:
+`office_architect`, `desktop_orchestrator`, `skill_crucible`, `reverse_inspect`,
+`rea_analysis`, `world_tools`; entry point `actions/era_workbench.py`. Office files
+are read back and never overwritten; skill generation uses existing staged
+development and final approval; process and Home Assistant changes stay gated.
+Added DPAPI-backed `core/empower_config.py`, guarded
+`app/hud/capability_controls.py`, separate opt-in `companion.py`, Qt
+`floating_launcher.py`, React `EmpowerSettings.tsx`, persisted visibility/startup
+wiring and rebuilt `ui/dist/index.html`. The phone listener does not expose HUD
+approval or its token. Explicit trusted-LAN HTTP limitation is shown.
+
+Added installers for openpyxl/pypdf/reportlab/pefile/qrcode and pinned REA 6.7.0,
+checksum-verified portable Ghidra 12.1.4/JDK 21/WABT 1.0.42 under `~/.era/tools`.
+Existing Word/PowerPoint/PyQt/UIA dependencies verified available. No global PATH,
+Java switch, Spotify MCP integration, or paid provider fallback was introduced.
+
+**Regressions fixed.** Renamed the new settings module to avoid the existing HUD
+API locator's filename ambiguity. Protocol Zero now considers lazy prompt-pack
+action coverage rather than copying those rules back into the main prompt;
+regression test covers missing-pack fallback and idempotence. Adapted the old
+background-loop fixture to the other agent's event-driven process monitor.
+Preserved existing `windows/state_sync.py`, its new tests, config example edits,
+handwritten prompt and unrelated dirty files.
+
+**Verified.** Full `era_gate.py --all`: **8,215 passed, 4 skipped**, all format,
+lint, manifest and doctor stages passed (doctor has one existing vault warning).
+Log: `runtime/brahma-integration-gate-final-20261021.log`. TypeScript and production
+UI build passed. Regression-fix suites: 118 passed. After explicit Ghidra provider
+selection and native timeout adjustment, capability suites: 65 passed; lint and
+format passed. Real JavaScript/WABT analysis evidence saved locally; direct
+Ghidra CLI recovered native entry pseudocode in 81 seconds. Native wrapper uses
+Ghidra explicitly and a 180-second budget (90 seconds for other modes).
+The final real wrapper smoke test also succeeded and retained native pseudocode
+evidence at `runtime/deliverables/rea-evidence-f3cc32d6bb0a.json`. Earlier bounded
+attempts timed out; native startup duration varies, so arbitrary large artifacts
+are not claimed to fit the budget.
+Isolated browser checks: invalid URL rejected, phone pairing, text/reply roundtrip,
+revocation and token removal passed at mobile viewport. Actual Qt icon show/hide
+passed on Windows. Screenshots: `runtime/brahma-services-qa.png`,
+`runtime/brahma-phone-qa.png`, `runtime/brahma-floating-icon-qa.png`.
+
+**Running state and limits.** Live backend PID 31676 initially loaded the additions;
+guarded empower/companion/capabilities routes return 200 and all nine dependency
+checks are available. A live launcher poll exposed unnecessary scheduled-task
+enumeration through `/api/settings`; added a dedicated guarded GET `/api/launcher`
+and a regression test proving polling never probes startup. Its HUD/no-window
+suite passed **46 tests**, lint/format passed, and the manifest was refreshed.
+Safely restarted with no active tasks (new PID 28736). The requested floating
+icon is visibly present (`runtime/era-live-floating-icon.png`); standby restored
+after restart and verified with model connected. No speech test requested. QA companion stopped
+and test device revoked. Physical iPhone, actual Office rendering/recalculation,
+Home Assistant hardware, live voice invocation and generated-skill activation
+remain acceptance work in TODO. Native iOS SMS/call/GPS, universal circuit tooling,
+3D globe, Discord/fitness/game integrations are not supplied. Usage and precise
+boundaries: `docs/era-enhancement/ERA_WORKBENCH_GUIDE.md`.
+
+**Final status recheck.** After the later user continuation, Era was intentionally
+stopped (`~/.era/era.stop` present, no supervisor/backend, no startup-error file).
+Preserved that shutdown choice. Earlier running-state/icon evidence above remains
+a completed smoke test, not a claim that Era is still running. Saved floating-icon
+and tray preferences load on the next normal launch.
 
 ### 2026-10-18 · Codex session: Chief of Staff requirement audit and proposed design
 

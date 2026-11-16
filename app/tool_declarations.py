@@ -7,6 +7,55 @@ so `from main import TOOL_DECLARATIONS` and `main.TOOL_DECLARATIONS` still work.
 
 TOOL_DECLARATIONS = [
     {
+        "name": "era_workbench",
+        "description": (
+            "Additional Era tools. capability=office: action docx/pdf takes title and sections [{heading,text,bullets,table}]; "
+            "xlsx takes sheets [{name,rows,charts:[{type:bar|line|pie,title,value_column:2}]}], cells may be {formula:'=SUM(B2:B5)'}; "
+            "pptx takes slides [{title,bullets,notes}] and optional accent RGB hex. Optional filename is a plain basename; "
+            "outputs go to the HUD-configured folder and never overwrite. pdf_merge takes paths; pdf_extract takes path and optional one-based pages. "
+            "capability=desktop: processes lists pid/create_time; suspend/resume require both, inspect_window lists windows or takes handle; "
+            "clipboard_read reads only on request; clipboard_write takes text. Existing window_control/computer_settings remain the main desktop controls. "
+            "capability=skills: catalog lists approved skills and staging jobs; forge takes snake_case name and goal, stages tests and requires final Development approval. "
+            "capability=reverse_engineering action=inspect takes target (source folder/file, PE binary, or web URL), static evidence only, never executes target code; "
+            "For deeper REA analysis use action javascript (Electron/ASAR), managed (.NET), wasm, artifact or decompile (also requires procedure name/address and configured native provider). "
+            "REA evidence is saved locally; unavailable providers report failure. Reconstruction uses autonomous_development with evidence. capability=geography: map takes latitude/longitude; distance also takes to_latitude/to_longitude; "
+            "iss and earthquakes fetch live public data. capability=smart_home: states or turn_on/turn_off/toggle with entity; requires Home Assistant configured in HUD. "
+            "capability=circuit action=guide takes board arduino_uno|esp32 and sensor dht11; template guidance, no physical verification. "
+            "capability=web_api reads data from websites with no official API over plain HTTP (Goodreads, Google Flights, Hacker News and many more), faster than driving a browser; public GET reads only, no sign-in, no posting or buying. "
+            "Find an operation with site_search (query: a site name or topic, never personal details), whose results list each operation's parameters, then site_call (site, op, args object, optional fields, max_chars, max_tier 1|2|3), for example site=goodreads, op=searchBooks, args={q: title}, whose results include avgRating. "
+            "site_operations takes site for notes on one already on this machine. site_result takes result_id for the rest of a cut answer; site_status takes optional site. "
+            "site_learn teaches a new site and asks the user first: url with {param} placeholders plus args, args2, args3, three real value objects with different values. "
+            "Use screen_process for actual vision. Phone pairing, provider credentials and floating icon are in HUD Settings. Arguments must be a JSON object encoded as a string."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "capability": {
+                    "type": "STRING",
+                    "enum": [
+                        "office",
+                        "desktop",
+                        "skills",
+                        "reverse_engineering",
+                        "geography",
+                        "smart_home",
+                        "circuit",
+                        "web_api",
+                    ],
+                },
+                "action": {
+                    "type": "STRING",
+                    "description": "The action name alone, such as site_call, never capability/action",
+                },
+                "arguments": {
+                    "type": "STRING",
+                    "description": "JSON object for the selected capability and action",
+                },
+            },
+            "required": ["capability", "action"],
+        },
+    },
+    {
         "name": "code_mode",
         "description": "Report CodeMode status or honor the user's enter/exit command. Natural coding requests enter through the deterministic input boundary. CodeMode retains the signed-in Claude subscription and offers Sonnet, Opus and Haiku selection by HUD or voice without changing account or billing. Changes are staged, verified and require the user's exact final approval.",
         "parameters": {
@@ -651,7 +700,7 @@ TOOL_DECLARATIONS = [
                 },
                 "screen": {
                     "type": "STRING",
-                    "description": "Target monitor for tab_to_monitor: a number ('2'), 'other', 'left', 'right', or 'primary'. Default 'other'.",
+                    "description": "Target monitor for tab_to_monitor: a number ('2'), 'other', 'left', 'right', or 'primary'. 'Screen one' means '1', never 'primary'. Default 'other'.",
                 },
                 "browser": {
                     "type": "STRING",
@@ -982,12 +1031,18 @@ TOOL_DECLARATIONS = [
                 "text": {"type": "STRING", "description": "Text to type or paste"},
                 "x": {"type": "INTEGER", "description": "X coordinate"},
                 "y": {"type": "INTEGER", "description": "Y coordinate"},
-                "keys": {"type": "STRING", "description": "Key combination e.g. 'ctrl+c'"},
+                "keys": {
+                    "type": "STRING",
+                    "description": "Key combination joined with +, e.g. 'ctrl+c' or 'win+shift+r'. Sent to the focused window.",
+                },
                 "key": {"type": "STRING", "description": "Single key e.g. 'enter'"},
                 "direction": {"type": "STRING", "description": "up | down | left | right"},
                 "amount": {"type": "INTEGER", "description": "Scroll amount (default: 3)"},
                 "seconds": {"type": "NUMBER", "description": "Seconds to wait"},
-                "title": {"type": "STRING", "description": "Window title for focus_window"},
+                "title": {
+                    "type": "STRING",
+                    "description": "Window title for focus_window. With hotkey: focus this window first, and send nothing if it cannot be focused.",
+                },
                 "description": {
                     "type": "STRING",
                     "description": "Element description for screen_find/screen_click",
@@ -1637,7 +1692,7 @@ TOOL_DECLARATIONS = [
                 },
                 "screen": {
                     "type": "STRING",
-                    "description": "Target monitor for move_to_monitor: a number ('2'), 'other', 'next', 'left', 'right', or 'primary'. Default 'other'.",
+                    "description": "Target monitor for move_to_monitor: a number ('2'), 'other', 'next', 'left', 'right', or 'primary'. 'Screen one' means '1', never 'primary'; use 'primary' only when the user says primary/main. Default 'other'.",
                 },
                 "title": {
                     "type": "STRING",
@@ -1885,6 +1940,11 @@ TOOL_DECLARATIONS = [
             "Also toggles autonomous memory saving, live: "
             "'stop saving things to memory without asking me' -> action='disable_auto_memory'; "
             "'you can save memories on your own again' -> action='enable_auto_memory'. "
+            "Also sets how long Era keeps listening for a bare follow-up: "
+            "'set the session time to 5 minutes' / 'set the session window to 90 seconds' -> "
+            "action='set_session_window', seconds=300; 'how long is the session?' -> "
+            "action='get_session_window'. The window defaults to 2 minutes and every exchange "
+            "restarts it. "
             "action='list' reads back everything stored. These preferences are applied "
             "automatically in every future session."
         ),
@@ -1897,8 +1957,14 @@ TOOL_DECLARATIONS = [
                         "One of: waive_close_confirmation, require_close_confirmation, "
                         "waive_file_creation_confirmation, require_file_creation_confirmation, "
                         "waive_high_risk_confirmation, require_high_risk_confirmation, "
-                        "add_rule, remove_rule, enable_auto_memory, disable_auto_memory, list."
+                        "add_rule, remove_rule, enable_auto_memory, disable_auto_memory, "
+                        "set_session_window, get_session_window, list."
                     ),
+                },
+                "seconds": {
+                    "type": "NUMBER",
+                    "description": "Session window length in seconds (10-3600) for "
+                    "set_session_window. Convert the user's phrase first: 2 minutes = 120.",
                 },
                 "app": {
                     "type": "STRING",
@@ -2057,14 +2123,35 @@ TOOL_DECLARATIONS = [
             "ONLY when the user says 'yes'/'confirm'/'go ahead' right after Protocol "
             "One reported staged fixes; it needs no relaunch. "
             "action=status gives the hive briefing: what Protocol One, Protocol Zero "
-            "and the background spies currently know, including open issues."
+            "and the background spies currently know, including open issues. "
+            "action=report READS the latest Protocol One report file (read-only, any "
+            "time): use it whenever the user asks what Protocol One found, what is "
+            "still broken, or what was fixed — never answer that from memory. It "
+            "states the report's age and whether code changed since; relay that, and "
+            "re-check a finding before acting on its file:line. "
+            "action=recent READS what Era's last tool calls REALLY did (read-only, any "
+            "time): the tool asked for versus the one that ran, and whether the effect "
+            "was CONFIRMED, NOT CONFIRMED or FAILED. Use it whenever the user asks "
+            "'did you do it?', says a task did not happen, or before you claim a past "
+            "action worked - never answer that from memory."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": "launch | confirm | status (default status)",
+                    "description": "launch | confirm | status | report | recent (default status)",
+                },
+                "limit": {
+                    "type": "INTEGER",
+                    "description": "recent only, optional: how many calls to list (default 8, max 25).",
+                },
+                "section": {
+                    "type": "STRING",
+                    "description": (
+                        "report only, optional: errors | risks | staged | applied | "
+                        "changes | accepted | noise. Omit for the whole report."
+                    ),
                 },
                 "tests": {
                     "type": "BOOLEAN",
@@ -2202,7 +2289,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "visual_engine",
-        "description": "Show Era One information on its HUD: for 'show me system telemetry', 'show active tasks', or other view requests use command JSON {action:focus,view:telemetry|activity|memory|context|schedule|diagnostics|tools|telegram|development|overview}. Views: development = staged changes from autonomous development awaiting the user's approval; tools = the tool list; diagnostics = health checks. Use the exact view the user names; never substitute a neighbour. Focus only navigates; never invent metric widgets for these requests. Also update the running HUD without restart: action upsert/remove/layout/reset; widget {id,kind:text|metric|progress|chart|button|field,label,value,series,binding:cpu_percent|ram_percent|development,action:{drawer:schedule|diagnostics|settings|capabilities|conversation}}; layout {theme:dark|light,density:compact|comfortable,columns:1..3,accent:#hex,left:bool,right:bool}. No HTML/scripts. Use action snapshot to read.",
+        "description": "Show Era One information on its HUD: for 'show me system telemetry', 'show active tasks', or other view requests use command JSON {action:focus,view:telemetry|activity|memory|context|schedule|diagnostics|tools|telegram|development|overview}. Views: development = staged changes from autonomous development awaiting the user's approval; tools = the tool list; diagnostics = health checks. Use the exact view the user names; never substitute a neighbour. Focus only navigates; never invent metric widgets for these requests. For hide/show built-in panels use command JSON {action:panel,panel_id:hud.diagnostics,visible:false}; supported IDs come from action panels. remove with id is only for custom scene widgets, never built-in panels. Also update the running HUD without restart: action upsert/remove/layout/reset; widget {id,kind:text|metric|progress|chart|button|field,label,value,series,binding:cpu_percent|ram_percent|development,action:{drawer:schedule|diagnostics|settings|capabilities|conversation}}; layout {theme:dark|light,density:compact|comfortable,columns:1..3,accent:#hex,left:bool,right:bool}. No HTML/scripts. Use action snapshot to read.",
         "parameters": {
             "type": "OBJECT",
             "properties": {"command": {"type": "STRING"}},

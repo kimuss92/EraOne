@@ -238,7 +238,7 @@ from app.era_live.report_pump import start_report_pump
 from app.era_live.session_runtime import live_model, managed_live_connection, stop_on_renewal
 from app.era_live.speech_out import SpeechOut
 from app.era_live.tool_batch import ToolBatchMixin
-from app.era_live.tool_dispatch import ToolDispatchMixin, _user_approved_pending
+from app.era_live.tool_dispatch import ToolDispatchMixin, _approves_pending, _user_approved_pending
 from app.reconnect import (  # noqa: F401  (re-export: preserves public + internal names)
     grow_cooldown,
     reconnect_acknowledgment_text,
@@ -298,7 +298,19 @@ def _build_live_health() -> LiveHealth:
         return LiveHealth()
 
 
-def _note_listening(era, what: str, interrupted: bool = False) -> None:
+def _speaking_for_internal_turn(era) -> bool:
+    """Is Era's current speech the reply to an internal request (a scheduled
+    report, a background result) rather than to the owner? PF-034."""
+    tracker = getattr(era, "_model_reply_ownership", None)
+    return bool(
+        tracker is not None
+        and tracker.active
+        and tracker.owner is None
+        and tracker.reason == "unowned_model_request"
+    )
+
+
+def _note_listening(era, what: str, interrupted: bool = False, internal: bool = False) -> None:
     """Feed core/attention.py. A listening hook must never break the speaking
     state or a typed command (a test engine has no _listening_state at all)."""
     try:
@@ -306,11 +318,42 @@ def _note_listening(era, what: str, interrupted: bool = False) -> None:
         if state is None:
             return
         if what == "finished":
-            state().era_finished_speaking(interrupted=interrupted)
+            state().era_finished_speaking(interrupted=interrupted, internal=internal)
         else:
             state().note_activity(explicit=True)  # typing to Era is a deliberate address
     except Exception as e:
         print(f"[ATTENTION] listening hook skipped: {type(e).__name__}: {e}")
+
+
+def _close_listening_session(era, network_failure: bool = False) -> None:
+    """Close the session; keep the microphone and the Live session warm.
+
+    The whole point of the one-mode model: silence is a WINDOW, not a
+    disconnected transport. The next "Era, ..." is heard by the same session,
+    so waking costs no reconnect. Module-level (like the other gate helpers) so
+    the duck-typed test doubles in tools/ can exercise it.
+
+    No spoken notice here: the model speaks the pinned "System offline." line
+    from the prompt, and a second sentence would be the double-speech bug this
+    file has fought before.
+    """
+    try:
+        era._listening_state().close_session()
+    except Exception as e:
+        print(f"[SESSION] could not close the listening session: {e}")
+    era._last_interaction_timestamp = time.time()
+    try:
+        # NOT EraState.STANDBY: that snapshot flag (session_manager.py:305) is
+        # what makes _send_realtime drop every frame as "standby without wake
+        # word" and input_safety_gate refuse typed orders (STANDBY_NO_WAKE).
+        # Reusing it here is what made "era standby" close the session and then
+        # ignore the next "Era, ..." — live 2026-11-11, 23:12-23:14.
+        era.session_manager.transition_to(EraState.ONLINE_IDLE, reason="session_closed")
+    except Exception as e:
+        print(f"[SESSION] state transition failed: {e}")
+    # The HUD says READY, not STANDBY: she is online, listening for her name.
+    era.ui.set_state("IDLE")
+    era.ui.write_log("SYS: Session closed — say 'Era' to reopen it.")
 
 
 class EraLive(
@@ -1210,6 +1253,81 @@ class EraLive(
         self._note_user_utterance(text)
         self._last_interaction_timestamp = time.time()
 
+        # ── Typed confirmation reply (yes/approve/confirm) to a pending action ──
+        # If there's a pending confirmation and the user types a confirmation reply,
+        # consume it immediately instead of sending to the model. This mirrors the
+        # voice path where _user_approved_pending checks _inflight_user_text, but
+        # for typed input we can short-circuit directly since we have the full text.
+        if self._pending_store.is_pending():
+            pending = self._pending_store.peek()
+            if pending is not None:
+                from app.era_live.tool_dispatch import _SCHED_APPROVE_COMMAND, _sched_refused
+
+                low = text.lower().strip()
+                # Check for affirmative confirmation reply
+                if _approves_pending(text):
+                    print(
+                        f"[CONFIRM] Typed confirmation reply detected: '{text}' -> consuming pending {pending.tool}"
+                    )
+                    confirmed = self._pending_store.confirm(
+                        pending.confirmation_id,
+                        allow_sole=True,
+                        expected_created_at=pending.created_at,
+                    )
+                    if confirmed is not None:
+                        if self._loop and self._loop.is_running():
+                            from google.genai import types
+
+                            submit_coroutine(
+                                self._execute_tool_result(
+                                    types.FunctionCall(
+                                        name=pending.tool,
+                                        args={
+                                            **pending.parameters,
+                                            "confirmed": True,
+                                            "confirmation_id": pending.confirmation_id,
+                                        },
+                                    )
+                                ),
+                                self._loop,
+                            )
+                        else:
+                            self.ui.write_log(
+                                "SYS: Cannot execute confirmation — session not ready."
+                            )
+                        return
+                    else:
+                        print(
+                            "[CONFIRM] Failed to consume pending confirmation (already consumed or expired)"
+                        )
+                # Check for negative/cancel reply
+                elif _sched_refused(low) and not _SCHED_APPROVE_COMMAND.search(low):
+                    # Negative reply without affirmative words = cancel
+                    print(
+                        f"[CONFIRM] Typed cancel reply detected: '{text}' -> cancelling pending {pending.tool}"
+                    )
+                    cancelled = self._pending_store.cancel(
+                        pending.confirmation_id,
+                        expected_created_at=pending.created_at,
+                    )
+                    if cancelled:
+                        self.ui.write_log("SYS: Action cancelled by user.")
+                        # Speak confirmation so user hears the cancel worked
+                        try:
+                            speak = getattr(self, "speak", None)
+                            if speak:
+                                speak("Action cancelled.")
+                        except Exception:
+                            pass
+                        if self._tg_reply_pending:
+                            self._tg_reply_pending = False
+                            _tg_notify("Cancelled.")
+                    else:
+                        print(
+                            "[CONFIRM] Failed to cancel pending confirmation (already consumed or expired)"
+                        )
+                    return
+
         # Typed input is real user speech for feedback purposes. Only the voice
         # path used to run this, so a standing rule TYPED into the command bar
         # ("minimize Spotify after use") was recorded nowhere and never survived
@@ -1308,17 +1426,20 @@ class EraLive(
         # behind "status says Off but Era still hears me". When the UI tells us the
         # state it wants, we obey it instead of toggling blindly.
         #
-        # The indicator shows the EFFECTIVE state (hard toggle AND not voice-muted,
-        # see core/mic_mute.py), so a click toggles that: turning the mic ON from
-        # the UI also lifts a voice mute ("stop listening"); turning it OFF is the
-        # hard-off, which also silences the local voice-unmute listener.
+        # 2026-11-11 (owner): the mic button is a MUTE, not a hard-off. Turning it
+        # off keeps local capture alive for the owner-verified voice-unmute
+        # listener, so "activate mic" can reopen it; a mute the owner asked for BY
+        # VOICE deliberately has no listener (see app/era_live/mic_mute.py).
         if active is None:
             target = not self.mic_effective_active()
         else:
             target = bool(active)
-        self._browser_mic_active = target
-        if target and self._mic_muted:
-            self.unmute_microphone("mic button", speak_ack=False)
+        self._browser_mic_active = True
+        if target:
+            if self._mic_muted:
+                self.unmute_microphone("mic button", speak_ack=False)
+        elif not self._mic_muted:
+            self.mute_microphone("ui", speak_ack=False)
         # Echo the authoritative backend state back so every client's indicator
         # matches reality, not its own local guess.
         self._broadcast_mic_state()
@@ -1421,6 +1542,8 @@ class EraLive(
             if changed:
                 # A fresh spoken turn: clear any stale interrupt and re-arm.
                 self._barge_in_requested = False
+                # Decided at speech START: the reply tracker resets at turn end.
+                self._speaking_internal = _speaking_for_internal_turn(self)
                 if det is not None:
                     det.note_speaking(True)
             self.ui.set_state("SPEAKING")
@@ -1432,8 +1555,12 @@ class EraLive(
                 # Echo hold + conversation window (core/attention.py). No hold
                 # after a barge-in: the user is already mid-sentence.
                 _note_listening(
-                    self, "finished", interrupted=bool(getattr(self, "_barge_in_requested", False))
+                    self,
+                    "finished",
+                    interrupted=bool(getattr(self, "_barge_in_requested", False)),
+                    internal=bool(getattr(self, "_speaking_internal", False)),
                 )
+                self._speaking_internal = False
             self.ui.set_state("LISTENING")
             self.session_manager.transition_to(EraState.LISTENING, reason="speaking_finished")
 
@@ -1947,6 +2074,16 @@ class EraLive(
             task.cancel()
 
     def enter_standby(self, network_failure: bool = False):
+        from core.session import standby_enabled
+
+        if not standby_enabled():
+            # ONE-MODE model (owner, 2026-11-11): standby mode is not in use
+            # while the listening session is being tested. "Standby" closes the
+            # conversation window; the ears stay warm, so the next "Era, ..." is
+            # answered without a wake delay. No mic teardown, no Vosk listener.
+            _close_listening_session(self, network_failure=network_failure)
+            return
+
         if self._standby_active or getattr(self, "_standby_entering", False):
             return
 
@@ -2363,19 +2500,37 @@ class EraLive(
                 # proxy fault (short-lived, no warning) — the two look identical
                 # in a bare error string and want opposite responses.
                 _leaves = self._flatten_exc(e)
+                # G0-4/G0-5 (app/era_live/session_stability.py): name the close
+                # and keep the owner's unanswered last words for one replay.
+                from app.era_live import session_stability as _stab
+
+                _age = round(time.time() - (self._conn_started_at or time.time()), 1)
+                _detail = str(_leaves[0])[:160] if _leaves else str(e)[:160]
+                _stash = getattr(self, "_utterance_stash", None)
+                _kept = (
+                    _stash.capture_on_drop(
+                        time.monotonic(), tools_in_flight=getattr(self, "_tools_in_flight", 0)
+                    )
+                    if _stash is not None
+                    else 0
+                )
                 log_event(
                     main_logger,
                     "engine.connection.closed",
                     "INFO",
                     conn_generation=self._conn_generation,
-                    conn_age_s=round(time.time() - (self._conn_started_at or time.time()), 1),
+                    conn_age_s=_age,
+                    conn_age_bucket=_stab.age_bucket(_age),
+                    close_kind=_stab.close_kind(_detail, _age, self._go_away_event.is_set()),
+                    keepalive_frames=getattr(self, "_keepalive_frames_sent", 0),
+                    continuity_frames_kept=_kept,
                     had_go_away=self._go_away_event.is_set(),
                     planned_renewal=self._renewal_deadline is not None,
                     has_checkpoint=self.session_manager.get_resumption_token() is not None,
                     checkpoint_stale=self.session_manager.checkpoint_is_stale,
                     error_type=type(_leaves[0]).__name__ if _leaves else type(e).__name__,
                     # Close code / reason only — never the conversation.
-                    detail=(str(_leaves[0])[:160] if _leaves else str(e)[:160]),
+                    detail=_detail,
                 )
                 self._renewal_deadline = None
 
@@ -2674,14 +2829,12 @@ class EraLive(
                 self._reconnect_attempts += 1
                 self.set_status("Reconnecting")
 
-                # After a couple of non-quota failures, assume the saved
-                # resumption handle may be stale and drop it so the next attempt
-                # opens a clean session instead of wedging on a dead handle.
-                if (
-                    self._reconnect_attempts >= self._stale_token_after
-                    and self.session_manager.get_resumption_token() is not None
-                ):
-                    print("[era] [SESSION] Clearing possibly-stale resumption token.")
+                # G0-3: the server is authoritative about the handle. A refusal is
+                # handled above (handle_rejected); failed attempts alone (a network
+                # outage) never discard a handle Google still honours for 2 h.
+                # Only one past its documented lifetime is dropped here.
+                if self.session_manager.token_expired():
+                    print("[era] [SESSION] Clearing a resumption token past its lifetime.")
                     self.session_manager.clear_token()
                     self.session_manager.save_to_disk()
 
@@ -3472,6 +3625,15 @@ def main():
                 print(f"[CREW] warm-up skipped: {e}")
 
         threading.Thread(target=_warm_crew, daemon=True, name="CrewWarmup").start()
+
+        # Era Fabric F1: the health registry listens to the event log from here on
+        # (tool.result / crew.*). Idempotent, never raises, a no-op with ERA_FABRIC=0.
+        try:
+            from core.fabric import health as _fabric_health
+
+            _fabric_health.install()
+        except Exception as e:
+            print(f"[FABRIC] health registry not installed: {e}")
 
         # RAM watchdog: samples memory every 5 minutes and fires PC Boost above
         # 70%, unattended. Started here rather than inside the engine so a

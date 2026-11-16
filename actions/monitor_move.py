@@ -148,6 +148,44 @@ def resolve_target_monitor(screen, current: dict | None, monitors: list[dict]):
     return monitors[num - 1], None
 
 
+_SCREEN_WORD = r"(?:screen|monitor|display)"
+_NUM_WORD = r"(one|two|three|four|[1-9])"
+_SPOKEN_SCREEN_RE = re.compile(
+    rf"\b{_SCREEN_WORD}\s+(?:number\s+)?{_NUM_WORD}\b"
+    rf"|\b(first|second|third|fourth)\s+{_SCREEN_WORD}\b",
+    re.IGNORECASE,
+)
+_ORDINALS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
+_SCREEN_ACTIONS = {"window_control": "move_to_monitor", "browser_control": "tab_to_monitor"}
+
+
+def spoken_screen(utterance: str) -> str | None:
+    """The screen NUMBER the user said ("screen one", "monitor 2", "second screen").
+
+    The last mention wins: "from screen two to screen one" means one.
+    """
+    found = None
+    for m in _SPOKEN_SCREEN_RE.finditer(utterance or ""):
+        word = (m.group(1) or m.group(2) or "").lower()
+        found = _ORDINALS.get(word) or str(_WORD_NUMBERS.get(word, word))
+    return found
+
+
+def ground_screen(tool: str, args: dict, utterance: str) -> dict:
+    """The number the user spoke beats the model's guess.
+
+    Live 2026-11-16 17:54-17:55 (and 2026-10-03, 10-14): "move Brave/Spotify to
+    screen one" reached the tool as screen="primary", and the primary monitor is
+    Windows display 2, so Era answered "already on screen 2" four times running.
+    """
+    if args.get("action") != _SCREEN_ACTIONS.get(tool):
+        return args
+    said = spoken_screen(utterance)
+    if not said or str(args.get("screen", "")).strip() == said:
+        return args
+    return {**args, "screen": said}
+
+
 def _is_era_window(title: str) -> bool:
     t = (title or "").lower()
     return any(k in t for k in _ERA_TITLE_KEYWORDS)
@@ -245,6 +283,13 @@ def move_hwnd_to_monitor(hwnd, screen) -> str:
     if err:
         return err
     if current and target["handle"] == current["handle"]:
+        if win32gui.IsIconic(hwnd):
+            # "Move Brave to screen 2" while Brave sits minimized there: the user
+            # wants to SEE it on that screen, so bring it back instead of only
+            # reporting where it already is.
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            if _await(lambda: not win32gui.IsIconic(hwnd)):
+                return f"Moved '{name}' to screen {target['number']} (restored it from minimized)."
         return f"'{name}' is already on screen {target['number']}."
 
     with _PerMonitorDpi():

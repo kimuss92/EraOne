@@ -13,7 +13,7 @@ from core.browser_grid_state import (
     load_recent_grids,
     set_last_user_query,
 )
-from core.intent_memory import load_state, remember_action
+from core.intent_memory import load_state, netflix_context_fresh, remember_action
 from core.utils import log
 from core.window_awareness import get_active_title
 from utils.ordinal_selection import parse_ordinal_command
@@ -1406,15 +1406,48 @@ def _is_netflix_enter_fallback_blocked(tool: str, params: dict, user_text: str) 
             is_netflix_vision_blocked,
         )
 
-        if is_netflix_failure_context_active() or is_netflix_vision_blocked():
-            log(
-                "Router",
-                "netflix_enter_fallback_blocked: suppressing bare Enter press during Netflix failure/cooldown",
-            )
+        if not (is_netflix_failure_context_active() or is_netflix_vision_blocked()):
+            return False
+    except Exception:
+        return False
+
+    # PF-023: the failure window only protects the Netflix page itself. Once the
+    # owner is in another app, a bare Enter belongs to that app — immediately.
+    if not _netflix_is_enter_target(user_text, params):
+        log("Router", "netflix_enter_fallback_allowed: Netflix failure active, other app in front")
+        return False
+    log(
+        "Router",
+        "netflix_enter_fallback_blocked: suppressing bare Enter on the Netflix page during failure/cooldown",
+    )
+    return True
+
+
+def _netflix_is_enter_target(user_text: str, params: dict) -> bool:
+    """Would a bare Enter land on Netflix right now?
+
+    The foreground window decides when it can be read: a Netflix title means the
+    Netflix page, any other title means another app. Only when the foreground is
+    unreadable does fresh Netflix evidence (scroll context, renewed intent
+    memory, a Netflix URL or mention) keep the guard on.
+    """
+    try:
+        title = (get_active_title("") or "").strip().lower()
+    except Exception:
+        title = ""
+    if title:
+        return "netflix" in title
+    try:
+        if get_scroll_context() == "netflix":
             return True
     except Exception:
         pass
-    return False
+    try:
+        if netflix_context_fresh(load_state()):
+            return True
+    except Exception:
+        pass
+    return _active_netflix_page_context(user_text, params)
 
 
 # Words that mean "the machine", not "you, Era". Kept narrow on purpose: only
@@ -1482,7 +1515,10 @@ def divert_era_reboot(tool: str, parameters: dict | None, user_text: str) -> tup
     """
     params = dict(parameters or {})
     text = user_text or ""
-    if not _ERA_RESTART_RE.search(text) or _MACHINE_NOUNS_RE.search(text):
+    from core.era_relaunch import is_reboot_command
+
+    asked = _ERA_RESTART_RE.search(text) or is_reboot_command(text)
+    if not asked or _MACHINE_NOUNS_RE.search(text):
         return tool, params
     if tool in {"shutdown_era", "close_era", "exit_era"}:
         return "shutdown_era", {**params, "relaunch": True}
@@ -1494,6 +1530,29 @@ def divert_era_reboot(tool: str, parameters: dict | None, user_text: str) -> tup
 
 
 def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> tuple[str, dict]:
+    # The same parser drives both the feature and normal model tool calls. Never
+    # treat a built-in panel as a removable custom widget or an OS window.
+    if tool in {"visual_engine", "run_feature", "window_control"}:
+        from features.hud_panel_visibility import parse_voice_command
+
+        panel = parse_voice_command(user_text or "")
+        if panel.get("ok") and panel.get("kind") == "command":
+            import json
+
+            return "visual_engine", {"command": json.dumps(panel["command"])}
+    from core.personal_media import ground_explicit_track
+
+    tool, parameters = ground_explicit_track(tool, parameters or {}, user_text)
+    if tool in {"window_control", "browser_control"}:
+        from actions.monitor_move import ground_screen
+
+        grounded = ground_screen(tool, parameters, user_text)
+        if grounded is not parameters:
+            log(
+                "Router",
+                f"screen_grounding: {parameters.get('screen')!r} -> {grounded['screen']!r}",
+            )
+            parameters = grounded
     # The tool the caller actually asked for, before any rewriting below. An
     # explicit window_control/spotify_control call is a deliberate desktop-window
     # operation and must never be re-routed into a browser navigation.
@@ -1608,7 +1667,7 @@ def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> 
                 if not _v8b_nf:
                     try:
                         _v8b_state = load_state()
-                        if _v8b_state and _v8b_state.get("last_media_app") == "netflix":
+                        if _v8b_state and netflix_context_fresh(_v8b_state):
                             _v8b_nf = True
                     except Exception:
                         pass
@@ -1685,7 +1744,7 @@ def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> 
             if not _v8c_nf:
                 try:
                     _v8c_state = load_state()
-                    if _v8c_state and _v8c_state.get("last_media_app") == "netflix":
+                    if _v8c_state and netflix_context_fresh(_v8c_state):
                         _v8c_nf = True
                 except Exception:
                     pass
@@ -2029,7 +2088,7 @@ def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> 
         if not _v8c_nf_followup:
             try:
                 _v8c_state = load_state()
-                if _v8c_state and _v8c_state.get("last_media_app") == "netflix":
+                if _v8c_state and netflix_context_fresh(_v8c_state):
                     _v8c_nf_followup = True
             except Exception:
                 pass
@@ -2336,7 +2395,7 @@ def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> 
             if not _is_netflix_active:
                 try:
                     _intent = load_state()
-                    if _intent and _intent.get("last_media_app") == "netflix":
+                    if _intent and netflix_context_fresh(_intent):
                         _is_netflix_active = True
                 except Exception:
                     pass
@@ -2535,7 +2594,7 @@ def record_tool_result(
                     from core.intent_memory import load_state
 
                     _intent = load_state()
-                    if _intent and _intent.get("last_media_app") == "netflix":
+                    if _intent and netflix_context_fresh(_intent):
                         _is_nf_ctx = True
                 except Exception:
                     pass

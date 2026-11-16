@@ -7,7 +7,31 @@ Companion files: `handoff.md` (what was done and how it was verified),
 Rule for this board: an item moves to **Done** only when something *ran* and
 proved it. "Written" is not "done".
 
-**Latest (2026-10-18, Claude):** Phase 9–11 audit against the live log. Open-by-name
+**⚠ ALL AGENTS: read `docs/PROTECTED_FIXES.md` + `AGENTS.md` §0 before any edit.** The gate re-runs every protected fix's guards.
+
+**Latest (2026-11-15, Claude, tool truth — PF-022):** Era could not tell whether she had done a task. Root cause of "type instagram.com in Brave" failing: a never-expiring `last_media_app=netflix` flag made the router turn keypresses/typing into Netflix calls, and the model saw the reply under the wrong tool name. Fixed: the flag expires (15 min, real use only), a `ROUTING NOTE` names the tool that really ran, detached calls log an outcome, tool time is counted, and `protocol_one action=recent` reads back what happened (CONFIRMED / NOT CONFIRMED / FAILED). **Restart owed**; live proof: ask "did you do it?". **Next phase: #19 intelligent fallback protocol** (Fabric F4 and #22 latency, now measurable, are candidates). **Open:** Brave needs a relaunch with the debug port, 1008 idle-close churn (`GEMINI_SESSION_STABILITY.md`), shutdown zombie, Spotify mood-search verification. **Uncommitted.**
+
+**Before that (2026-11-15, Claude, Protocol One):** the Protocol One report is now accurate (duplicate counts, real test causes, rollback/skip notes, full-suite scope, a changes-since-last-cycle section) and **Era can read it**: `protocol_one action=report [section=...]` (PF-020). A real cycle gave 9,025 tests, 1 failed (manifest freshness, regenerated, green). PF-008 (voice mute arms no listener) was found regressed with its guard rewritten to match, and restored. PF-021: a mood request is not a song title. **Restart owed**; live proof: ask "what did Protocol One find". **Open:** Spotify mood-search verification, `state_listener` not wired into `main.py`, 60-tool coverage audit (declaration vs dispatch vs verifier vs safety vs tests). **Uncommitted.**
+
+**Before that (2026-11-12, Claude, protected fixes):** the registry is built (17 entries, enforced by the suite, the gate and a hook). The suite is fully green: **8,981 passed, 0 failed, 1 skipped**. The 1 skip is the deliberate paid-Lyria opt-in (17:15). A real cross-tool bug was fixed: `utils/media_match.py` capped every exact title at 0.86 (PF-017). The 6 stale tests now match the stricter media/attention behaviour, and 3 semantic-recall skips were removed (cold Ollama model). The recall probe's cold-model blind spot is now **fixed (PF-018)**: a cold model is warmed in the background and kept loaded for 30 min, and the gate passes. **Restart owed** for live proof (after more than 5 min idle, a paraphrase recall should log `[SEMANTIC] all-minilm loaded`). **Uncommitted.**
+
+**Before that (2026-11-11, Claude, listening session):** ONE session model is loaded (see handoff). A rolling window opens on "Era" and stays open for **2 minutes by default**, re-anchored by every accepted turn (`core/session.py`, `config/session.json`); the window now applies with or without media. **Standby mode is OFF** (`standby_enabled: false`): "standby" only closes the window, keeping the mic and Live session warm. The UI mic button is now a mute that "activate mic" can undo; a mute asked for **by voice** has no local listener, so ambient noise cannot reopen the mic. `manage_preference` gains `set_session_window` / `get_session_window` ("set the session time to 5 minutes"). `CHUNK_SIZE` 1024→640 (40 ms). **Restart owed.** Live proof owed: say "Era, …" after 2+ min of silence and hear an immediate answer; say "set the session time to 3 minutes" and confirm `config/session.json`; mute with the button, say "activate mic" (works), then mute by voice and confirm a phrase does nothing. **NOT done:** a better ASR model (the ambient-noise mishearing is fixed by authority rules; a model upgrade is the next ears slice).
+
+**Before that (2026-11-11, Claude, Sprint 1 slice 1):** evidence-gated completion is loaded (`core/completion_contract.py`). A success with no evidence-based verifier now travels to the model as **NOT CONFIRMED**, a background report says so out loud, and an approved action is verified under the **real** tool name instead of `confirm_pending_confirmation`. Unknown `file_controller` actions fail closed (MEDIUM + confirmation). 16 new tests; affected suites 238 passed; `era_gate --changed` **GATE PASSED, 2,959 passed**. Owed live proof: approve one disposable delete → `logs/era.log` must show a verifier verdict for `file_controller` (never `No verifier registered for 'confirm_pending_confirmation'`), and a side effect with no proof must be spoken with the qualifier. **New study:** [`docs/era-enhancement/GEMINI_SESSION_STABILITY.md`](docs/era-enhancement/GEMINI_SESSION_STABILITY.md) — the 1008 churn is 120 s client inactivity while muted/standby (246/255 closes), not context fill; five cheap wins ready, no Gemini code changed. **Still uncommitted** on `era/task-lessons`.
+
+**Before that (2026-11-10, Claude, F3):** Era Fabric **F3 built**: declared fallback pathways (`config/fabric/pathways.yaml`, see handoff). A crew review of a staged change falls back to Claude via `claude_cli`, then to the verifier's own summary. Web search skips a Gemini that keeps failing. speak/voice_brain are declared and pinned, not re-routed. §12 decisions 1–3 are recorded as decided. 34 chaos tests (mutation-checked); full `pytest tools/`: 8,723 passed, 1 failed (manifest freshness, regenerated, now green). **Restart owed** (F2+F0+F1+F3). **Still uncommitted** on `era/task-lessons`, per Karim. Next: F4 (outbox/HUD/self_heal/lessons subscribe via the bus).
+
+**Before that (2026-11-10, Claude, later):** Era Fabric **F1 built**: a health registry with circuit breakers (`core/fabric/health.py`). When the Hermes breaker is open, or Hermes refuses before the turn, the crew answers on the local loop with the same BotSpecs. OmniRoute is skipped when its breaker is open. `capability_check` says what is down, and the HUD Diagnostics drawer has a COMPONENT HEALTH panel (see handoff). 37 new tests, 1,146 neighbouring passed; full `pytest tools/`: **8,688 passed, 4 skipped, 0 failed** (16:10); ruff check clean. **Restart owed** (F2 + F0 + F1). §12 thresholds **confirmed** 2026-11-10 (3 / 2 min, 60 s, OmniRoute 120 s). **Waiting on Karim:** the self-review fallback (claude_cli or gemma, needed for F3), disclosure verbosity (F1 always discloses the crew fallback), and committing F2+F0+F1 (still uncommitted on `era/task-lessons`). Next: F3 pathways.
+
+**Before that (2026-11-10, Claude):** Era Fabric **F0 built**: one fault taxonomy, the `boundary` bulkhead, a typed event log (see handoff). Log-only, no behaviour change; full gate 8,649 passed / 0 failed. **Restart owed.** Live proof: `logs/fabric/events-<today>.jsonl` gains a `tool.result` line per tool call. Next: F1 health + breakers.
+
+**Before that (2026-11-09, Claude):** Era Fabric **F2 built**: crew asks and Development jobs carry a by-reference `TaskContext`, so a crew review gets the staged change instead of answering "missing" (see handoff). Full gate green after the manifest regen. **Restart owed.** Live proof: stage a change, say "have Cody review the change before I approve", then check `python scripts/task_log.py --ctx <id>`. Next per the design: F0 contracts, then F1 health.
+
+**Before that (2026-11-05, Claude, later):** Era now learns from failed tasks (`core/task_lessons.py`, see handoff), and the floating icon returns on workspace close and snaps to the screen edge. **Restart owed.** Live proof: a failure followed by a working retry should add a lesson to `memory/task_lessons.json`, and the same failure next time should come back with "LEARNED FIX".
+
+**Earlier (2026-11-05, Claude):** api-anything installed, Era reads websites through `era_workbench` capability `web_api` (see handoff). **Restart owed to load it;** then ask Era "what does Goodreads rate The Wild Robot?" as the first live proof.
+
+**Before that (2026-10-18, Claude):** Phase 9–11 audit against the live log. Open-by-name
 repair (bare `desktop` no longer glued to the filename; `%TEMP%` debris no longer
 outranks real files) and `python tools/era_observe.py --since last-start` for the
 Phase 11 observation window. Default-tier gate 8,073 passed / 4 skipped; Phase 10
@@ -76,6 +100,197 @@ improvement themes to revisit against evidence; #44 visual polish stays paused.
 ---
 
 ## 🔴 In progress
+
+**2026-11-16 · PF-034 + PF-008 built (Claude, in dev-review):** the window now
+really expires: music pauses and scheduled reports no longer re-open it
+(root cause of Era answering unnamed speech at 18:04 UTC). Any mute, incl. a
+voice mute, can be undone by voice ("activate the microphone" added), typing or
+the button. 398 guards pass. Owed live: idle 2+ min then speak without "Era"
+(with music too) -> ignored; voice-mute -> "activate the microphone".
+
+**2026-11-16 · PF-033 HUD inactivity indicator built (Codex):** amber
+INACTIVITY MODE plus wake hint reads the engine window on connect/every 2 s.
+7 mode tests, 392 protected Windows guards, TypeScript and Vite build pass;
+isolated visual preview checked. Owed after normal Era reload: live idle timeout
+shows the badge, Era/Era One clears it, standby/mic-off stays distinct.
+
+**2026-11-16 · PF-032 built (Codex desktop, owner reassignment):** inactive
+attention no longer passes continuous background audio indefinitely or fails
+open without wake recognition. Existing session timer/config and manual
+standby/mic logic preserved. 92 focused Windows tests and all 385 protected
+guards pass; registry OK. Claude exact-candidate review queued as
+`qitem-20261116174920-3a2e3c5caaa99776` after usage reset. Owed after normal
+Era reload: quiet for configured 2 minutes; ignored room speech/noise; "Era"
+and "Era One" wake; bare follow-ups; another expiry; standby and mic controls.
+No live restart was performed. See newest handoff for recognizer-failure limits.
+
+**2026-11-16 · PF-031 built (Claude):** "move X to screen one" no longer becomes
+`primary` (= display 2); a minimized window already on the target is restored.
+373 guards pass. Owed after Era restart: live "move Spotify to screen one" and
+"move Brave to screen two" while minimized.
+
+**2026-11-16 · PF-030 built and REVIEW-ACCEPTED (Claude; dev-review 15:15):** reads, Era's own switches, Spotify
+playlists and window move/focus/minimize/maximize no longer end in "couldn't
+confirm it took effect"; tests + 351 guards pass. Owed after Era restart: live
+"new releases", "move Brave to screen one", "what's new about Protocol One".
+Follow-up: Spotify volume, audio devices and Netflix fullscreen now read back
+too (362 guards pass). Netflix open verified by tab address. Remaining: Spotify like (and it is a toggle), F11 fallback.
+
+**2026-11-16 · OpenRig restart shortcut fixed (PF-029):** original conversations
+and queued work restored; both agents running / startup ready. Existing
+`C:\Users\nesri\.openrig-install\open-era-one-team.cmd` now starts the daemon
+when needed and restores the saved team before opening panes. Never replaces
+running/partial/unknown teams or falls back to fresh conversations. **17 launcher
+tests, 324 protected guards passed**, registry OK; independent recheck accepted.
+Real installed shortcut opened both panes; repeated invocation preserved agent
+PIDs. Owed: normal-use proof after the next physical reboot; do not stop the
+owner's live agents just to simulate it. See newest handoff.
+
+**2026-11-15 · Five reliability repairs BUILT, awaiting review and live proof** (dev-build, PF-023..026, newest handoff):
+- Brave CDP is healthy; no restart was done.
+- Live checks owed after the owner restarts Era:
+  1. "reboot Era One": `logs/era_lifecycle.jsonl` shows `forced: false`.
+  2. "play some chill music": verified, not PlaybackNotVerified.
+  3. Netflix failure, then Enter in Notepad: the key goes through, and it is still held on the Netflix tab.
+  4. 24 h muted/standby soak: count `close_kind=1008-inactivity` against `keepalive_frames`.
+  5. 50 forced drops: one replay, no duplicate action.
+- Independent review is pending: `dev-review` is out of credits until 01:59.
+
+**2026-11-15 · OpenRig five reliability repairs ASSIGNED:** builder
+`dev-build@era-one` claimed `qitem-20261115204241-28ac231e8e8465b3`; reviewer
+`dev-review@era-one` claimed `qitem-20261115204249-59aafe71ca62d973` and requested
+exact candidate evidence. Scope: Gemini idle churn G0, Spotify mood playback,
+bounded Windows relaunch shutdown, and Netflix failure Enter suppression in
+other apps. **Brave debugging is already working** (127.0.0.1:9222, Brave PID
+14352, version endpoint verified); recheck before restarting. Windows protected
+baseline: **221 passed**. No repair claimed by desktop dispatch; implementation,
+independent review, final Windows guards and live acceptance still owed. See
+`docs/era-enhancement/OPENRIG_RELIABILITY_2026-11-15.md` and newest handoff.
+
+**2026-11-15 · OpenRig mixed team LIVE:** Claude Pro login completed.
+`dev-build@era-one` (Claude Code) and `dev-review@era-one` (Codex gpt-6-astra)
+both responded and are running / startup ready / idle. Owner approved the team
+roster once; both conversations are open in Windows Terminal. Refreshed the
+expired local ChatGPT credential copy and restored missing WSL `python` for
+existing safety hooks. **221 protected guards pass**, registry OK; existing
+guidance and permission rules preserved. Reopen existing terminals with
+`C:\Users\nesri\.openrig-install\open-era-one-team.cmd`; do not relaunch the
+spec while running. Still unproven: a substantive assigned change plus exact
+review, Windows app acceptance and reboot/long-running recovery. See handoff.
+
+
+**2026-11-12 · HUD typed confirmation replies:** typed "yes"/"approve"/"confirm" (or "no"/"cancel") in the HUD text input now immediately consumes/cancels a pending high-risk action confirmation instead of being sent to the model. Code in `main.py:_handle_text_command` (lines 1244–1310). **Restart owed.** Live proof: trigger a high-risk action (e.g., delete a file), then type "yes" in HUD → executes immediately without model turn; type "no" → speaks "Action cancelled." **Also verify HUD Approve/Cancel buttons still work** (same confirmation store, same execution path) — Cancel now **speaks "Action cancelled."** so user hears it worked.
+
+**2026-11-12 · Codex · Spotify non-API root causes repaired; desktop + HUD live proof passed:**
+Saved references now override model-supplied `play_uri` IDs and recover omitted
+title/artist from the matching saved URI. URI navigation now activates the
+named track-page Play control once; unrelated old playback is never success.
+Next/previous compare native metadata before/after the command. The registered
+verifier now follows the synchronous dispatcher contract. **130 targeted tests
+passed.** Live with Spotify Web API calls forbidden: saved track played, then a
+single next changed tracks with `VERIFIED` / completion `proven`.
+**Restart completed** via supervisor (13:56:45 Africa/Lagos, PID 31100);
+real HUD "play my track" played سواد الغيم by Mikasa Music, then "Next track."
+played Moulat Lkhala by Eljoee and replied "Track skipped." with `VERIFIED`.
+**Still owed:** owner's microphone/ASR + audible acceptance; cold-start/slow-page
+activation; previous-track live test; named search and fresh status voice tests.
+Identical consecutive track metadata stays unconfirmed. Earlier media-search
+debt remains open (see Nov 11 item below). Broad affected gate: **3,810 passed,
+6 failed, 3 skipped**; five existing media/API contract failures plus an older
+`test_open_gemini_input` fixture that forbids the intentional attention gate
+(reproduces alone). Reconcile that fixture with listening-session requirements;
+keep the wake/attention behavior. Details and validation snapshot in handoff.
+
+**2026-11-11 · Claude · Listening session — live acceptance owed:** the 23:12
+live test failed at step (f): "era standby" closed the session by entering the
+standby STATE, so audio was dropped as "standby without wake word" and typed
+input was blocked (`STANDBY_NO_WAKE`) — fixed, close is now `ONLINE_IDLE` and the
+HUD leaves STANDBY (see handoff). **Restart again**, then prove in one sitting:
+(a) stay silent 2+ min, say "Era, what time is it" → an immediate answer, no
+"System online." greeting; (b) "set the session time to 3 minutes" →
+`config/session.json` says 180 and the next session lasts that long; (c) press
+the mic button off, say "activate mic" → it reopens; (d) say "mute your mic",
+then say "activate mic" → nothing happens (the mic button or a typed order lifts
+it); (e) with music playing, bare "next track" works inside the window and needs
+"Era" after it; (f) "Era, standby" → HUD shows READY (not STANDBY) and the next
+"Era, …" answers directly with no reconnect wait.
+Gate: **4,808 passed, 5 failed**; all 5 are pre-existing reds in the prior Codex
+media work (`youtube_video._handle_play` returns a dict where its test reads
+`.success`; `spotify_api.execute` returns `PlaybackNotVerified` where its test
+expects an accepted URI). Not this slice, but they block a fully green gate.
+Not yet done: a better ASR model — the reported mishearing was ambient noise
+triggering voice-unmute/standby, and that path is now closed; a model upgrade is
+the next ears slice, to be chosen from measurement (Whisper second opinion vs a
+larger local model vs the transport/brain split).
+
+**2026-11-11 · Claude · Sprint 1 slice 1 — live acceptance owed:** evidence-gated
+completion, verified approvals and fail-closed unknown actions are loaded (see
+handoff). Restart Era, then: (a) approve one disposable delete and confirm
+`logs/era.log` carries a `file_controller` verification verdict, not
+`No verifier registered for 'confirm_pending_confirmation'`; (b) trigger one
+side effect with no verifier (e.g. archive a mail) and confirm the spoken report
+includes "couldn't confirm it took effect"; (c) ask for an action the model
+invents on `file_controller` twice and confirm the second asks for approval.
+Also owed: full `pytest tools/ --all` with Era stopped. Next slice: remove the
+generic verifier for the eight tools that currently claim verified without
+evidence, and fail closed on unknown actions for the remaining tool families.
+
+**2026-11-11 · Claude · Gemini Live stability — study done, fix not started:**
+[`docs/era-enhancement/GEMINI_SESSION_STABILITY.md`](docs/era-enhancement/GEMINI_SESSION_STABILITY.md).
+Measured: 246 of 255 closes are `1008 client inactivity` at `conn_age_s`
+119.8–120.0, every one preceded by muted/standby (Era sends no frames while
+muted), not context fill. Ready to implement G0 (silence keepalive, 40 ms
+chunks, 2 h resumption handle, fault naming, 3 s buffer-replay). Do not start
+without the owner's go-ahead; no Gemini code changed yet.
+
+**2026-11-11 · Codex · Media/HUD reliability remains open:** Contract/routing and failure honesty repairs implemented; affected tests passed (handoff has exact runs). Owner uses **NO-API Spotify desktop control**. Nonexistent-song live test passed: no replacement track. Positive Sabr El Rijal still fails native visible-tree matching and YouTube title selection; investigate these fresh failures, do not repeat blindly. Actual Drew audited engine; Cody/Nabar provider fallback was inconclusive. Owed: native exact-title selection + Windows metadata/playback proof, YouTube matching + progressing player proof, independent review, Era restart, voice/HUD rendering acceptance. No perfect-function claim.
+
+**2026-11-04 · Hotkeys send the keys asked for, or say they could not:** `core/hotkeys.py` now handles every hotkey and key press; unknown names are refused instead of silently dropped. Prompt teaches when to use shortcuts (screen recording is `win+shift+r`; Game Bar is not installed). Off-list chords wait for a yes. Tests and gate pass. **Owed:** restart Era, then a live "record my screen". No real chord has been confirmed delivered. Listed shortcuts now skip the 5 s vision check (Karim's choice); lone keys, off-list chords and `press` keep it.
+
+**2026-11-04 · Lock screen said "done" and never locked:** DONE and live-proven by Karim at 19:35 and 19:36: `Screen locked. Windows confirms the session is locked.`, 150 ms, `VERIFIED`.
+
+**2026-11-04 · Guided Telegram setup + restart handling:** Implemented approved HUD wizard with encrypted draft/recovery, identity verification, enable/restart guidance. Existing Telegram calling confirmed working by owner. Direct restart supports common explicit phrases at user-speech completion, blocks late old-session greetings, handles scheduling failure honestly. 205 affected tests passed; final audio/setup/relaunch pass 102 (overlap); browser simulated full wizard, TypeScript/build/lint pass. Owed: restart to load changes, first-request live voice reboot, future real wizard login. Supersedes earlier pending Telegram recovery and reboot wording implementation entries; live acceptance remains.
+
+
+**2026-11-04 · Telegram recovered:** Protected login readable, account authenticated, owner bound. Daily calling and incoming reception enabled with validated read-back. Supersedes earlier pending sign-in/binding entries. Owed: restart Era and verify real inbound/outbound audio; fix stale wizard completion text and deferred reboot acknowledgement.
+
+**2026-11-04 · Telegram owner binding:** Era login recovered. Restored expected owner ID from existing TELEGRAM_CHAT_ID to protected account settings; reopened wizard after OWNER_UNVERIFIED. Await successful owner binding, then activation and live verification.
+
+**2026-11-04 · Telegram recovery underway:** Unreadable encrypted account archived in its private folder; local interactive setup window opened. Await owner-entered phone numbers, application credentials and Telegram login code, then verify binding and restore calling.
+
+**2026-11-04 · Reboot wording (user requested later):** Screenshot shows “Back online, sir. Ready for the next objective.” in response to “Era reboot era one” before reboot. Trace reboot acknowledgement versus reconnect greeting; say “Restarting Era One now” before restart and announce readiness only after reconnect. Fix and live verification still owed. Telegram recovery first. Existing setup wizard currently aborts on unreadable saved credentials; recovery must preserve the old payload before local sign-in.
+
+**2026-11-04 · Telegram:** Saved calling account exists but Windows credential decryption fails. Corrected misleading setup message; 78 coordinator tests and UI build pass. Owed: recover protected login or local reauthentication, restart, then verify incoming/outgoing calls.
+
+**2026-10-27 · Floating menu repair:** 48px icon; explicit launcher exit and
+backend-offline cleanup no longer blocked by the orb's close-event veto. Hide
+persists without an open workspace. All menu actions exercised in real Qt with
+isolated backend responses; native Windows icon/menu and actual Chromium
+open/focus/close passed. Targeted HUD tests 167 passed; final launcher/lifecycle
+suites 86 passed (overlap). Lint/format/manifest passed. Overall gate remains
+blocked by unreadable API credentials (`ProtectedConfigError`); credential files
+untouched. Owed: full production Quit/Restart with connected engine once that
+environment issue is resolved; physical tray click and multi-monitor/DPI check.
+Removed the stale launcher; backend was already stopped and remains stopped.
+
+**2026-10-22 · Launcher follow-up:** real Era logo now animates; tray/floating
+clicks focus before launching. 25 tests passed and real double-click restored
+the same minimized HUD window with no duplicate. Observe prolonged animation
+resource use and multi-monitor/DPI placement during normal use; separate physical
+tray-click acceptance remains owed. Backend stayed connected in standby.
+
+**2026-10-22 · Workbench acceptance:** Brahma-inspired capabilities are implemented;
+full gate 8,215 passed / 4 skipped, UI build and TypeScript passed. Settings,
+phone-browser pairing/chat/revocation and Qt show/hide passed isolated live checks.
+Live Era served the added routes and displayed the floating icon; standby was restored.
+Final recheck found an intentional shutdown; preserved it. Icon/tray preferences
+remain enabled for the next normal launch.
+See `docs/era-enhancement/ERA_WORKBENCH_GUIDE.md`. Still owed: physical iPhone Safari
+pairing over trusted LAN, actual Office layout/recalculation, Home Assistant devices,
+voice-command end-to-end invocation and an owner-approved generated skill activation.
+Circuit coverage is DHT11/Uno/ESP32 templates; native iOS phone/SMS/GPS, universal
+circuit design, 3D globe, Discord/fitness/game adapters are not implemented parity.
+Spotify MCP was excluded. Do not claim these acceptance items are done from unit tests.
 
 | # | Item | Objective | Notes |
 |---|------|-----------|-------|

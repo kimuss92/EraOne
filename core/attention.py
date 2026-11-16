@@ -10,21 +10,23 @@ applied to mic audio BEFORE it reaches Gemini:
    answered it. After Era finishes speaking ON HER OWN, the mic stays closed for
    `echo_hold_ms`. Never after a barge-in: then the user is already mid-sentence.
 
-2. ATTENTION WINDOW. For `attention_window_s` after the last exchange (Era
-   finished speaking, an accepted utterance, a wake; never while she is busy
-   thinking or replying), speech passes freely, so
-   a conversation flows. After that, an utterance reaches Gemini only if its
-   first words are Era's name or her wake word, checked locally by Vosk with the
-   wake word's own decoy grammar. Anything else (a phone call, room chat, TV
-   dialogue) is replaced by silence and never leaves the machine. The window
-   stays open while a confirmation waits for the user's answer.
+2. LISTENING SESSION. One rolling window (core/session.py), default 2 minutes
+   and owner-adjustable by voice. Inside it, speech passes freely, so a
+   conversation flows and a follow-up needs no name. Outside it, an utterance
+   reaches Gemini only if its first words are Era's name or her wake word,
+   checked locally by Vosk with the wake word's own decoy grammar. Anything
+   else (a phone call, room chat, TV dialogue) is replaced by silence and never
+   leaves the machine. Every ACCEPTED utterance re-anchors the window; Era's own
+   reply re-anchors it only after an explicit address (the 2026-10-10 lyric
+   loop). The window applies whether or not media plays — the old media-only
+   timer was what made "Era" mandatory with music and unnecessary in silence.
 
-FAIL-OPEN, deliberately: this is a convenience filter, not a security gate (the
-owner voiceprint gate, core/voice_gate.py, is the security one). With no Vosk
-model, or any error, audio passes exactly as before rather than Era going deaf.
+Outside the session, a missing or broken recognizer cannot authorize audio.
+Only local wake detection runs until a name is verified; silence keeps the
+connection warm. Inside the session the existing fail-open behavior remains.
 
-Config: config/voice.json {"listening": {...}} over DEFAULTS. attention_window_s
-0 turns the attention rule off; echo_hold_ms 0 turns the hold off.
+Config: config/voice.json {"listening": {...}} for echo_hold_ms and the name
+check; config/session.json for the window itself.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+
+from core.session import SessionWindow
 
 DEFAULTS = {
     "echo_hold_ms": 700,
@@ -90,12 +94,12 @@ def _names() -> set[str]:
 
 
 def addressed_to_era(text: str, names: set[str] | None = None) -> bool:
-    """Is one of the first two words Era's name? ("Era, ..." / "hey era ...")."""
+    """Does speech start with Era's name (optionally after hey/ok/okay)?"""
     names = names or _names()
-    words = re.findall(r"[a-z']+", (text or "").lower())
+    words = re.findall(r"[a-z']+", (text or "").lower().replace("[unk]", " "))
     if words and words[0] in {"hey", "ok", "okay"}:
         words = words[1:]
-    return any(w in names for w in words[:2])
+    return bool(words and words[0] in names)
 
 
 def _final_words(rec) -> list[tuple[str, float]]:
@@ -110,9 +114,10 @@ def _final_words(rec) -> list[tuple[str, float]]:
 def _named(words: list[tuple[str, float]], names: set[str], min_conf: float) -> bool:
     """addressed_to_era with confidence: a near-miss ("error") decoded as the
     name at low confidence does not count."""
+    words = [(w, c) for w, c in words if w != "[unk]"]
     if words and words[0][0] in {"hey", "ok", "okay"}:
         words = words[1:]
-    return any(w in names and c >= min_conf for w, c in words[:2])
+    return bool(words and words[0][0] in names and words[0][1] >= min_conf)
 
 
 def _rms(frame: bytes) -> float:
@@ -123,44 +128,68 @@ def _rms(frame: bytes) -> float:
 
 
 class ListeningState:
-    """The two clocks: echo hold, and when Era last talked WITH the user."""
+    """The two clocks: echo hold, and the listening session.
+
+    The session itself lives in core/session.py: a rolling window (default
+    2 minutes, owner-adjustable by voice) that every ACCEPTED utterance
+    re-anchors. Inside it, bare commands work; outside it, the first two words
+    must be Era's name or her wake word. Era's reply re-anchors a window only
+    after an explicit address, so a lyric that slipped through cannot keep
+    re-opening it (the 2026-10-10 loop).
+
+    The window used to apply only while media played, which made "Era" mandatory
+    with music and unnecessary in a silent room — two different answers from
+    the same assistant. It now applies always (owner, 2026-11-11).
+    """
 
     def __init__(
         self,
         clock: Callable[[], float] = time.monotonic,
         media_active: Callable[[], bool] | None = None,
+        window_s: float | None = None,
     ) -> None:
         self._clock = clock
-        # Music/video playing (core/media_activity): the free window would let
-        # lyrics through, and each reply to one re-opened it (live 2026-10-10).
+        # The window applies whether or not media plays; media only decides
+        # whether unnamed passing speech may re-anchor it (AttentionGate).
         self._media_active = media_active or (lambda: False)
+        self._session = SessionWindow(clock=clock, window_s=window_s)
         self._hold_until = 0.0
-        self._last_activity = clock()  # a fresh session starts in conversation
-        # The user deliberately addressed Era (her name, a wake, typing). While
-        # media plays ONLY this opens the window: Era's own replies must not keep
-        # it open, or a reply to a lyric re-opens it for the next lyric (the loop
-        # of 2026-10-10). Requiring her name on EVERY sentence instead made her
-        # deaf mid-conversation with music on (the next fix, same day).
-        self._last_explicit = clock()
+        # The user deliberately addressed Era (her name, a wake, typing).
         self._explicit_reply_pending = False
 
-    def era_finished_speaking(self, interrupted: bool) -> None:
-        now = self._clock()
-        if self._explicit_reply_pending:
-            self._last_explicit = now
+    def era_finished_speaking(self, interrupted: bool, internal: bool = False) -> None:
+        """Era's reply re-anchors the window only after an explicit address.
+
+        internal=True (PF-034): she spoke for her own reasons (a scheduled
+        report, a background result). That is not conversation with the owner,
+        so it neither re-anchors the window nor consumes a pending address.
+        """
+        if self._explicit_reply_pending and not internal:
+            self._session.note_accepted()
             self._explicit_reply_pending = False
         if not interrupted:
-            self._hold_until = now + get_listening_config()["echo_hold_ms"] / 1000.0
-        self._last_activity = now
+            self._hold_until = self._clock() + get_listening_config()["echo_hold_ms"] / 1000.0
+
+    def _media_playing(self) -> bool:
+        try:
+            return bool(self._media_active())
+        except Exception:
+            return True  # unsure: be strict, only an explicit address re-anchors
 
     def note_activity(self, explicit: bool = False) -> None:
-        """Conversation is on. explicit=True: the user addressed Era by name, by
-        typing or by waking her — the only kind that opens it during media."""
-        now = self._clock()
-        self._last_activity = now
+        """An utterance reached Era: it counts as conversation either way.
+
+        explicit=True: the user addressed Era by name, by typing or by waking
+        her. Only an explicit address lets Era's OWN reply re-anchor the window.
+        """
+        self._session.note_accepted()
         if explicit:
-            self._last_explicit = now
             self._explicit_reply_pending = True
+
+    def close_session(self) -> None:
+        """Close the session ("standby" in the one-mode model)."""
+        self._explicit_reply_pending = False
+        self._session.close()
 
     def echo_hold_active(self) -> bool:
         return self._clock() < self._hold_until
@@ -171,30 +200,11 @@ class ListeningState:
             self.note_activity(explicit=True)
 
     def window_open(self) -> bool:
-        """Is Era in conversation, or must the next sentence carry her name?
+        """Is Era in session, or must the next utterance carry her name?"""
+        return self._session.open()
 
-        The timeout applies ONLY while media plays. That is the entire reason
-        this gate exists -- lyrics and video dialogue reaching Gemini, and
-        Era's reply to one re-opening the window for the next (2026-10-10).
-
-        With nothing playing there is no such speech to protect against, and
-        letting the window lapse after 45 s of quiet meant Era ignored the
-        owner's FIRST sentence every time and had to be addressed by name to
-        wake up -- a real, constant cost for a risk that is not present. What
-        remains in a silent room (talk meant for someone else) is what the
-        owner voice gate and the wake word are for, and both still apply.
-        """
-        window = get_listening_config()["attention_window_s"]
-        if window <= 0:
-            return True  # the rule is switched off
-        try:
-            media = self._media_active()
-        except Exception:
-            media = False  # unsure: listen, like the rest of this module
-        if not media:
-            return True
-        # Media: only a deliberate address counts, and it expires.
-        return self._clock() - self._last_explicit <= window
+    def session_remaining_s(self) -> float:
+        return self._session.remaining_s()
 
 
 class AttentionGate:
@@ -234,18 +244,42 @@ class AttentionGate:
     def feed(self, frame: bytes, keep_open: bool = False) -> list[bytes]:
         try:
             return self._feed(frame, keep_open)
-        except Exception as e:  # fail OPEN: never deafen Era over a filter bug
+        except Exception as e:
             self._on_event("error", f"{type(e).__name__}: {e}")
             self.mode, self._held, self._rec = IDLE, [], None
-            return [frame]
+            return [frame] if self.state.window_open() else [bytes(len(frame))]
+
+    def _reanchor_passing(self) -> None:
+        """Unnamed passing speech re-anchors only a REALLY open window, with no
+        media playing (PF-034). Live 2026-11-16: a scheduled report's busy
+        exemption let room audio pass and re-open an expired window, and music
+        pauses kept re-anchoring it, so Era answered without her name."""
+        state = self.state
+        if not state.window_open():
+            return  # passing only because of a busy/confirmation exemption
+        media = getattr(state, "_media_playing", None)
+        if callable(media) and media():
+            return  # a lyric must not keep the window open (2026-10-10 loop)
+        note = getattr(state, "note_activity", None)
+        if callable(note):
+            note()
 
     def _open(self, keep_open: bool) -> bool:
-        return keep_open or self._make_rec is None or self.state.window_open()
+        return keep_open or self.state.window_open()
 
     def _feed(self, frame: bytes, keep_open: bool) -> list[bytes]:
         dur = (len(frame) // 2) / 16000.0
         speech = self._is_speech(frame)
         silence = bytes(len(frame))
+
+        # A continuous noise/TV segment may never provide an utterance-ending
+        # silence. PASSING is not authority to outlive the existing session.
+        if self.mode == PASSING and not self._open(keep_open):
+            self.mode, self._held, self._rec = IDLE, [], None
+            self._preroll = []
+            self._quiet_s = 0.0
+        if not self._open(keep_open) and self._make_rec is None:
+            return [silence]  # unavailable wake recognition never bypasses inactivity
 
         if self.mode in (CHECKING, DROPPING) and self._open(keep_open):
             # A stale ignored utterance must not survive media stopping, an
@@ -263,7 +297,7 @@ class AttentionGate:
                 return [frame] if self._open(keep_open) else [silence]
             if self._open(keep_open):
                 self.mode, self._quiet_s = PASSING, 0.0
-                self.state.note_activity()
+                self._reanchor_passing()
                 self._preroll = []
                 return [frame]
             self.mode = CHECKING
@@ -306,7 +340,7 @@ class AttentionGate:
                 self._preroll = []
         if self._quiet_s >= _END_SILENCE_S:
             if passing:
-                self.state.note_activity()
+                self._reanchor_passing()
             self.mode, self._quiet_s = IDLE, 0.0
         return [frame] if passing else [silence]
 
