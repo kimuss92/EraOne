@@ -31,6 +31,11 @@
           },
           {
             "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/helpers\"; [ -d \"$h\" ] || h=.claude/helpers; python \"$h/protected_fix_notice.py\"",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
             "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/helpers\"; [ -d \"$h\" ] || h=.claude/helpers; node \"$h/hook-handler.cjs\" pre-edit",
             "timeout": 5000
           }

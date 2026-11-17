@@ -195,6 +195,13 @@ generate or publish (no Magnific/Photoshop/Composio; scoped Bash for `edit`):
   file or inside the brand's `final`/`remotion`; another brand's folder, UNC, `..`,
   `%VAR%` and `~` are refused. Builds in Remotion, ffmpeg mux, output to `final` as a
   draft; user-supplied music only, never generates music.
+- **`edit` Telegram push (2026-10-27)** — the lane has no Python, so the model cannot
+  run `era_telegram.py`. `run_task` calls `_push_edit_drafts()` itself, only after a
+  clean exit: it scans THIS brand's `final` folder (new media files, no symlinks, no
+  "(approved)" names, max 3), sends them to the owner chat as DRAFT review copies
+  (oversize video -> 540 px preview from `runtime/tg_preview`, else a text with the
+  path) and appends one line to the result. Never raises; `ERA_EDIT_PUSH=0` turns it
+  off. Tests: `tools/test_edit_push.py`.
 - Folders default to `<project_dir>\renders|final|remotion` (override with
   `renders_dir`/`final_dir`/`remotion_dir`); languages come from `content_languages`.
 - **Ceram Quartz: `magnific_allowed: false`.** No `mcp__magnific`/`mcp__photoshop` on

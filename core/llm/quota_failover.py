@@ -249,6 +249,12 @@ def _latch(key: str, model: str, seconds: float) -> None:
     if key and seconds > 0:
         with _STATE_LOCK:
             _LATCH[(key, model)] = time.monotonic() + seconds
+        try:  # Era Fabric F1: one quota latch = one Exhausted fault on the registry
+            from core.fabric import health
+
+            health.note("llm.gemini", "Exhausted", f"{model} quota latched", reset_s=seconds)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _models_for_key(key: str) -> Any:

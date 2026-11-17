@@ -94,6 +94,12 @@ def classify(text: str) -> Decision:
             {"command": json.dumps({"action": "focus", "view": target})},
             "hud_focus",
         )
+    # Hide/close built-in panels before the generic OS window grammar.
+    from features.hud_panel_visibility import parse_voice_command
+
+    panel = parse_voice_command(body)
+    if panel.get("ok") and panel.get("kind") == "command":
+        return _local("visual_engine", {"command": json.dumps(panel["command"])}, "hud_panel")
     # Scope is explicit: bare volume/mute means SYSTEM. Glasses never leak there.
     match = re.fullmatch(
         r"(?:(?:set|mets|règle|regle)\s+)?(?:(system|glasses|lunettes)\s+)?"

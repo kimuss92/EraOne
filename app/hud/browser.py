@@ -15,6 +15,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -23,6 +25,8 @@ from app.hud.instance import era_home
 HUD_TITLE = "ERA ONE"
 _CHROMIUM = ("msedge.exe", "chrome.exe", "brave.exe", "vivaldi.exe")
 _NO_WINDOW = 0x08000000
+_open_lock = threading.Lock()
+_last_launch: tuple[str, float] = ("", 0.0)
 
 
 def _reg_default(root, subkey: str) -> str | None:
@@ -120,14 +124,21 @@ def launch_app_window(url: str) -> bool:
         return False
 
 
-def focus_existing(title: str = HUD_TITLE) -> bool:
-    """Bring an already-open HUD window to the front. True if one was found."""
+def find_hud_window(title: str = HUD_TITLE) -> int | None:
+    """Find a HUD window without focusing it; minimized windows still count."""
     if sys.platform != "win32":
-        return False
+        return None
     import ctypes
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    # HWND is pointer-sized; ctypes' default int conversion truncates it on x64.
+    for name in ("IsWindowVisible", "IsIconic", "SetForegroundWindow"):
+        getattr(user32, name).argtypes = [wintypes.HWND]
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     found: list[int] = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -147,9 +158,17 @@ def focus_existing(title: str = HUD_TITLE) -> bool:
         return True
 
     user32.EnumWindows(_enum, 0)
-    if not found:
+    return found[0] if found else None
+
+
+def focus_existing(title: str = HUD_TITLE) -> bool:
+    """Bring an already-open HUD window to the front. True if one was found."""
+    hwnd = find_hud_window(title)
+    if hwnd is None:
         return False
-    hwnd = found[0]
+    import ctypes
+
+    user32 = ctypes.windll.user32
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, 9)  # SW_RESTORE
     user32.SetForegroundWindow(hwnd)
@@ -201,15 +220,23 @@ def close_hud_windows() -> int:
 
 
 def open_hud(url: str, *, prefer_app: bool = True, hud_clients: int = 0) -> str:
-    """focused | app | browser | suppressed — how the HUD was brought up."""
+    """Focus first, even before WebSocket connection; coalesce launch clicks."""
+    global _last_launch
+
     if os.environ.get("ERA_NO_BROWSER") == "1":
         return "suppressed"  # tests / headless runs: never pop a window
-    if hud_clients > 0 and focus_existing():
-        return "focused"
-    if prefer_app and launch_app_window(url):
-        return "app"
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
-    return "browser"
+    with _open_lock:
+        if focus_existing():
+            return "focused"
+        previous_url, launched_at = _last_launch
+        if previous_url == url and time.monotonic() - launched_at < 5:
+            return "opening"
+        if prefer_app and launch_app_window(url):
+            _last_launch = (url, time.monotonic())
+            return "app"
+        try:
+            if webbrowser.open(url):
+                _last_launch = (url, time.monotonic())
+        except Exception:
+            pass
+        return "browser"

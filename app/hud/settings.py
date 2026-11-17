@@ -22,6 +22,10 @@ DEFAULTS: dict = {
     "open_hud_on_start": True,
     # Prefer a Chromium app window (no tabs/address bar) over a browser tab.
     "app_mode": True,
+    "floating_icon": False,
+    "desktop_tray": False,
+    # Released after a drag, the floating icon snaps to the nearest screen edge.
+    "floating_magnet": True,
 }
 
 _CITY_RE = re.compile(r"^[\w\s\-'.,()]{1,60}$", re.UNICODE)

@@ -50,6 +50,8 @@ def test_invalid_links_never_become_a_protocol_or_shell_target(value):
 def native(monkeypatch):
     from actions import spotify_control as control
 
+    monkeypatch.setattr("memory.memory_manager.load_memory", lambda: {"preferences": {}})
+
     clock = [0.0]
     monkeypatch.setattr(control.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
@@ -58,6 +60,9 @@ def native(monkeypatch):
     monkeypatch.setattr(control, "_spotify_window_exists", lambda: True)
     opened, play, mark = Mock(return_value=(True, "requested")), Mock(return_value=True), Mock()
     monkeypatch.setattr("actions.spotify_search_worker.open_track_uri", opened)
+    monkeypatch.setattr(
+        "actions.spotify_search_worker.play_track_page", Mock(return_value=(False, "not ready"))
+    )
     monkeypatch.setattr(control, "_send_spotify_command", play)
     monkeypatch.setattr(control, "_mark_spotify_playing_state", mark)
     monkeypatch.setattr(
@@ -187,6 +192,144 @@ def test_favorite_identity_keeps_saved_metadata_and_current_media_route(monkeypa
     route.assert_called_once_with("spotify")
 
 
+def test_direct_saved_uri_recovers_omitted_title_without_api(monkeypatch, native):
+    control, opened, play, mark = native
+    monkeypatch.setattr(
+        "memory.memory_manager.load_memory",
+        lambda: {
+            "preferences": {
+                "favorite_song": {"value": QUERY},
+                "favorite_song_uri": {"value": URI},
+            }
+        },
+    )
+    monkeypatch.setattr(control, "_now_playing", Mock(return_value=TRACK))
+    monkeypatch.setattr(control, "_spotify_is_playing", lambda: True)
+    assert QUERY.split(" by ")[0] in control._spotify_play_uri({"uri": URI})
+    opened.assert_called_once()
+    play.assert_not_called()
+    mark.assert_called_once()
+
+
+def test_uri_navigation_activates_only_named_track_once(monkeypatch, native):
+    control, opened, play, mark = native
+    page_play = Mock(return_value=(True, "clicked"))
+    monkeypatch.setattr("actions.spotify_search_worker.play_track_page", page_play)
+    reads = iter([("Old", "Artist"), TRACK])
+    monkeypatch.setattr(control, "_now_playing", lambda: next(reads, TRACK))
+    monkeypatch.setattr(control, "_spotify_is_playing", lambda: True)
+    assert "Playing" in control._spotify_play_uri({"uri": URI, "value": QUERY})
+    opened.assert_called_once()
+    page_play.assert_called_once()
+    assert page_play.call_args.args == (QUERY,)
+    play.assert_not_called()
+    mark.assert_called_once()
+
+
+def test_my_track_overrides_model_uri_with_saved_identity(monkeypatch):
+    from core.personal_media import resolve_song
+
+    monkeypatch.setattr(
+        "memory.memory_manager.load_memory",
+        lambda: {
+            "preferences": {
+                "favorite_song": {"value": QUERY},
+                "favorite_song_uri": {"value": URI},
+            }
+        },
+    )
+    assert resolve_song(
+        "spotify_control",
+        {"action": "play_uri", "uri": "spotify:track:abcdefghijklmnopqrstuv"},
+        "play my track",
+    ) == ("spotify_control", {"action": "play_uri", "uri": URI, "value": QUERY})
+
+
+def media_row(title, playing=True):
+    return {
+        "available": True,
+        "title": title,
+        "artist": "Artist",
+        "playback": "playing" if playing else "paused",
+    }
+
+
+def test_next_waits_for_metadata_change_then_survives_completion_pipeline(monkeypatch, native):
+    import asyncio
+
+    from core import media_observation
+    from core.completion_contract import verdict
+    from core.live_app_state import refresh_after_command
+    from core.verification import verify_tool_result
+
+    control, _, play, mark = native
+    monkeypatch.setattr(control, "_enforce_spotify_priority", Mock())
+    read = Mock(side_effect=[media_row("Old"), media_row("Old"), media_row("New")])
+    monkeypatch.setattr(media_observation, "spotify", read)
+    result = control._spotify_next()
+    result = asyncio.run(refresh_after_command("spotify_control", {"action": "next"}, result))
+    result = verify_tool_result(result, tool="spotify_control", parameters={"action": "next"})
+    assert result.success and result.verified and verdict(result, "spotify_control") == "proven"
+    assert "New" in result.message and "Old" not in result.message
+    assert result.data["previous_media_observation"]["title"] == "Old"
+    play.assert_called_once_with(control.APPCOMMAND_MEDIA_NEXTTRACK)
+    mark.assert_called_once()
+    assert read.call_count == 3
+
+
+@pytest.mark.parametrize("title,playing", [("Old", True), ("New", False)])
+def test_skip_receipt_or_paused_new_metadata_cannot_prove_next(monkeypatch, native, title, playing):
+    import asyncio
+
+    from core import media_observation
+    from core.live_app_state import refresh_after_command
+
+    control, _, play, mark = native
+    monkeypatch.setattr(control, "_enforce_spotify_priority", Mock())
+    rows = iter([media_row("Old")])
+    read = Mock(side_effect=lambda: next(rows, media_row(title, playing)))
+    monkeypatch.setattr(media_observation, "spotify", read)
+    result = control._spotify_next()
+    assert (
+        asyncio.run(refresh_after_command("spotify_control", {"action": "next"}, result)) is result
+    )
+    assert not result.success and not result.verified
+    assert result.error_type == "PlaybackNotVerified"
+    play.assert_called_once_with(control.APPCOMMAND_MEDIA_NEXTTRACK)
+    mark.assert_not_called()
+
+
+def test_registered_spotify_verifier_returns_result_even_inside_async_dispatch(monkeypatch):
+    import asyncio
+
+    from core import media_observation
+    from core.action_verifiers import verify_action_result
+    from core.tool_result import ToolResult
+
+    monkeypatch.setattr(media_observation, "spotify", lambda: media_row("Current"))
+
+    async def dispatch():
+        return verify_action_result(
+            "spotify_control", ToolResult.ok("Spotify is playing"), {"action": "play"}
+        )
+
+    result = asyncio.run(dispatch())
+    assert isinstance(result, ToolResult) and result.verified
+    assert result.verification_status == "VERIFIED" and "Current" in result.message
+
+
+def test_playing_alone_cannot_verify_a_skip_receipt(monkeypatch):
+    from core import media_observation
+    from core.action_verifiers import verify_action_result
+    from core.tool_result import ToolResult
+
+    monkeypatch.setattr(media_observation, "spotify", lambda: media_row("Old"))
+    result = verify_action_result(
+        "spotify_control", ToolResult.ok("Skipping track."), {"action": "next"}
+    )
+    assert not result.verified and result.verification_status == "NOT_VERIFIED"
+
+
 def test_protocol_child_never_imports_the_gui_stack(monkeypatch, capsys):
     import builtins
     import io
@@ -226,6 +369,33 @@ def test_protocol_mode_rejects_a_hostile_child_payload(monkeypatch, capsys):
     worker.main()
     opened.assert_not_called()
     assert not json.loads(capsys.readouterr().out.split("ERA_SPOTIFY_RESULT:")[1])["ok"]
+
+
+def test_track_page_worker_activates_named_control_without_search_or_uri_replay(
+    monkeypatch, capsys
+):
+    import io
+    import json
+
+    from actions import spotify_control as control
+    from actions import spotify_search_worker as worker
+
+    monkeypatch.setattr(
+        worker.sys,
+        "stdin",
+        io.StringIO(json.dumps({"mode": "track_page", "query": QUERY, "cold": False})),
+    )
+    monkeypatch.setattr(control, "_get_spotify_hwnd_and_title", lambda: (42, "Spotify"))
+    monkeypatch.setattr(control, "_focus_spotify_window", Mock(return_value=True))
+    forbidden = Mock(side_effect=AssertionError("page activation must not navigate"))
+    monkeypatch.setattr(worker, "navigate_search", forbidden)
+    monkeypatch.setattr(worker.os, "startfile", forbidden)
+    activate = Mock(return_value=(True, "clicked"))
+    monkeypatch.setattr("actions.spotify_ui.invoke_search_result", activate)
+    worker.main()
+    activate.assert_called_once_with(42, QUERY, timeout_s=2.0, prefer_click=True)
+    forbidden.assert_not_called()
+    assert json.loads(capsys.readouterr().out.split("ERA_SPOTIFY_RESULT:")[1])["ok"]
 
 
 def test_native_explicit_play_uses_bounded_targeted_windows_message(monkeypatch):

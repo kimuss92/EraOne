@@ -217,6 +217,89 @@ _OFFICIAL_KEYWORDS = frozenset(
 )
 
 
+def title_spelling_variant(query: str, title: str) -> bool:
+    """Conservative Latin transliteration variants in delimited title segments.
+
+    Require identical consonants, six or more consonants and strong character
+    similarity. Arabic is transliterated approximately; ambiguous titles stay choices.
+    """
+
+    # Search services often return a transliterated title plus the artist or
+    # "music" in the same query (e.g. "Sabr Al Rijal Mikasa Music"). Compare
+    # bounded title-sized query spans against title segments so those useful
+    # extra words do not hide an otherwise strong spelling match.
+    def latinize(text: str) -> str:
+        # Lightweight transliteration for common Arabic title spelling. It is
+        # intentionally approximate; consonant matching below remains the
+        # conservative identity check and no external package is required.
+        table = str.maketrans(
+            {
+                "ا": "a",
+                "أ": "a",
+                "إ": "i",
+                "آ": "a",
+                "ٱ": "a",
+                "ء": "",
+                "ؤ": "w",
+                "ئ": "y",
+                "ب": "b",
+                "ت": "t",
+                "ث": "th",
+                "ج": "j",
+                "ح": "h",
+                "خ": "kh",
+                "د": "d",
+                "ذ": "dh",
+                "ر": "r",
+                "ز": "z",
+                "س": "s",
+                "ش": "sh",
+                "ص": "s",
+                "ض": "d",
+                "ط": "t",
+                "ظ": "z",
+                "ع": "a",
+                "غ": "gh",
+                "ف": "f",
+                "ق": "q",
+                "ك": "k",
+                "ل": "l",
+                "م": "m",
+                "ن": "n",
+                "ه": "h",
+                "ة": "h",
+                "و": "w",
+                "ي": "y",
+                "ى": "a",
+                "پ": "p",
+                "چ": "ch",
+                "ژ": "zh",
+                "گ": "g",
+                "ـ": "",
+            }
+        )
+        text = re.sub(r"[\u064b-\u065f\u0670]", "", text.casefold())
+        return text.translate(table)
+
+    words = [w for w in re.findall(r"[a-z]+", latinize(query)) if w not in _GENERIC_KEYWORDS]
+    if len(words) < 2:
+        return False
+    title_segments = re.split(r"[|–—]|\s-\s|[()]", latinize(title))
+    for segment in title_segments:
+        t = re.sub(r"[^a-z]", "", segment.casefold())
+        t_consonants = re.sub(r"[aeiou]", "", t)
+        if len(t_consonants) < 6:
+            continue
+        for start in range(len(words)):
+            for end in range(start + 2, min(len(words), start + 5) + 1):
+                phrase = "".join(words[start:end])
+                consonants = re.sub(r"[aeiou]", "", phrase)
+                if len(consonants) >= 6 and consonants == t_consonants:
+                    if difflib.SequenceMatcher(None, phrase, t).ratio() >= 0.7:
+                        return True
+    return False
+
+
 def _fuzzy_score(query: str, title: str) -> float:
     """SequenceMatcher fuzzy ratio between normalized query and title.
 
@@ -263,6 +346,17 @@ def score_media_candidate(
 ) -> float:
     if not query or not candidate_title:
         return 0.0
+    score = _base_media_score(query, candidate_title)
+    # A transliteration variant ("Sabr El Rijal" vs "Saber Elrjel") may only
+    # RAISE a weak score. Checked first (2026-11-11) it also capped exact and
+    # artist-dash titles at 0.86, because an exact title is trivially its own
+    # spelling variant: "Despacito Luis Fonsi" stopped scoring 1.0.
+    if score < 0.86 and title_spelling_variant(query, candidate_title):
+        return 0.86
+    return score
+
+
+def _base_media_score(query: str, candidate_title: str) -> float:
     q_norm = normalize_title(query)
     t_norm = normalize_title(candidate_title)
     if q_norm == t_norm:
@@ -349,6 +443,9 @@ def select_best_media_candidate(
             if best_score - second_score < 0.15:
                 # ── Issue 5: YouTube tie-break for short specific queries ──
                 if platform == "youtube" and is_youtube_watch_url(best_url):
+                    # Transliteration proves title relevance, but two distinct
+                    # video candidates still need an owner choice. Search rank
+                    # alone must not silently choose a different recording.
                     query_tokens = {
                         w.lower() for w in query.split() if w.lower() not in _STOP_WORDS
                     }

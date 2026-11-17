@@ -10,10 +10,12 @@ import { getState, live, subscribe } from './store';
 //   hover     a faint tick                   click     a short tap
 // Gentle by design (master ~-14 dB, soft attack). Cues stay silent while the
 // mic is capturing the user (listening / transcribing), so they never reach
-// speech recognition; the wake chime is the one exception (it IS the reply).
+// speech recognition; wake and inactivity are the exceptions: wake is the
+// reply, while inactive backend audio is gated to silence unless a real wake is
+// recognized (PF-032), so this nonverbal cue cannot become a model command.
 // Only hover/click play while Era speaks: they answer the user's own hand.
 
-export type Cue = 'wake' | 'toolStart' | 'tool' | 'error' | 'ready' | 'focus' | 'notify' | 'approval' | 'hover' | 'click';
+export type Cue = 'wake' | 'toolStart' | 'tool' | 'error' | 'ready' | 'focus' | 'notify' | 'approval' | 'inactivity' | 'hover' | 'click';
 const KEY = 'era_hud_sounds';
 let enabled = false;
 try { enabled = localStorage.getItem(KEY) === '1'; } catch { /* private mode */ }
@@ -99,7 +101,8 @@ const GAP: Partial<Record<Cue, number>> = { hover: 70, click: 60 };
 export function cue(kind: Cue): void {
   if (!enabled || !ctx || ctx.state !== 'running' || document.hidden) return;
   const ui = kind === 'hover' || kind === 'click';
-  if (kind !== 'wake' && capturing()) return;
+  const inactiveCue = kind === 'inactivity' && getState().listeningMode === 'inactive';
+  if (kind !== 'wake' && !inactiveCue && capturing()) return;
   if (!ui && kind !== 'wake' && speaking()) return;
   const now = performance.now();
   if (now - (lastCue.get(kind) ?? -Infinity) < (GAP[kind] ?? 250)) return;
@@ -115,6 +118,7 @@ export function cue(kind: Cue): void {
       case 'focus': air(t, 0.32, 0.5, 500, 2600); tone(294, t, 0.22, 0.2, 'sine', 440); break;
       case 'notify': tone(988, t, 0.14, 0.3); tone(1319, t + 0.1, 0.2, 0.26); break;
       case 'approval': [0, 0.16, 0.32].forEach(d => tone(880, t + d, 0.11, 0.38, 'triangle')); break;
+      case 'inactivity': tone(587, t, 0.12, 0.25, 'triangle'); tone(440, t + 0.14, 0.18, 0.22, 'triangle'); break;
       case 'hover': tone(2093, t, 0.03, 0.06); break;
       case 'click': tone(660, t, 0.05, 0.22, 'triangle', 520); break;
     }

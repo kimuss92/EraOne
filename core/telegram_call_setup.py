@@ -303,7 +303,7 @@ def main() -> int:
             verified = asyncio.run(authenticate(settings, checkpoint=checkpoint))
         save_settings(directory, verified)
         print("Era account authenticated; owner bound. Session stored with Windows protection.")
-        print("Calls remain disabled until the duplex audio bridge and live checks are complete.")
+        print("Account setup complete. Enable calls from the Telegram Calls setup panel, then restart Era.")
         return 0
     except SetupFault as exc:
         print(f"Setup stopped [{exc.code}]: {exc.explanation}")

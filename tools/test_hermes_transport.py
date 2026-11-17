@@ -420,6 +420,40 @@ def test_hermes_own_reason_reaches_the_failure_detail(keyfile):
     assert "HTTP 500" in out.data["detail"] and "not logged into Nous Portal" in out.data["detail"]
 
 
+def test_a_200_that_carries_hermes_own_provider_failure_is_llm_unavailable(keyfile):
+    # 2026-11-06 live: MoA re-enabled with a keyless anthropic provider. Hermes answered
+    # HTTP 200, finish_reason "error", the reason in the text — Era said "gave no usable
+    # reply" twice and the user never learned the model was misconfigured.
+    body = chat("Mixture of Agents didn't answer after 3 attempts.", prompt=0, completion=0)
+    body["choices"][0]["finish_reason"] = "error"
+    body["hermes"] = {"failed": True, "error": "Provider 'anthropic' has no API key."}
+    http = FakeHttp()
+    http.chats = [(200, body)]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "LLMUnavailable"
+    assert "no API key" in out.data["detail"]
+    assert len(_chat_posts(http)) == 1  # not retried as a "format" problem
+
+
+def test_an_expired_login_reply_with_zero_usage_is_llm_unavailable(keyfile):
+    # The expired-Nous-login reply is a plain "stop" with 0/0 tokens: no model ran.
+    text = "⚠️ Provider authentication failed: No access token found for Nous Portal."
+    http = FakeHttp()
+    http.chats = [(200, chat(text, prompt=0, completion=0))]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "LLMUnavailable"
+    assert "Nous Portal" in out.data["detail"] and "⚠" not in out.data["detail"]
+
+
+def test_a_real_model_reply_that_is_not_json_is_still_a_format_problem(keyfile):
+    http = FakeHttp()
+    http.chats = [(200, chat("sure, here you go")), (200, chat("still prose"))]
+    t, _ = make(keyfile, http)
+    assert t.dispatch("tester", Turn(task="t")).error_type == "BadModelOutput"
+
+
 def test_a_turn_runs_and_logs_the_required_line_with_hermes_usage(keyfile, rec):
     http = FakeHttp()
     http.chats = [(200, chat(json.dumps(final("Never mix two stone families."))))]

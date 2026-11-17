@@ -49,6 +49,7 @@ export interface HudState {
   agent: { state: AgentState; label: string; seq: number };
   connection: ConnectionInfo;
   standby: boolean;
+  listeningMode: string;
   micActive: boolean;
   voiceActive: boolean;
   transcript: Transcript;
@@ -128,6 +129,7 @@ let state: HudState = {
   agent: { state: 'offline', label: 'Connecting', seq: 0 },
   connection: { kind: 'connecting', label: 'Connecting', status: '' },
   standby: false,
+  listeningMode: 'unavailable',
   micActive: true,
   voiceActive: false,
   transcript: { user: '', userFinal: false, response: '', responding: false },

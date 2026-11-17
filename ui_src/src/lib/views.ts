@@ -1,4 +1,4 @@
-import { setState } from './store';
+import { getState, setState } from './store';
 import { cue } from './sounds';
 import type { DrawerId } from './types';
 
@@ -15,5 +15,14 @@ export function focusView(value: unknown): boolean {
   const drawer: DrawerId = view === 'overview' ? null : view === 'tools' ? 'capabilities' : view;
   setState({ focusView: view, drawer, palette: false, overlay: null });
   cue('focus');
+  return true;
+}
+
+// Close only the named drawer, preserving any different open view.
+export function setPanelVisibility(drawer: unknown, visible: unknown): boolean {
+  const drawers = ['diagnostics', 'settings', 'development', 'capabilities', 'conversation', 'telegram'];
+  if (typeof drawer !== 'string' || !drawers.includes(drawer) || typeof visible !== 'boolean') return false;
+  if (visible) setState({ drawer: drawer as DrawerId, palette: false, overlay: null });
+  else if (getState().drawer === drawer) setState({ drawer: null, focusView: 'overview' });
   return true;
 }

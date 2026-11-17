@@ -878,7 +878,7 @@ def _call_tool_result_inner(
     return result
 
 
-async def _jit_before_mutation(tool: str, action: str) -> None:
+async def _jit_before_mutation(tool: str, action: str, params: dict | None = None) -> None:
     """Capture a fresh screen frame before a mutation action.
 
     Failures (API errors, missing hardware, or import exceptions) are
@@ -887,7 +887,7 @@ async def _jit_before_mutation(tool: str, action: str) -> None:
     try:
         from core.vision_context import jit_vision_capture
 
-        await jit_vision_capture(tool, action)
+        await jit_vision_capture(tool, action, params)
     except Exception:
         pass
 
@@ -981,7 +981,7 @@ class AgentExecutor:
                 # ── JIT vision capture before mutation actions ──
                 _jit_action = (params or {}).get("action", "")
                 if isinstance(_jit_action, str) and _jit_action:
-                    await _jit_before_mutation(tool, _jit_action.lower().strip())
+                    await _jit_before_mutation(tool, _jit_action.lower().strip(), params)
 
                 attempt = 1
                 step_ok = False

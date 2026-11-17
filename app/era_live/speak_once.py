@@ -111,9 +111,35 @@ def spoken_outcome(tool: str, result: Any) -> str:
     """One natural sentence for a background tool's real outcome (never raises)."""
     try:
         raw = str(getattr(result, "message", "") or getattr(result, "error", "") or "").strip()
+        # A detached website answer: this path speaks verbatim, so never read out a
+        # page's text. Only the plain line before the fence may be spoken.
+        if "<<<UNTRUSTED_WEB_DATA" in raw:
+            head = raw.split("<<<UNTRUSTED_WEB_DATA", 1)[0].strip()
+            return head or "The website took too long for me to read that out, sir. Ask me again."
         text = _JARGON.sub("", _SEARCH_ECHO.sub("", raw)).strip()
+        # A verifier's own verdict ("Spotify is open on screen.", "I sent play to
+        # Spotify, but it is paused, not playing.") already says what was asked
+        # and whether it happened; speak it as-is, never the raw telemetry.
+        data = getattr(result, "data", None)
+        verdict = data.get("outcome_sentence") if isinstance(data, dict) else None
+        if getattr(result, "success", False) and isinstance(verdict, str) and verdict.strip():
+            return verdict.strip().rstrip(".") + ", sir."
         if getattr(result, "success", False):
-            return _first_sentence(text) or "Done, sir."
+            spoken = _first_sentence(text) or "Done, sir."
+            # Evidence-gated completion (core/completion_contract.py): a tool
+            # that returned is not a state that changed. When dispatch could not
+            # prove the effect, the background report says so in the same
+            # sentence instead of asserting the success it cannot support.
+            try:
+                from core.completion_contract import is_unconfirmed
+
+                if is_unconfirmed(result):
+                    cleaned = re.sub(r",?\s*sir\.?$", "", spoken, flags=re.IGNORECASE)
+                    cleaned = cleaned.rstrip(" .,")
+                    return f"{cleaned}, sir — though I couldn't confirm it took effect."
+            except Exception:
+                pass
+            return spoken
         m = _FAILED_FOR.match(text)
         app, what, why = (m["app"], m["what"], m["why"]) if m else ("", "", text)
         plain = next((say for rx, say in _PLAIN_REASONS if rx.search(why)), "")

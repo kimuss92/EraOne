@@ -24,9 +24,10 @@ const helpersDir = __dirname;
 const helperRoot = path.resolve(helpersDir, '..', '..');
 
 // Resolve an installed @claude-flow/cli (or ruflo) bin — mirrors
-// statusline-generator.ts's resolveCliBin() candidate list. Used only to
-// spawn the detached funnel-refresh helper below; failures are silent (no
-// candidate found just means the refresh never fires this session).
+// statusline-generator.ts's resolveCliBin() candidate list, then looks for a
+// global install (resolveGlobalCliBin() below, #3368). Used only to spawn the
+// detached funnel-refresh helper below; failures are silent (no candidate
+// found just means the refresh falls back to npx).
 //
 // Verifies dist/src/index.js exists alongside bin/cli.js, not just the bin
 // itself — Claude Code's own plugin marketplace mechanism installs by
@@ -39,7 +40,17 @@ const helperRoot = path.resolve(helpersDir, '..', '..');
 // first every time and spawnDetachedFunnelRefresh() below had no fallback,
 // so the promo/disclosure row could never populate for any marketplace
 // install, on any OS.
+// session-restore asks up to three times (first-run enable, then the two
+// refreshes). The answer cannot change inside one short-lived hook process,
+// so resolve once: `undefined` means "not looked up yet", null means "no
+// local or global CLI — use npx".
+let cliBinCache;
 function resolveCliBinForHook() {
+  if (cliBinCache === undefined) cliBinCache = resolveCliBinUncached();
+  return cliBinCache;
+}
+
+function resolveCliBinUncached() {
   try {
     const home = os.homedir();
     const candidates = [
@@ -53,14 +64,217 @@ function resolveCliBinForHook() {
       path.join(helpersDir, '..', '..', 'bin', 'cli.js'),
     ];
     for (const p of candidates) {
-      try {
-        if (fs.existsSync(p) && fs.existsSync(path.join(path.dirname(p), '..', 'dist', 'src', 'index.js'))) {
-          return p;
-        }
-      } catch (e) { /* try next candidate */ }
+      if (isRunnableCli(p)) return p;
     }
+    return resolveGlobalCliBin();
   } catch (e) { /* ignore */ }
   return null;
+}
+
+function isRunnableCli(p) {
+  try {
+    return fs.existsSync(p) && fs.existsSync(path.join(path.dirname(p), '..', 'dist', 'src', 'index.js'));
+  } catch (e) { return false; }
+}
+
+// #3368: a global install — the README's `npm install -g ruflo@latest` — keeps
+// the CLI at <prefix>/lib/node_modules/ruflo/node_modules/@claude-flow/cli,
+// which none of the project-relative candidates above cover, so on those
+// machines every refresh fell back to npx: a second, separately cached copy
+// of the CLI that follows the registry's latest rather than the version the
+// user pinned (the same npx-cache skew as #3306), and that cannot start
+// offline on a cold cache.
+//
+// Three lookups, fs calls only (no child process), reached only after every
+// candidate above missed:
+//   1. npm's global prefix, resolved the way npm resolves it
+//      (npmGlobalPrefix() below). First because it does not depend on PATH:
+//      a hook inherits the host process's PATH, which need not contain the
+//      prefix's bin/ even when the user's interactive shell does (observed:
+//      the Claude Code process spawning hooks lacked ~/.npm-global/bin while
+//      a login zsh on the same machine had it).
+//   2. `ruflo`, then `claude-flow`, on PATH — the order plugins/ruflo-core/
+//      scripts/ruflo-hook.cjs uses — for globals npm did not install (yarn
+//      classic, bun). Only a symlinked bin counts, and only when it lands in
+//      a package that declares one of the three known names, so a wrapper
+//      script or a version-manager shim (Volta) is never mistaken for an
+//      install. The <dir>/node_modules/<name> layout npm uses on Windows,
+//      where ruflo.cmd sits beside node_modules\ruflo (what resolveNpmShim()
+//      in ruflo-hook.cjs maps), is only consulted on win32: on POSIX every
+//      manager symlinks, and probing it there would follow a Windows install
+//      exposed to WSL through the appended Windows PATH.
+//      Relative PATH entries (`.` or an empty entry) are skipped, so a bare
+//      `./ruflo` in the working directory is never picked up.
+//   3. ~/.npm-global, npm's documented no-sudo prefix, when 1 and 2 both
+//      missed: the prefix setting may live where this hook's node never
+//      reads it, and a wrapper script on PATH is skipped by 2.
+// `env`/`platform`/`execPath` are parameters so any layout is testable
+// from any OS.
+function resolveGlobalCliBin(env = process.env, platform = process.platform, execPath = process.execPath) {
+  const prefix = npmGlobalPrefix(env, platform, execPath);
+  if (prefix) {
+    const hit = cliUnderPrefix(prefix, platform);
+    if (hit) return hit;
+  }
+  const dirs = String(env.PATH || env.Path || '').split(platform === 'win32' ? ';' : ':');
+  const exts = platform === 'win32' ? ['.cmd', ''] : [''];
+  for (const name of ['ruflo', 'claude-flow']) {
+    for (const dir of dirs) {
+      if (!dir || !path.isAbsolute(dir)) continue;
+      for (const ext of exts) {
+        const shim = path.join(dir, name + ext);
+        if (!fs.existsSync(shim)) continue;
+        const roots = [];
+        try {
+          if (fs.lstatSync(shim).isSymbolicLink()) {
+            const root = path.dirname(path.dirname(fs.realpathSync(shim)));
+            if (isKnownPackageRoot(root)) roots.push(root);
+          }
+        } catch (e) { /* unreadable link — fall back to the layout roots */ }
+        if (platform === 'win32') {
+          roots.push(path.join(dir, 'node_modules', name));
+          if (name === 'claude-flow') roots.push(path.join(dir, 'node_modules', '@claude-flow', 'cli'));
+        }
+        for (const root of roots) {
+          const hit = cliInPackage(root);
+          if (hit) return hit;
+        }
+      }
+    }
+  }
+  // Last resort: ~/.npm-global, the prefix npm's own docs recommend for
+  // global installs without sudo ("Resolving EACCES permissions errors").
+  // The setting that points npm there can live where this hook's node never
+  // looks (another node's builtin npmrc, or a wrapper script that sets it
+  // per call), and a `ruflo` wrapper script on PATH is skipped above by
+  // design. Without this, such a machine fell back to npx @latest on every
+  // hook. Checked only after the configured prefix and PATH both miss, so it
+  // can never override either.
+  const home = env.HOME || env.USERPROFILE;
+  if (home && path.isAbsolute(home)) {
+    const hit = cliUnderPrefix(path.join(home, '.npm-global'), platform);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// The CLI of a global install under an npm prefix: <prefix>/lib/node_modules
+// on POSIX, <prefix>\node_modules on Windows, trying the three published
+// package names in order.
+function cliUnderPrefix(prefix, platform) {
+  const modules = platform === 'win32'
+    ? path.join(prefix, 'node_modules')
+    : path.join(prefix, 'lib', 'node_modules');
+  for (const pkg of ['ruflo', 'claude-flow', path.join('@claude-flow', 'cli')]) {
+    const hit = cliInPackage(path.join(modules, pkg));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// A bin on PATH only counts as an install when the package it points into
+// declares one of the three published names. This is a narrower check than
+// resolveNpmShim() in ruflo-hook.cjs, which never reads `name`: that one takes
+// the package name from the shim's own filename, then validates package.json's
+// `bin` entry and that its realpath stays inside the package. Here the bin has
+// already been resolved to a package root, so the manifest `name` is what
+// identifies it.
+function isKnownPackageRoot(root) {
+  try {
+    const name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8')).name;
+    return name === 'ruflo' || name === 'claude-flow' || name === '@claude-flow/cli';
+  } catch (e) { return false; }
+}
+
+// Map an installed ruflo / claude-flow / @claude-flow/cli package root to the
+// CLI it runs: <root>/bin/cli.js (@claude-flow/cli itself),
+// <root>/v3/@claude-flow/cli/bin/cli.js (the claude-flow umbrella bundles
+// it), or @claude-flow/cli in the node_modules npm nests inside <root> —
+// or, for the flat layout yarn classic and bun use, in the node_modules
+// folder that holds <root> itself. That is the dependency edge
+// ruflo/bin/ruflo.js's findCliPath() follows. The search stops at that one
+// enclosing node_modules: walking further up would reach unrelated trees,
+// such as a stray ~/node_modules left by an `npm i` in a home directory.
+// Every hit must still pass isRunnableCli().
+function cliInPackage(root) {
+  if (!fs.existsSync(root)) return null;
+  const candidates = [
+    path.join(root, 'bin', 'cli.js'),
+    path.join(root, 'v3', '@claude-flow', 'cli', 'bin', 'cli.js'),
+    path.join(root, 'node_modules', '@claude-flow', 'cli', 'bin', 'cli.js'),
+  ];
+  for (let dir = path.dirname(root), i = 0; i < 4 && dir !== path.dirname(dir); i++, dir = path.dirname(dir)) {
+    if (path.basename(dir) === 'node_modules') {
+      candidates.push(path.join(dir, '@claude-flow', 'cli', 'bin', 'cli.js'));
+      break;
+    }
+  }
+  return candidates.find(isRunnableCli) || null;
+}
+
+// npm's global prefix without spawning npm (`npm prefix -g` measured 70-80 ms
+// per call, paid on every SessionStart that gets this far). Same precedence
+// npm applies:
+//   1. npm_config_prefix in the environment (npm accepts either case);
+//   2. `prefix=` in the user npmrc ($npm_config_userconfig, else ~/.npmrc),
+//      where `npm config set prefix ~/.npm-global` (the npm docs' fix for
+//      EACCES on global installs) writes it;
+//   3. `prefix=` in npm's builtin npmrc (<npm package>/npmrc), found through
+//      the `npm` link beside node: Homebrew writes `prefix = /opt/homebrew`
+//      there (its process.execPath is the Cellar path, so step 4 alone would
+//      be wrong), and the Node.js Windows installer ships
+//      `prefix=${APPDATA}\npm`;
+//   4. npm's default: $PREFIX, else the directory above node's bin/ (POSIX)
+//      or node.exe's own directory (Windows).
+// Values follow npm's ini handling for the cases that decide a path: a
+// quoted value is taken literally, an unquoted `;`/`#` starts a comment,
+// keys below a `[section]` header are ignored, `${VAR}` expands when the
+// variable is set (and `${VAR?}` to empty when it is not) but otherwise
+// stays literal like npm — which leaves the value relative, so the
+// isAbsolute() check below rejects it instead of pointing at the drive root.
+// Not emulated: escaped characters and npm's other ini corner cases; each of
+// those produces a miss, never a wrong CLI. The npmrc is read into memory,
+// but only the value of its last top-level `prefix =` line is kept: no other
+// line (an `_authToken`, say) is returned, stored or logged.
+function npmGlobalPrefix(env = process.env, platform = process.platform, execPath = process.execPath) {
+  const home = (platform === 'win32' ? env.USERPROFILE : env.HOME) || os.homedir();
+  const readPrefix = (file) => {
+    let value = null;
+    try {
+      for (const line of fs.readFileSync(file, 'utf-8').split(/\r?\n/)) {
+        if (/^\s*\[/.test(line)) break; // only the top-level section applies
+        const m = /^\s*prefix\s*=\s*(.*?)\s*$/.exec(line);
+        if (m) value = m[1]; // last one wins, as in npm's ini parser
+      }
+    } catch (e) { /* no such npmrc */ }
+    return value;
+  };
+  const nodeDir = path.dirname(execPath);
+  // npm's builtin npmrc sits in npm's own package dir. On Windows that is
+  // node_modules\npm beside node.exe; elsewhere follow the `npm` link beside
+  // node (<npm>/bin/npm-cli.js) — on Homebrew it points out of the node keg
+  // to /opt/homebrew/lib/node_modules/npm.
+  let builtinRc = path.join(nodeDir, 'node_modules', 'npm', 'npmrc');
+  if (platform !== 'win32') {
+    try {
+      builtinRc = path.join(path.dirname(path.dirname(fs.realpathSync(path.join(nodeDir, 'npm')))), 'npmrc');
+    } catch (e) { /* no npm beside node */ }
+  }
+  const raw = env.npm_config_prefix || env.NPM_CONFIG_PREFIX
+    || readPrefix(env.npm_config_userconfig || env.NPM_CONFIG_USERCONFIG || path.join(home, '.npmrc'))
+    || readPrefix(builtinRc)
+    || env.PREFIX
+    || (platform === 'win32' ? nodeDir : path.dirname(nodeDir));
+  let value = String(raw).trim();
+  const quoted = /^(["'])([\s\S]*)\1$/.exec(value);
+  if (quoted) value = quoted[2];
+  else value = value.replace(/(^|[^\\])[;#].*$/, '$1').trim();
+  value = value
+    .replace(/\$\{([^}?]+)(\?)?\}/g, (whole, name, optional) => (
+      env[name] !== undefined ? env[name] : (optional ? '' : whole)
+    ))
+    .replace(/^~(?=$|[\\/])/, home);
+  return path.isAbsolute(value) ? path.resolve(value) : null;
 }
 
 // Fire-and-forget doesn't work when the CALLER is itself a short-lived
@@ -74,8 +288,8 @@ function resolveCliBinForHook() {
 // chance to write the cache. Never awaited here — must not add to
 // SessionStart's own timeout budget.
 //
-// No usable local candidate (resolveCliBinForHook() returned null) falls
-// back to npx: this call is detached/unref'd, so a slower npx cold-start
+// No usable local or global candidate (resolveCliBinForHook() returned null)
+// falls back to npx: this call is detached/unref'd, so a slower npx cold-start
 // costs nothing perceptible — unlike the statusline's own synchronous
 // render path, where local-first exists purely for per-render latency.
 // `--prefer-offline` avoids a registry round trip for the tarball when
@@ -433,6 +647,8 @@ const router = safeRequire(path.join(helpersDir, 'router.cjs'));
 const session = safeRequire(path.join(helpersDir, 'session.cjs'));
 const memory = safeRequire(path.join(helpersDir, 'memory.cjs'));
 const intelligence = safeRequire(path.join(helpersDir, 'intelligence.cjs'));
+// ADR-512: the verified-outcome learning loop, bundled from the ruflo-mods loop source.
+const learningLoop = safeRequire(path.join(helpersDir, 'learning-loop.cjs'));
 
 // ── Intelligence timeout protection (fixes #1530, #1531) ───────────────────
 const INTELLIGENCE_TIMEOUT_MS = 3000;
@@ -466,7 +682,7 @@ const [,, command, ...args] = process.argv;
 
 // Read stdin with timeout — Claude Code sends hook data as JSON via stdin.
 // Timeout prevents hanging when stdin is not properly closed (common on Windows).
-async function readStdin() {
+async function readStdin(windowMs = 500) {
   if (process.stdin.isTTY) return '';
   return new Promise((resolve) => {
     let data = '';
@@ -474,7 +690,7 @@ async function readStdin() {
       process.stdin.removeAllListeners();
       process.stdin.pause();
       resolve(data);
-    }, 500);
+    }, windowMs);
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { data += chunk; });
     process.stdin.on('end', () => { clearTimeout(timer); resolve(data); });
@@ -489,6 +705,50 @@ async function readStdin() {
 // keeps it from firing twice. Only side-effect events can be handed over:
 // guards such as pre-bash always run, whatever the variable says.
 const MOD_OWNABLE_EVENTS = new Set(['route', 'post-edit']);
+
+// ADR-512: classic hooks run the verified-outcome learning loop for users without the mod. A
+// mod that records turns itself says so with `learning-loop` (or, before ADR-512, owns
+// `route`), so a turn is never recorded twice.
+function modRecordsTurns(env = process.env) {
+  return String(env.RUFLO_MODS_OWNS || '').split(',').some((owned) => ['learning-loop', 'route'].includes(owned.trim()));
+}
+
+function learningLoopRoot() {
+  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+// Records the turns the session transcript gained since the last look (all of them when the
+// session ends). Returns the number recorded; never throws.
+function recordLearningTurns(hookInput, final) {
+  try {
+    const root = learningLoopRoot();
+    if (!learningLoop || modRecordsTurns() || !learningLoop.enabled(root)) return 0;
+    const agentFor = (text) => {
+      try { return (router && router.routeTask && router.routeTask(text).agent) || 'coder'; } catch (e) { return 'coder'; }
+    };
+    return learningLoop.recordTurns({
+      root,
+      transcriptPath: hookInput.transcript_path || hookInput.transcriptPath,
+      session: hookInput.session_id || hookInput.sessionId,
+      final,
+      agentFor,
+    });
+  } catch (e) { return 0; }
+}
+
+// Trains SONA from the recorded turns in a detached `ruflo hooks verified-ingest` (a hook has
+// seconds; an ingest may take longer). At most one spawn a minute per project.
+function spawnLearningIngest() {
+  try {
+    const root = learningLoopRoot();
+    if (!learningLoop || !learningLoop.enabled(root) || !learningLoop.ingestDue(root)) return;
+    const stamp = path.join(root, '.claude-flow', 'data', 'verified-ingest.spawned');
+    try { if (Date.now() - fs.statSync(stamp).mtimeMs < 60 * 1000) return; } catch (e) { /* never spawned */ }
+    fs.mkdirSync(path.dirname(stamp), { recursive: true });
+    fs.writeFileSync(stamp, String(Date.now()));
+    spawnDetachedHookRefresh('verified-ingest');
+  } catch (e) { /* best-effort only */ }
+}
 function ownedByMod(cmd, env = process.env) {
   if (!MOD_OWNABLE_EVENTS.has(cmd)) return false;
   return String(env.RUFLO_MODS_OWNS || '').split(',').some((owned) => owned.trim() === cmd);
@@ -519,22 +779,42 @@ function claimSideEffectEvent(family, stdinData, event) {
   }
 }
 
+// pre-bash is a gate (#4743): a path that cannot vouch for the command blocks it.
+function blockPreBash(reason) {
+  console.error(`[BLOCKED] ${reason}`);
+  process.exit(2);
+}
+
 async function main() {
   if (ownedByMod(command)) return;
 
   // Global safety timeout: hooks must NEVER hang (#1530, #1531)
   const safetyTimer = setTimeout(() => {
     process.stderr.write("[WARN] Hook handler global timeout (5s), forcing exit\n");
+    if (command === 'pre-bash') blockPreBash('pre-bash timed out before the command was validated');
     process.exit(0);
   }, 5000);
   safetyTimer.unref(); // don't keep process alive just for this timer
 
   let stdinData = '';
-  try { stdinData = await readStdin(); } catch (e) { /* ignore stdin errors */ }
+  // pre-bash blocks when it gets no command (#4743), so a slow host gets a
+  // wider window. The read ends at EOF, so a prompt host waits no longer.
+  try { stdinData = await readStdin(command === 'pre-bash' ? 3000 : 500); } catch (e) { /* ignore stdin errors */ }
 
   let hookInput = {};
+  let stdinUnparsable = false;
   if (stdinData.trim()) {
-    try { hookInput = JSON.parse(stdinData); } catch (e) { /* ignore parse errors */ }
+    try { hookInput = JSON.parse(stdinData); } catch (e) { stdinUnparsable = true; }
+  }
+
+  // ADR-512: record what finished and train from it, before the dedup below: it keys session-end
+  // on the session id, so after a PreCompact the real SessionEnd would never record the last turn.
+  // Recording is idempotent (a per-session transcript offset, ids from transcript positions).
+  // PreCompact runs mid-session, where the open turn may still edit and verify: only SessionEnd
+  // closes it.
+  if (command === 'session-end') {
+    recordLearningTurns(hookInput, (hookInput.hook_event_name || hookInput.hookEventName) !== 'PreCompact');
+    spawnLearningIngest();
   }
 
   if ((command === 'post-edit' || command === 'session-end') &&
@@ -575,6 +855,16 @@ async function main() {
 
 const handlers = {
   'route': () => {
+    // ADR-512: record the turns that finished, then cite the verified lessons that fit this prompt.
+    recordLearningTurns(hookInput, false);
+    if (learningLoop && !modRecordsTurns()) {
+      try {
+        if (learningLoop.enabled(learningLoopRoot())) {
+          const block = learningLoop.lessonsForPrompt(learningLoopRoot(), prompt);
+          if (block) console.log(block);
+        }
+      } catch (e) { /* non-fatal */ }
+    }
     // Inject ranked intelligence context before routing
     // ADR-472: keep the detailed recall so ONE bounded log record (ids, scores, router pick; never the prompt) is appended after routing.
     let recall = null;
@@ -674,11 +964,12 @@ const handlers = {
 
   'pre-bash': () => {
     // Basic command safety check — prefer stdin command data from Claude Code.
-    // String() wrap is belt-and-suspenders for #2017: even if a future regression
-    // re-binds `prompt` or `hookInput.command` to a non-string, `.toLowerCase()`
-    // can no longer throw a TypeError that the global try/catch would swallow
-    // (silently exiting 0 and letting the dangerous command through).
-    const cmd = String(hookInput.command || toolInput.command || prompt || '').toLowerCase();
+    // Only a non-empty string counts as the command (#2017, #4743): input that
+    // arrived late, did not parse, or carried no command blocks instead of passing.
+    if (stdinUnparsable) blockPreBash('pre-bash could not parse the hook input');
+    const raw = [hookInput.command, toolInput.command, prompt].find((c) => typeof c === 'string' && c.trim());
+    if (!raw) blockPreBash('pre-bash received no command to validate');
+    const cmd = raw.toLowerCase();
     const dangerous = ['rm -rf /', 'format c:', 'del /s /q c:\\', ':(){:|:&};:'];
     // Join literal quote fragments and normalize root paths without shell evaluation.
     function hasRootDelete(command, depth = 0) {
@@ -1028,6 +1319,7 @@ const handlers = {
     try {
       await Promise.resolve(handlers[command]());
     } catch (e) {
+      if (command === 'pre-bash') blockPreBash(`pre-bash failed: ${e && e.message}`);
       // Hooks should never crash Claude Code - fail silently
       console.log(`[WARN] Hook ${command} encountered an error: ${e.message}`);
     }
@@ -1039,7 +1331,7 @@ const handlers = {
   }
 }
 
-// Non-blocking hooks exit 0; pre-bash denials exit 2 to block PreToolUse.
+// Non-blocking hooks exit 0; pre-bash denials and failures exit 2 to block PreToolUse.
 // A denial exits immediately, before the normal completion path below.
 //
 // Only dispatch when run directly (node hook-handler.cjs <cmd>). When
@@ -1051,6 +1343,7 @@ const handlers = {
 if (require.main === module) {
   process.exitCode = 0;
   main().catch((e) => {
+    if (command === 'pre-bash') blockPreBash(`pre-bash failed: ${e && e.message}`);
     try { console.log(`[WARN] Hook handler error: ${e.message}`); } catch (_) {}
   }).finally(() => {
     process.exit(0);
@@ -1060,4 +1353,7 @@ if (require.main === module) {
 // Which sibling helpers loaded (all CommonJS, shipped as .cjs — #3555).
 const loadedHelpers = { router: !!router, session: !!session, memory: !!memory, intelligence: !!intelligence };
 
-module.exports = { runWithTimeout, INTELLIGENCE_TIMEOUT_MS, loadedHelpers, ownedByMod, MOD_OWNABLE_EVENTS, resolveCliBinForHook, cliSpawnArgs, helperRoot, scanSessionStartSettingsForRisk, srFormatRiskFindingsForAutomaticBoot, srScanSettingsForRisk, srScanCommandStringForRisk, srScanAllowRuleForRisk, SR_DANGEROUS_COMMAND_WORDS, SR_SHELL_EXEC_WORDS, SR_DOWNLOADER_WORDS, SR_STANDALONE_RISK_PATTERNS };
+// resolveGlobalCliBin/npmGlobalPrefix are exported for
+// hook-handler-global-cli.test.ts; resolveCliBinForHook for anyone checking
+// what a given machine resolves to without running a hook (#3368).
+module.exports = { runWithTimeout, INTELLIGENCE_TIMEOUT_MS, loadedHelpers, ownedByMod, MOD_OWNABLE_EVENTS, resolveCliBinForHook, resolveGlobalCliBin, npmGlobalPrefix, cliSpawnArgs, helperRoot, scanSessionStartSettingsForRisk, srFormatRiskFindingsForAutomaticBoot, srScanSettingsForRisk, srScanCommandStringForRisk, srScanAllowRuleForRisk, SR_DANGEROUS_COMMAND_WORDS, SR_SHELL_EXEC_WORDS, SR_DOWNLOADER_WORDS, SR_STANDALONE_RISK_PATTERNS };

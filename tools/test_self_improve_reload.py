@@ -490,3 +490,14 @@ def test_reboot_and_self_edit_share_one_relaunch_sequence(era, tmp_path):
     era._reload_after_self_edit(dict(OUTCOME))
     assert (tmp_path / "era.relaunch").exists()
     assert not (tmp_path / "era.stop").exists()
+
+
+def test_user_restart_does_not_exit_when_flag_cannot_be_written(era, monkeypatch):
+    from core import era_relaunch
+
+    monkeypatch.setattr(era_relaunch, "request_relaunch", lambda **kw: False)
+    result = era._shutdown_era({"relaunch": True})
+    assert "failed" in result.lower()
+    assert era._shutdown_requested is False
+    assert not era.exit_threads
+    assert "still running" in era.spoken[-1]

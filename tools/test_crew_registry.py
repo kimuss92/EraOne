@@ -93,6 +93,10 @@ class TestShippedCrew:
             "code.check",
             "diagnosis.list",
             "diagnosis.read",
+            "era.list",
+            "era.read",
+            "development.list",
+            "development.read",
         }
 
     def test_cody_cannot_write_the_vault_or_the_repo(self, report):
@@ -107,6 +111,10 @@ class TestShippedCrew:
             "vault.search",
             "diagnosis.list",
             "diagnosis.read",
+            "era.list",
+            "era.read",
+            "development.list",
+            "development.read",
         }
 
     def test_only_cody_and_drew_may_stage_source(self, report):

@@ -1,6 +1,7 @@
 # computer_control.py
 import io
 import json
+import os
 import random
 import re
 import string
@@ -8,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from core.hotkeys import parse_keys, resolve_keys, send_hotkey, send_key
 from core.process_awareness import format_running_apps
 from core.process_awareness import snapshot as process_snapshot
 from core.utils import (
@@ -207,14 +209,28 @@ def _click(x=None, y=None, button: str = "left", clicks: int = 1) -> str:
 
 def _hotkey(*keys) -> str:
     _require_pyautogui()
-    pyautogui.hotkey(*keys)
-    return f"Hotkey: {'+'.join(keys)}"
+    return send_hotkey(keys, pyautogui)
+
+
+def _hotkey_to_window(raw, title: str) -> str:
+    """Send a chord to a named window, or send nothing if it cannot be focused.
+
+    A shortcut landing in the wrong app is the real risk: ctrl+s saves the wrong
+    document. AppActivate's answer is not enough, so the foreground is re-read.
+    """
+    _focus_window(title)
+    active = get_active_window().get("title") or ""
+    if title.lower() not in active.lower():
+        return (
+            f"Could not send {'+'.join(parse_keys(raw))}: window '{title}' did not come to "
+            f"the front (focused: {active or 'unknown'}). Nothing was pressed."
+        )
+    return _hotkey(raw)
 
 
 def _press(key: str) -> str:
     _require_pyautogui()
-    pyautogui.press(key)
-    return f"Pressed: {key}"
+    return send_key(key, pyautogui)
 
 
 def _scroll(direction: str = "down", amount: str | int = "normal") -> str:
@@ -283,12 +299,15 @@ def _focus_window(title: str) -> str:
 
     if os_name == "windows":
         try:
-            script = f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'
+            # The title arrives by environment: pasted into the script, a title
+            # holding a quote would run as PowerShell.
+            script = "(New-Object -ComObject WScript.Shell).AppActivate($env:ERA_FOCUS_TITLE)"
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 timeout=5,
                 creationflags=NO_WINDOW,
+                env={**os.environ, "ERA_FOCUS_TITLE": str(title)},
             )
             time.sleep(0.3)
             return f"Focused window: {title}"
@@ -479,12 +498,14 @@ def computer_control(
             )
 
         if action == "hotkey":
-            raw = params.get("keys", "")
-            keys = [k.strip() for k in raw.split("+")] if isinstance(raw, str) else raw
-            return _hotkey(*keys)
+            raw = resolve_keys(params)
+            title = str(params.get("title") or "").strip()
+            return _hotkey_to_window(raw, title) if title else _hotkey(raw)
 
-        if action == "press":
-            return _press(params.get("key", "enter"))
+        # "key" is what the model reaches for ("action": "key", "key": "enter");
+        # live 2026-11-15 it came back "Unknown action" and the keypress was lost.
+        if action in ("press", "key", "keypress", "key_press", "press_key"):
+            return _press(resolve_keys(params) or "enter")
 
         if action == "scroll":
             direction = params.get("direction", "down")
@@ -671,6 +692,9 @@ def computer_control(
             return value
 
         if action == "running_apps":
+            from core.process_awareness import list_processes
+
+            list_processes(refresh=True)
             return "Running apps:\n" + format_running_apps(limit=int(params.get("limit", 60)))
 
         if action == "active_window":
@@ -678,6 +702,9 @@ def computer_control(
             return f"Active window: {info.get('title') or 'Desktop'} | App: {info.get('app') or 'unknown'}"
 
         if action == "system_snapshot":
+            from core.process_awareness import list_processes
+
+            list_processes(refresh=True)
             proc = process_snapshot()
             win = window_context()
             return (

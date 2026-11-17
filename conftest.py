@@ -81,6 +81,9 @@ os.environ["ERA_SEMANTIC_RECALL"] = "0"
 # automation. Unit tests that exercise the watchdog must inject their own fake
 # sampler/boost and opt in explicitly.
 os.environ["ERA_RAM_WATCHDOG"] = "0"
+# A test websocket closing must never spawn the real floating launcher (or open
+# a browser) against a throwaway test port. Tests of that path unset it.
+os.environ["ERA_NO_BROWSER"] = "1"
 # The user's live high-risk waivers (e.g. "shut down without asking") must not
 # leak into the copy: power-gate tests assert the default confirm-first behaviour.
 _prefs_copy = _TEST_MEMORY_DIR / "user_prefs.json"
@@ -351,6 +354,23 @@ def _reset_browser_grid_state():
     module = sys.modules.get("core.browser_grid_state")
     if module is not None:
         module.clear_all_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _reset_fabric_health():
+    """core.fabric.health is process-wide: three faults recorded by one test would
+    open a breaker that the next test's crew ask or capability_check then sees.
+    Only touched if a test already imported it."""
+    for phase in ("before", "after"):
+        module = sys.modules.get("core.fabric.health")
+        if module is not None:
+            module.reset()
+            module.uninstall()
+        fallback = sys.modules.get("crew.fallback")
+        if fallback is not None:
+            fallback.reset()
+        if phase == "before":
+            yield
 
 
 def pytest_report_header(config):

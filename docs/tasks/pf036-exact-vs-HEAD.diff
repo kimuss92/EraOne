@@ -1,0 +1,166 @@
+diff --git a/app/era_live/tool_dispatch.py b/app/era_live/tool_dispatch.py
+index c11761b..206089f 100644
+--- a/app/era_live/tool_dispatch.py
++++ b/app/era_live/tool_dispatch.py
+@@ -1959,10 +1959,14 @@ class ToolDispatchMixin:
+         from core import era_relaunch
+ 
+         supervised = era_relaunch.is_supervised()
+-        era_relaunch.request_relaunch(reason=reason, source=source, **extra)
+-        recoverable = supervised or era_relaunch.spawn_supervisor(_os.getpid())
++        flag_written = era_relaunch.request_relaunch(reason=reason, source=source, **extra)
++        recoverable = flag_written and (supervised or era_relaunch.spawn_supervisor(_os.getpid()))
+         if not recoverable:
+             print("[era] [RELAUNCH] WARNING: no supervisor and could not start one.")
++        elif reason == "user said 'reboot Era One'":
++            # This marker is separate from the supervisor's consumed relaunch
++            # flag and is spent only when the new engine reaches ready.
++            era_relaunch.arm_ready_ack(source, muted=bool(getattr(self.ui, "muted", False)))
+         log_event(
+             main_logger,
+             "era.relaunch.requested",
+@@ -2206,13 +2210,17 @@ class ToolDispatchMixin:
+         self._shutdown_awaiting_confirm = False
+ 
+         if relaunch:
+-            self._arm_relaunch(
++            if not self._arm_relaunch(
+                 reason="user said 'reboot Era One'",
+                 source=str(args.get("_source", "voice")),
+                 interrupted_job=(f"{job.get('brand')}/{job.get('task_type')}" if job else None),
+-            )
++            ):
++                self._shutdown_requested = False
++                self.speak("I could not schedule my restart. I am still running.")
++                return "Restart failed; Era is still running."
+             self.ui.write_log("SYS: Reboot ordered; relaunching Era One.")
+-            self.speak("Rebooting now, sir. Back in a few seconds.")
++            if not getattr(self.ui, "muted", False):
++                self.speak("I'm restarting now, sir.")
+         else:
+             # Tell the watchdog this exit is INTENTIONAL, BEFORE exiting, so it does
+             # not relaunch Era. Same path era_supervisor.py watches: ~/.era/era.stop.
+diff --git a/core/era_relaunch.py b/core/era_relaunch.py
+index 594f154..3c2a53f 100644
+--- a/core/era_relaunch.py
++++ b/core/era_relaunch.py
+@@ -43,6 +43,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
+ SUPERVISOR_PY = _REPO_ROOT / "era_supervisor.py"
+ LIFECYCLE_LOG_NAME = "era_lifecycle.jsonl"
+ HEARTBEAT_INTERVAL_S = 10.0
++READY_ACK_MAX_AGE_S = 300.0
+ 
+ # Words allowed BEFORE the command: a greeting or the wake word, nothing else.
+ # Anything more ("don't reboot Era One", "why did you reboot Era One") is not the
+@@ -68,6 +69,72 @@ def heartbeat_file() -> Path:
+     return era_home() / "era.heartbeat"
+ 
+ 
++def ready_ack_file() -> Path:
++    """One-shot receipt that an owner-requested relaunch reached readiness."""
++    return era_home() / "era.relaunch.ready"
++
++
++def arm_ready_ack(source: str, *, muted: bool = False) -> bool:
++    """Persist a short-lived marker for a successful user-requested restart."""
++    try:
++        path = ready_ack_file()
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(
++            json.dumps(
++                {"requested_at": time.time(), "source": source, "pid": os.getpid(), "muted": muted}
++            ),
++            encoding="utf-8",
++        )
++        return True
++    except OSError as exc:
++        print(f"[RELAUNCH] could not arm ready acknowledgment: {exc}")
++        return False
++
++
++def consume_ready_ack(now: float | None = None, current_pid: int | None = None) -> bool | str:
++    """Consume once; return 'muted' to suppress speech after a muted reboot."""
++    path = ready_ack_file()
++    try:
++        marker = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError, TypeError):
++        try:
++            path.unlink(missing_ok=True)
++        except OSError:
++            pass
++        return False
++    if not isinstance(marker, dict):
++        try:
++            path.unlink(missing_ok=True)
++        except OSError:
++            pass
++        return False
++    try:
++        age = (time.time() if now is None else now) - float(marker["requested_at"])
++    except (KeyError, TypeError, ValueError):
++        age = READY_ACK_MAX_AGE_S + 1
++    if not -30.0 <= age <= READY_ACK_MAX_AGE_S:
++        try:
++            path.unlink(missing_ok=True)
++        except OSError:
++            pass
++        return False
++    if marker.get("source") not in {"voice", "typed", "hud", "telegram"}:
++        try:
++            path.unlink(missing_ok=True)
++        except OSError:
++            pass
++        return False
++    if marker.get("pid") == (os.getpid() if current_pid is None else current_pid):
++        # A reconnect in the old process is not evidence that the supervisor
++        # completed the requested restart; leave the marker for its successor.
++        return False
++    try:
++        path.unlink()
++    except OSError:
++        return False
++    return "muted" if marker.get("muted") is True else True
++
++
+ def lifecycle_log() -> Path:
+     env_dir = os.environ.get("ERA_LOG_DIR")
+     base = Path(env_dir) if env_dir else _REPO_ROOT / "logs"
+diff --git a/main.py b/main.py
+index 5d0b06f..fe2ace6 100644
+--- a/main.py
++++ b/main.py
+@@ -2387,6 +2387,18 @@ class EraLive(
+ 
+                     start_drain(self)
+ 
++                    # A reboot receipt is one-shot, short-lived, and only
++                    # consumed once this new Live connection is ready.
++                    from core import era_relaunch
++
++                    reboot_ready = era_relaunch.consume_ready_ack()
++                    reboot_ready = reboot_ready and not self._standby_active
++                    if reboot_ready:
++                        self.ui.set_state("LISTENING")
++                        if reboot_ready != "muted" and not getattr(self.ui, "muted", False):
++                            self.ui.write_log("SYS: Restart complete; Era is ready.")
++                            self.speak("I'm back and ready, sir.")
++
+                     # ── UX: first boot audible greeting; routine rotations silent;
+                     # a genuine outage (quota cooldown / auth fix / network blip)
+                     # gets a short acknowledgment naming the last topic instead of
+@@ -2394,10 +2406,14 @@ class EraLive(
+                     if self._standby_active:
+                         self.ui.set_state("STANDBY")
+                         print("[era] [SILENT] Reconnected in background (standby).")
++                    elif reboot_ready:
++                        self._has_completed_initial_boot = True
++                        self.ui.set_state("LISTENING")
++                        print("[era] [OK] Owner-requested restart reached readiness.")
+                     elif buffer_for(self).items:
+                         self._has_completed_initial_boot = True
+                         self.ui.set_state("LISTENING")
+-                    elif not self._has_completed_initial_boot:
++                    elif not self._has_completed_initial_boot and not reboot_ready:
+                         self._has_completed_initial_boot = True
+                         self.ui.set_state("LISTENING")
+                         self.ui.write_log("SYS: era ready.")

@@ -80,6 +80,7 @@
 @keyframes cinematic-approval { 50% { opacity: .7; } }
 .hud-root [role=listbox] { transform-origin: top; animation: cinematic-menu-in 180ms var(--cinematic-ease) both; }
 .hud-root .menu-panel { backdrop-filter: none; }
+.hud-root .model-menu { background: var(--panel-solid); }
 @keyframes cinematic-menu-in { from { opacity: 0; transform: translateY(-5px) scale(.98); } to { opacity: 1; transform: none; } }
 .hud-root .drawer { animation: cinematic-drawer-in 320ms var(--cinematic-ease) both; }
 .hud-drawer-presence { position: absolute; inset: 0; z-index: var(--z-drawer); pointer-events: none; }

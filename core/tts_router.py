@@ -24,6 +24,16 @@ BACKEND_FISH = "fish"
 BACKEND_NONE = "none"
 
 
+def _fabric(component: str, kind: str | None, detail="") -> None:
+    """Era Fabric F1: a backend's outcome on the shared health registry."""
+    try:
+        from core.fabric import health
+
+        health.note(component, kind, detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def synthesize(text: str) -> tuple[bytes, str]:
     """Synthesize one sentence with the primary backend.
 
@@ -75,6 +85,7 @@ async def stream(text: str, lang: str = ""):
         chunks = []
     if VOICE_CFG.is_gemini():
         return  # a live voice switch while synthesis awaited owns the output now
+    _fabric("tts.fish", None if any(chunks) else "EmptyResult", FISH.last_error or "no audio")
     if not any(chunks):
         from core.tts_kokoro import KOKORO
 

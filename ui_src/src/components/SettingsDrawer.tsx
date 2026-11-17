@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Drawer from './Drawer';
+import EmpowerSettings from './EmpowerSettings';
 import { setState, useHud } from '../lib/store';
 import { api } from '../lib/transport';
 import { setSoundsEnabled, useSoundsEnabled } from '../lib/sounds';
@@ -97,6 +98,7 @@ export default function SettingsDrawer() {
             />
           </>
         )}
+        <EmpowerSettings />
         {msg && <p className="pt-2 text-meta t3">{msg}</p>}
       </div>
     </Drawer>

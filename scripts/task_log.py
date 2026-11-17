@@ -4,6 +4,7 @@
     python scripts/task_log.py --failed        only tasks with a failure/guard
     python scripts/task_log.py --last 20       the last 20 tasks
     python scripts/task_log.py --date 20260925 --dir D:\\Z.O.R.O\\logs
+    python scripts/task_log.py --ctx ctx_20261106_163501_ab12   one Era Fabric context
 
 Reads logs/task_trace-YYYYMMDD.jsonl (written by core/task_trace.py). ZORO
 writes `turn` lines (the whole procedure of one request) and `tool` lines (each
@@ -120,6 +121,34 @@ def show(rows: list[dict], failed_only: bool, last: int | None) -> int:
     return shown
 
 
+def show_ctx(ctx_id: str, log_dir: str, days: int = 7) -> bool:
+    """Print one Era Fabric TaskContext (logs/fabric/ctx-*.jsonl): who asked, what it
+    was about, and every step taken. False if it is not in the last `days` days."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from core.fabric.context import load
+
+    rec = load(ctx_id, days=days, root=Path(log_dir))
+    if rec is None:
+        return False
+    created = datetime.fromtimestamp(rec.get("created") or 0).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{rec['ctx_id']}  {created}  [{rec.get('origin')}]  intent: {rec.get('intent')}")
+    if rec.get("utterance"):
+        print(f"  said: {_short(rec['utterance'], 160)!r}")
+    if rec.get("task"):
+        print(f"  task: {_short(rec['task'], 160)}")
+    for a in rec.get("artifacts") or []:
+        how = " (inferred)" if a.get("implicit") else ""
+        print(f"  about: {a.get('kind')} {a.get('ref')}{how}  {DIM}{_short(a.get('label', ''), 90)}{RESET}")  # fmt: skip
+    for s in rec.get("steps") or []:
+        ts = datetime.fromtimestamp(s.get("ts") or 0).strftime("%H:%M:%S")
+        color = RED if s.get("outcome") == "fault" else GREEN if s.get("outcome") == "ok" else ""
+        mark = f"{color}{s.get('outcome')}{RESET if color else ''}"
+        print(f"  {ts} {s.get('component')}  {mark}  {DIM}{_short(s.get('summary', ''), 120)}{RESET}")  # fmt: skip
+    if not rec.get("steps"):
+        print(f"  {YELLOW}no steps recorded: outcome unconfirmed{RESET}")
+    return True
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -132,7 +161,16 @@ def main() -> None:
         help="only tasks that failed or tripped a guard",
     )
     ap.add_argument("--last", type=int, default=None)
+    ap.add_argument("--ctx", default=None, help="show one Era Fabric context and its steps")
     a = ap.parse_args()
+    if a.ctx:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+        if not show_ctx(a.ctx, a.dir):
+            sys.exit(f"No context {a.ctx} in {a.dir}/fabric over the last 7 days.")
+        return
     path = Path(a.dir) / f"task_trace-{a.date}.jsonl"
     if not path.exists():
         sys.exit(f"No task trace for {a.date} in {a.dir} (it starts once the app runs a task).")

@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 
+from core.hotkeys import ROUTINE_CHORDS, canonical_chord, resolve_keys
 from core.vision_types import VisionResult
 
 _STORE: dict[str, tuple[str, VisionResult, float]] = {}
@@ -50,9 +51,20 @@ def clear_latest_vision_result() -> None:
         _STORE.pop("latest", None)
 
 
-def _jit_should_capture(tool: str, action: str) -> bool:
-    """Return True if tool × action is in the mutation matrix."""
-    return tool in _JIT_MUTATION_TOOLS and action in _JIT_MUTATION_ACTIONS
+def _is_routine_hotkey(tool: str, action: str, params: dict | None) -> bool:
+    """A listed multi-key shortcut, sent right away: the screen analysis held each one up
+    for its full 5 s timeout. Lone keys keep the check, because Enter is what submits a
+    payment form. browser_control's hotkeys do not pass through this allowlist."""
+    if tool != "computer_control" or action != "hotkey" or not params:
+        return False
+    return canonical_chord(resolve_keys(params)) in ROUTINE_CHORDS
+
+
+def _jit_should_capture(tool: str, action: str, params: dict | None = None) -> bool:
+    """Return True if tool × action is in the mutation matrix and needs a fresh look."""
+    if tool not in _JIT_MUTATION_TOOLS or action not in _JIT_MUTATION_ACTIONS:
+        return False
+    return not _is_routine_hotkey(tool, action, params)
 
 
 def _jit_cooldown_ok() -> bool:
@@ -68,6 +80,7 @@ def _jit_cooldown_ok() -> bool:
 async def jit_vision_capture(
     tool: str,
     action: str,
+    params: dict | None = None,
     *,
     timeout: float = 5.0,
 ) -> None:
@@ -81,9 +94,10 @@ async def jit_vision_capture(
     Args:
         tool: The tool name about to be classified.
         action: The action about to be performed.
+        params: The call's arguments, which name the keys of a hotkey.
         timeout: Maximum seconds to wait for the capture + analysis.
     """
-    if not _jit_should_capture(tool, action):
+    if not _jit_should_capture(tool, action, params):
         return
 
     if not _jit_cooldown_ok():

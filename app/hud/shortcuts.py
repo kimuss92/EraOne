@@ -28,8 +28,28 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def icon_path() -> Path:
-    return repo_root() / "assets" / "eraone.ico"
+def icon_path(*, debug: bool = False) -> Path:
+    """The shortcut icon, copied OUT of OneDrive into %LOCALAPPDATA%\\EraOne\\icons.
+
+    The repo lives in OneDrive; when OneDrive turns a file "online-only",
+    Explorer cannot read the .ico and the shortcut shows a blank page (seen
+    2026-11-15). A local copy is always on disk. Falls back to the repo file.
+    Regenerate the art with scripts/make_icon.py; Debug carries an amber bug badge.
+    """
+    name = "eraone-v2-debug.ico" if debug else "eraone-v2.ico"
+    source = repo_root() / "assets" / name
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        return source
+    local = Path(base) / "EraOne" / "icons" / name
+    try:
+        data = source.read_bytes()
+        if not local.exists() or local.read_bytes() != data:
+            local.parent.mkdir(parents=True, exist_ok=True)
+            local.write_bytes(data)
+        return local
+    except OSError:
+        return local if local.exists() else source
 
 
 def _sibling(name: str) -> Path:
@@ -135,7 +155,7 @@ def install(*, desktop: bool = True, start_menu: bool = True) -> list[Path]:
             launcher_args(debug=True),
             root,
             "ERA ONE with live backend logs",
-            icon,
+            icon_path(debug=True),
         )
         made += [normal, debug]
     return made

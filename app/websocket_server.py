@@ -26,6 +26,8 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
+import os
 import secrets
 import threading
 import time
@@ -131,6 +133,15 @@ class WebSocketServer:
         self.bound_port = await self._bind()
         self.ready.set()
         asyncio.get_running_loop().create_task(self._push_metrics_loop())
+        from app.hud import settings
+
+        if settings.load().get("desktop_tray"):
+            from app.hud.floating_launcher import ensure_started
+
+            try:
+                await asyncio.to_thread(ensure_started, self.bound_port, self.session_token)
+            except (OSError, ImportError):
+                pass  # an optional desktop helper must not take down the voice backend
 
     async def _port_in_use(self, port: int) -> bool:
         """Something already answers there. Probed by connecting, because on
@@ -278,18 +289,42 @@ class WebSocketServer:
                     break
         finally:
             self._clients.discard(ws)
+            if not self._clients:
+                asyncio.get_running_loop().create_task(self._restore_launcher_after_close())
         return ws
+
+    async def _restore_launcher_after_close(self, grace: float = 4.0) -> None:
+        """The last workspace closed: bring the floating icon back so Era stays reachable.
+
+        Waits out a page reload first. Never raises — an optional desktop helper
+        must not disturb the voice backend.
+        """
+        await asyncio.sleep(grace)
+        if self._clients or os.environ.get("ERA_NO_BROWSER") == "1":
+            return
+        try:
+            from app.hud import browser, floating_launcher, settings
+
+            if await asyncio.to_thread(browser.find_hud_window) is not None:
+                return
+            await asyncio.to_thread(settings.update, {"floating_icon": True, "desktop_tray": True})
+            await asyncio.to_thread(
+                floating_launcher.ensure_started, self.bound_port, self.session_token
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade, never raise
+            logging.getLogger(__name__).debug("floating launcher restore skipped: %s", exc)
 
     async def _greet(self, ws: web.WebSocketResponse) -> None:
         """Bring a fresh window up to date: it cannot ask for state it missed."""
         from app.hud.events import hud
-        from app.hud.status import os_name
+        from app.hud.status import listening_mode, os_name
 
         try:
             if self._mic_state_provider is not None:
                 active = bool(self._mic_state_provider())
                 await ws.send_str(json.dumps({"type": "browser_mic", "active": active}))
             await ws.send_str(json.dumps({"type": "snapshot", "data": hud.snapshot()}, default=str))
+            await ws.send_str(json.dumps({"type": "listening_mode", "mode": listening_mode(self.engine())}))
             metrics = self._system_monitor.get_latest()
             if metrics:
                 metrics["os"] = os_name()
@@ -382,11 +417,12 @@ class WebSocketServer:
             self._clients.discard(ws)
 
     async def _push_metrics_loop(self) -> None:
-        from app.hud.status import os_name
+        from app.hud.status import listening_mode, os_name
 
         while True:
             await asyncio.sleep(2.0)
             if self._clients:
+                self.broadcast({"type": "listening_mode", "mode": listening_mode(self.engine())})
                 metrics = self._system_monitor.get_latest()
                 if metrics:
                     metrics["os"] = os_name()

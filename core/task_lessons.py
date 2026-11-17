@@ -51,7 +51,7 @@ from typing import Any
 from core.utils import get_memory_dir
 
 RECOVERY_WINDOW_S = 180.0
-MAX_MISSES = 2
+MAX_MISSES = 1
 REPEAT_TO_WARN = 3
 MAX_LESSONS = 150
 MAX_PENDING = 4
@@ -109,7 +109,7 @@ def _path():
 
 
 def _empty() -> dict:
-    return {"version": 1, "pending": [], "failures": {}, "lessons": []}
+    return {"version": 1, "pending": [], "failures": {}, "lessons": [], "diagnostic_cases": []}
 
 
 def _load() -> dict:
@@ -122,6 +122,11 @@ def _load() -> dict:
     if not isinstance(data, dict):
         return _empty()
     out = _empty()
+    out["diagnostic_cases"] = [
+        row
+        for row in data.get("diagnostic_cases", [])
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    ][-100:]
     out["pending"] = [
         p
         for p in data.get("pending", [])
@@ -357,6 +362,23 @@ def _observe(user_text, tool, args, ok, error_type, result, verification, safety
 
 def _on_failure(data, call, sig, words, user_text, error_type, result, verification, now):
     reason = diagnose(error_type, result, verification)
+    # Each failure has a bounded regression seed, even before a lesson exists.
+    # The call contains only sanitized names and a hash of values, no raw output.
+    case_id = hashlib.sha256(f"{sig}|{call.get('fp')}|{reason}".encode()).hexdigest()[:16]
+    cases = data.setdefault("diagnostic_cases", [])
+    case = next((row for row in cases if row["id"] == case_id), None)
+    if case is None:
+        case = {
+            "id": case_id,
+            "call": call,
+            "reason": reason,
+            "first": now,
+            "count": 0,
+            "status": "needs_root_cause_and_regression",
+        }
+        cases.append(case)
+    case.update(last=now, count=case["count"] + 1)
+    data["diagnostic_cases"] = cases[-100:]
     for lesson in data["lessons"]:
         # The lesson's own fix just failed on a similar request: a strike.
         if (
@@ -531,6 +553,19 @@ def hint_for_failure(user_text: str, tool: str, args: Any, error_type: Any = Non
         return None
     except Exception:  # noqa: BLE001
         return None
+
+
+def diagnostic_for_failure(tool: str, args: Any, error_type: Any = None) -> str | None:
+    """Immediate escalation advice; never authorizes a mutation or paid crew run."""
+    if not tool or _excluded(tool, args) or _verdict(False, error_type, None) is None:
+        return None
+    return (
+        "DIAGNOSTIC REQUIRED: Do not repeat the identical failed command. Inspect the "
+        "actual source/configuration/API contract and fresh state first. If this was "
+        "an applied fix, reopen its root cause immediately. Have Drew document the "
+        "cause, Cody add this case to a full-pipeline regression and repair the core, "
+        "and Nabar verify. Report applied, reloaded and live-proven separately."
+    )
 
 
 def format_lessons_for_prompt(limit: int = PROMPT_LESSONS) -> str:

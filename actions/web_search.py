@@ -202,6 +202,114 @@ def web_search(
             print("[WebSearch] ✅ Compare done.")
             return result
 
+        routed = _search_pathway(query)
+        if routed is not None:
+            return routed
+        return _legacy_search(query)
+
+    except Exception as e:
+        raise_if_cancelled()
+        print(f"[WebSearch] ❌ All backends failed: {e}")
+        return f"Search failed, sir: {e}"
+
+
+def _gemini_kind(err: Exception) -> str:
+    text = f"{type(err).__name__} {err}".lower()
+    if any(m in text for m in ("resource_exhausted", "quota", "latched", "429")):
+        return "Exhausted"
+    if any(m in text for m in ("timeout", "timed out", "deadline")):
+        return "Timeout"
+    if "empty response" in text:
+        return "EmptyResult"
+    return "Unavailable"
+
+
+def _fail(kind: str, component: str, detail: str):
+    from core.fabric import faults
+    from core.tool_result import ToolResult
+
+    return ToolResult.fail(
+        message=detail,
+        error=detail,
+        error_type=kind,
+        data={"fault": faults.make(kind, component, detail)},
+    )
+
+
+def _search_pathway(query: str) -> str | None:
+    """Era Fabric F3: config/fabric/pathways.yaml `web_search`. Gemini grounded search,
+    then DuckDuckGo, then an honest answer -- the same chain as `_legacy_search`, plus
+    breakers: a Gemini that keeps failing (spent quota) is skipped instead of paying
+    for it on every search. None when the fabric is off or the file is unusable."""
+    try:
+        from core.fabric import events, health, pathways
+        from core.tool_result import ToolResult
+
+        if not events.enabled():
+            return None
+        pathway = pathways.load()["web_search"]
+    except Exception as exc:  # noqa: BLE001 -- degrade to today's chain
+        print(f"[WebSearch] pathway unavailable ({exc}) — direct chain.")
+        return None
+    seen: dict = {"gemini": None, "ddg": None}
+
+    def gemini():
+        print("[WebSearch] 🌐 Trying Gemini...")
+        try:
+            text = _gemini_search(query)
+        except Exception as e:
+            raise_if_cancelled()
+            print(f"[WebSearch] ⚠️ Gemini failed ({e}) — trying DDG...")
+            seen["gemini"] = e
+            kind = _gemini_kind(e)
+            health.note("llm.gemini.search", kind, str(e))
+            return _fail(kind, "llm.gemini.search", str(e))
+        health.note("llm.gemini.search")
+        print("[WebSearch] ✅ Gemini OK.")
+        return ToolResult.ok(text)
+
+    def ddg():
+        try:
+            results = _ddg_search(query)
+        except Exception as ddg_error:
+            raise_if_cancelled()
+            if "no results" not in str(ddg_error).lower():
+                seen["ddg"] = ddg_error
+                health.note("tool.web_search.ddgs", "Unavailable", str(ddg_error))
+                return _fail("Unavailable", "tool.web_search.ddgs", str(ddg_error))
+            results = []
+        print(f"[WebSearch] ✅ DDG: {len(results)} result(s).")
+        if not results:
+            health.note("tool.web_search.ddgs", "EmptyResult", "no results")
+            return _fail("EmptyResult", "tool.web_search.ddgs", "no results")
+        health.note("tool.web_search.ddgs")
+        return ToolResult.ok(_format_ddg(query, results))
+
+    def say_unavailable():
+        if seen["ddg"] is not None:
+            return ToolResult.ok(f"Search failed, sir: {seen['ddg']}")
+        why = seen["gemini"] or "it has been failing, so it was skipped"
+        return ToolResult.ok(
+            f"Search came up empty for: {query}\n"
+            f"(Google grounding was unavailable — {why} — and the DuckDuckGo "
+            f"fallback returned nothing.)"
+        )
+
+    result = pathways.run(
+        "web_search",
+        {
+            "llm.gemini.search": gemini,
+            "tool.web_search.ddgs": ddg,
+            "deterministic": say_unavailable,
+        },
+        pathway=pathway,
+    )
+    return str(result.message or "")
+
+
+def _legacy_search(query: str) -> str:
+    """Today's direct chain (ERA_FABRIC=0, or an unusable pathways file)."""
+    try:
         print("[WebSearch] 🌐 Trying Gemini...")
         try:
             result = _gemini_search(query)

@@ -41,6 +41,24 @@ def test_unrelated_speech_is_refused(tool, heard):
 
 
 @pytest.mark.parametrize(
+    "heard", ["Tribute era one", "Tributi erawan", "Tribut i rawan", "rebot era one"]
+)
+def test_a_misheard_reboot_is_allowed(heard):
+    assert _ungrounded_state_change(_era(heard), "shutdown_era", relaunch=True) is None
+
+
+def test_a_refused_restart_says_it_did_not_happen():
+    """Era said "Restarting" and was then told to say nothing, so nothing ever came."""
+    refusal = _ungrounded_state_change(_era("what time is it"), "shutdown_era", relaunch=True)
+    assert "did NOT restart" in refusal and "what time is it" in refusal
+    assert "Say nothing" not in refusal
+
+
+def test_a_restart_with_no_speech_at_all_stays_silent():
+    assert "Say nothing" in _ungrounded_state_change(_era(), "shutdown_era", relaunch=True)
+
+
+@pytest.mark.parametrize(
     "tool,heard",
     [
         ("shutdown_era", "Okay, good bye and shut down yourself also."),

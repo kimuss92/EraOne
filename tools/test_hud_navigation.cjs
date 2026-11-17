@@ -58,3 +58,15 @@ const saved = state;
 for (const invalid of [null, [], {}, '__proto__', 'constructor', 'shell', '']) assert.equal(views.focusView(invalid), false);
 assert.equal(state, saved, 'invalid events cannot mutate selection');
 console.log('PASS: all view destinations, invalid-event rejection, mute persistence, gesture gate, rate limit and voice suppression');
+
+views.focusView('diagnostics');
+assert.equal(views.setPanelVisibility('diagnostics', false), true);
+assert.equal(state.drawer, null);
+views.focusView('development');
+views.setPanelVisibility('diagnostics', false);
+assert.equal(state.drawer, 'development', 'closing a different drawer must preserve the active drawer');
+views.setPanelVisibility('settings', true);
+assert.equal(state.drawer, 'settings');
+for (const bad of ['shell', '__proto__', null]) assert.equal(views.setPanelVisibility(bad, false), false);
+assert.equal(views.setPanelVisibility('settings', 'false'), false);
+console.log('PASS: semantic drawer open/close and preservation of other drawers');

@@ -74,7 +74,7 @@ def test_lesson_is_confirmed_when_the_fix_works_again_and_shows_in_prompt():
 def test_a_fix_that_stops_working_is_retired():
     learn_spotify_fix()
     fail("play hobby again", "spotify_control", {"action": "play"}, T0 + 900)
-    assert lessons()[0]["status"] == "candidate"
+    assert lessons()[0]["status"] == "retired"
     fail("play hobby later", "spotify_control", {"action": "play"}, T0 + 1900)
     assert lessons()[0]["status"] == "retired"
     assert tl.format_lessons_for_prompt() == ""

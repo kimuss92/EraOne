@@ -12,7 +12,7 @@ import type {
   WidgetLayout,
 } from './types';
 import { cue } from './sounds';
-import { focusView } from './views';
+import { focusView, setPanelVisibility } from './views';
 import { STATE_HUE } from './format';
 import { noticeFromEvent, resolve } from './notifications';
 
@@ -117,6 +117,7 @@ export function connect(): void {
     // (History — tool runs, conversation, sources — is a record and stays.)
     setState({
       link: 'reconnecting',
+      listeningMode: 'unavailable',
       rttMs: null,
       metrics: EMPTY.metrics,
       connection: { kind: 'unknown', label: 'Unknown', status: '' },
@@ -276,6 +277,9 @@ function onEvent(e: AgentEvent): void {
   }
   noticeFromEvent(e);
   switch (e.type) {
+    case 'hud.panel.visibility':
+      setPanelVisibility(md.drawer, md.visible);
+      break;
     case 'hud.view.focus':
       focusView(md.view);
       break;
@@ -532,6 +536,16 @@ function onEvent(e: AgentEvent): void {
 
 function handle(msg: Record<string, any>): void {
   switch (msg.type) {
+    case 'listening_mode':
+      {
+        const mode = typeof msg.mode === 'string' ? msg.mode : 'unavailable';
+        const previous = getState().listeningMode;
+        setState({ listeningMode: mode });
+        // Live transitions alone produce the cue. Snapshot hydration and
+        // reconnects cannot replay it.
+        if (previous === 'active' && mode === 'inactive') cue('inactivity');
+      }
+      break;
     case 'event':
       onEvent(msg.event as AgentEvent);
       break;

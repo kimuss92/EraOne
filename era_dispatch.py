@@ -845,6 +845,179 @@ def validate_edit_inputs(brand_key, brand, instruction, all_brands=None):
     return out
 
 
+# --- Telegram review push for finished `edit` drafts -----------------------------
+# The edit lane has no Python or bare shell (it keeps node/npx/npm for Remotion, so it
+# is NOT a hard sandbox: the real limit on where a push can go is that Telegram only
+# ever reaches the owner's chat). The push is trusted dispatcher code instead: it runs after the child exited 0, and the files
+# it sends come from a scan of THIS brand's final folder, never from a path the
+# model or the order named. A push is a review copy (GATE 2 is still the user's):
+# it renames nothing, writes no status and never writes "(approved)".
+_PUSH_MAX_BYTES = 45 * 1024 * 1024  # under the 50 MB Bot API upload cap
+_PUSH_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".png", ".jpg", ".jpeg"}
+_PUSH_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm"}
+_PUSH_MAX_FILES = 3
+_PUSH_DEADLINE_S = 420  # the whole push, every file
+_PUSH_PREVIEW_TIMEOUT_S = 180
+
+
+def _drafts_written_by_run(brand, run_started):
+    """Media files directly in THIS brand's final folder that this run wrote.
+
+    Regular files only (no symlinks), resolving inside the final folder, with a
+    media extension, newer than the run start (2 s of clock slack), and never one
+    already named "(approved)". Newest first, at most _PUSH_MAX_FILES. [] on any
+    problem."""
+    try:
+        final = _brand_dir(brand, "final_dir", "final")
+        if not final or not os.path.isdir(final):
+            return []
+        cutoff = run_started - 2
+        found = []
+        for p in Path(final).iterdir():
+            try:
+                if p.is_symlink() or not p.is_file() or p.suffix.lower() not in _PUSH_EXTS:
+                    continue
+                if "(approved)" in p.name.lower() or not _inside(p, final):
+                    continue
+                st = p.stat()
+                if st.st_nlink > 1:  # a hardlink to a file from elsewhere
+                    continue
+                mtime = st.st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                found.append((mtime, p))
+        found.sort(key=lambda t: t[0], reverse=True)
+        return [p for _, p in found[:_PUSH_MAX_FILES]]
+    except Exception:  # noqa: BLE001 - degrade, never raise
+        return []
+
+
+def _tg_preview(src, deadline):
+    """A 540 px re-encode of an oversize video, for Telegram only.
+
+    Written to runtime/tg_preview, OUTSIDE the final folder, so it is never a
+    deliverable and never matches the draft scan. None when ffmpeg is missing, the
+    file is not a video, the time is nearly up, the encode fails, or it is still
+    too big."""
+    try:
+        from core.transcribe import ffmpeg_path
+
+        ff = ffmpeg_path()
+        remaining = deadline - time.time()
+        if not ff or src.suffix.lower() not in _PUSH_VIDEO_EXTS or remaining < 15:
+            return None
+        out_dir = ERA_DIR / "runtime" / "tg_preview"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Unique per call (two runs with the same stem must not overwrite each other's
+        # file mid-upload); the caller deletes it once sent.
+        out = out_dir / f"{src.stem}_{time.time_ns()}_preview.mp4"
+        cmd = [
+            ff, "-y", "-protocol_whitelist", "file", "-i", str(src), "-vf", "scale=540:-2",
+            "-c:v", "libx264", "-crf", "30", "-preset", "veryfast",
+            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out),
+        ]  # fmt: skip
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=min(_PUSH_PREVIEW_TIMEOUT_S, remaining),
+            creationflags=NO_WINDOW,
+        )
+        if proc.returncode == 0 and out.is_file() and out.stat().st_size <= _PUSH_MAX_BYTES:
+            return out
+    except Exception:  # noqa: BLE001 - a failed preview costs only the preview
+        pass
+    return None
+
+
+def _push_edit_drafts(brand_key, brand, run_started):
+    """Send the drafts an `edit` run wrote to the owner's Telegram as REVIEW COPIES.
+
+    Never raises: a missing token, a Telegram error, an oversize file or a timeout
+    costs only the push. Returns {sent, preview, path_only, failed, skipped, line};
+    `line` is the sentence the user is told. ERA_EDIT_PUSH=0 switches it off."""
+    res = {"sent": [], "preview": [], "path_only": [], "failed": [], "skipped": None, "line": ""}
+    try:
+        if os.environ.get("ERA_EDIT_PUSH", "1").strip() == "0":
+            res["skipped"] = "disabled"
+            res["line"] = "Telegram push is switched off (ERA_EDIT_PUSH=0): no review copy sent."
+            return res
+        drafts = _drafts_written_by_run(brand, run_started)
+        if not drafts:
+            res["skipped"] = "no new draft"
+            res["line"] = (
+                "No new draft appeared in the final folder, so nothing was sent to Telegram."
+            )
+            return res
+        where = "; ".join(str(p) for p in drafts)
+        import era_telegram
+
+        if not era_telegram.enabled():
+            res["skipped"] = "telegram not configured"
+            res["line"] = f"Telegram isn't configured, so no review copy was sent. Draft: {where}"
+            return res
+
+        label = brand.get("display_name") or brand_key
+        deadline = time.time() + _PUSH_DEADLINE_S
+        for p in drafts:
+            if time.time() > deadline:
+                res["failed"].append((p.name, "time limit reached"))
+                continue
+            try:
+                target, is_preview = p, False
+                if p.stat().st_size > _PUSH_MAX_BYTES:
+                    target, is_preview = _tg_preview(p, deadline), True
+                if target is None:
+                    ok = era_telegram.send_message(
+                        f"{label}: draft {p.name} is too big to send here. Open it at {p} "
+                        "(DRAFT, NOT published, NOT approved)."
+                    )
+                    if ok:
+                        res["path_only"].append(p.name)
+                    else:
+                        res["failed"].append((p.name, "too big and the message failed"))
+                    continue
+                caption = (
+                    f"{label} — {p.name} — DRAFT review copy, NOT published, NOT approved. "
+                    "Reply 'approve reel N' or name a change."
+                )
+                if is_preview:
+                    caption += f" (540 px preview; full file: {p})"
+                try:
+                    ok = era_telegram.send_asset(target, caption)
+                finally:
+                    if is_preview:
+                        with contextlib.suppress(OSError):
+                            target.unlink()
+                if ok:
+                    res["preview" if is_preview else "sent"].append(p.name)
+                else:
+                    res["failed"].append((p.name, "Telegram refused it or timed out"))
+            except Exception as e:  # noqa: BLE001 - one bad file never stops the rest
+                res["failed"].append((p.name, type(e).__name__))
+
+        parts = []
+        if res["sent"]:
+            parts.append(f"sent a review copy of {', '.join(res['sent'])}")
+        if res["preview"]:
+            parts.append(f"sent a 540 px preview of {', '.join(res['preview'])} (file too big)")
+        if res["path_only"]:
+            parts.append(f"told you where {', '.join(res['path_only'])} is (too big for Telegram)")
+        if res["failed"]:
+            fails = ", ".join(f"{n} ({why})" for n, why in res["failed"])
+            parts.append(f"couldn't send {fails}")
+        res["line"] = (
+            "Telegram: " + "; ".join(parts) + ". Drafts only, still needs your approval."
+            f" Files: {where}"
+        )
+    except Exception as e:  # noqa: BLE001 - degrade, never raise
+        res["failed"].append(("push", type(e).__name__))
+        res["line"] = (
+            "Couldn't send the review copy to Telegram. The drafts are in the final folder."
+        )
+    return res
+
+
 def _languages_line(brand):
     cl = brand.get("content_languages") or {}
     if not cl.get("primary"):
@@ -1552,18 +1725,31 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
     # the existing approve/publish lanes can never pick it up. "edit" finishes a
     # reel in the brand's final folder: same queue, same Gate 2.
     if task_type in ("weekly", "campaign", "rush", "revise", "approve", "adcreative", "edit"):
+        if task_type == "edit":
+            # The edit lane has no Python, so it cannot run era_telegram.py: the
+            # dispatcher pushes the review copy itself after the run (see
+            # _push_edit_drafts). Telling the model to try would only invite a denied call.
+            push_para = (
+                "Era sends the review copy to my Telegram herself when you finish. Do NOT "
+                "try to send it, and do not run any Telegram or Python command: just report "
+                "each finished asset's absolute path and its caption.\n"
+            )
+        else:
+            push_para = (
+                "THEN PUSH IT TO ME ON TELEGRAM so I can review it even when I am away from "
+                "the machine. Run this once per finished asset:\n"
+                f'        python "{ERA_DIR / "era_telegram.py"}" asset "<absolute path>" '
+                '--caption "<item name> — <material/swatch> — awaiting your approval"\n'
+                'It prints {"ok":true} on success. If it prints ok:false, say so in your '
+                "summary — do not pretend I have seen the asset. Also email it to the notify "
+                "address above as a backup.\n"
+            )
         rush_note += (
             "ASSET REVIEW — how you show me a finished draft (GATE 2).\n"
             "For every asset you finish, tell me, in your final summary: the item name "
             '("reel 1"), its ABSOLUTE file path, the material/swatch you used, and the '
             "caption body you wrote.\n"
-            "THEN PUSH IT TO ME ON TELEGRAM so I can review it even when I am away from "
-            "the machine. Run this once per finished asset:\n"
-            f'        python "{ERA_DIR / "era_telegram.py"}" asset "<absolute path>" '
-            '--caption "<item name> — <material/swatch> — awaiting your approval"\n'
-            'It prints {"ok":true} on success. If it prints ok:false, say so in your '
-            "summary — do not pretend I have seen the asset. Also email it to the notify "
-            "address above as a backup.\n"
+            f"{push_para}"
             "Then say plainly which items are waiting on my approval and that I can "
             'reply "approve reel 1" or name a change.\n'
             'THE APPROVAL INVARIANT: the string "(approved)" in a filename is MY '
@@ -2798,7 +2984,7 @@ def run_task(
         "ok" if wrote else "ok (wrote 0 files)",
         f"{wrote} file(s) changed. {str(result).strip()[:400]}",
     )
-    return {
+    outcome = {
         "ok": True,
         "brand": brand_key,
         "result": result,
@@ -2806,6 +2992,23 @@ def run_task(
         "wrote_files": wrote,
         "log_path": log_path,
     }
+    if task_type == "edit":
+        # Only after a clean exit: a failed run can leave a half-written file.
+        push = _push_edit_drafts(brand_key, brand, run_started)
+        log_event(
+            dispatch_logger,
+            "cm.edit.push",
+            "INFO",
+            brand=brand_key,
+            sent=len(push["sent"]),
+            preview=len(push["preview"]),
+            path_only=len(push["path_only"]),
+            failed=len(push["failed"]),
+            skipped=push["skipped"],
+        )
+        outcome["result"] = f"{str(result).rstrip()}\n\n{push['line']}"
+        outcome["telegram_push"] = push
+    return outcome
 
 
 if __name__ == "__main__":

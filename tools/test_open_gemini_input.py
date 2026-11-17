@@ -16,6 +16,18 @@ def pcm(frames=1):
 
 
 def test_media_and_attention_filters_never_consume_live_requests():
+    # Since the 2026-11-11 listening-session work, _send_realtime DOES consult
+    # the attention gate on purpose (the wake/attention behaviour is protected,
+    # see docs/PROTECTED_FIXES.md). What must hold is that the REAL gate, inside
+    # an open listening window, passes every frame through in order and never
+    # needs a name check. The media filter must still never gate live input.
+    from core.attention import AttentionGate
+
+    gate = AttentionGate(
+        SimpleNamespace(window_open=lambda: True),
+        recognizer_factory=lambda: pytest.fail("an open window must not need a name check"),
+    )
+
     async def scenario():
         sent = []
         requested = [pcm(2), bytes(1920), pcm(2)]
@@ -26,7 +38,8 @@ def test_media_and_attention_filters_never_consume_live_requests():
             _browser_mic_active=True,
             session_manager=SimpleNamespace(get_state_snapshot=lambda: {}),
             _speaker_gate=lambda: SimpleNamespace(feed=lambda frame: [frame]),
-            _attention_gate=lambda: pytest.fail("attention must not gate live requests"),
+            _attention_gate=lambda: gate,
+            _attention_keep_open=lambda: False,  # the window alone keeps it open
             _media_voice_frames=lambda frame: pytest.fail("media must not gate live requests"),
             _note_sent_voice=lambda frame: None,
         )

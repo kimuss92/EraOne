@@ -19,6 +19,7 @@ const SEMANTIC = new Set<AgentState>(['complete', 'error', 'awaiting_approval', 
 function CoreStage({ nodes, hero = false, paused = false }: Props) {
   const link = useHud(s => s.link);
   const agent = useHud(s => s.agent);
+  const listeningMode = useHud(s => s.listeningMode);
   const theme = useHud(s => s.theme);
   const pulse = useHud(s => s.toolPulse);
   const tools = useHud(s => s.tools);
@@ -60,6 +61,15 @@ function CoreStage({ nodes, hero = false, paused = false }: Props) {
         {hero && <span className="era-wordmark" data-state={state} aria-label="ERA ONE">ERA<i aria-hidden="true" />ONE</span>}
         <span className="micro">AGENT STATE</span>
         <span className="state-label" data-state={state}>{STATE_LABEL[state]}</span>
+        {link === 'online' && listeningMode === 'inactive' && state !== 'offline' && state !== 'standby' && (
+          <div role="status" className="era-inactivity" aria-label="Inactivity mode. Say Era or Era One to wake.">
+            <span className="era-inactivity-mark" aria-hidden="true" />
+            <span className="era-inactivity-copy">
+              <span className="era-inactivity-title">INACTIVITY MODE</span>
+              <span className="era-inactivity-hint">Say “Era” or “Era One” to wake</span>
+            </span>
+          </div>
+        )}
         {sub && sub.toUpperCase() !== STATE_LABEL[state] && (
           <span className="max-w-[28rem] truncate px-4 text-center font-mono text-meta t2">{sub}</span>
         )}

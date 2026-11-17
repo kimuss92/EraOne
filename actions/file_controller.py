@@ -1220,10 +1220,36 @@ def _read_text_capped(target: Path, max_chars: int) -> str:
     return content
 
 
+_DIAG_REPORT_NAME = re.compile(r"diag_[0-9]{8}_[0-9]{6}(?:\.md)?", re.ASCII)
+
+
+def _diagnosis_report(path: str, name: str) -> Path | None:
+    """Era's own self-diagnosis report, named by its id, wherever the model looked.
+
+    2026-11-05 live: the deep diagnosis said "report diag_20261105_234618", Era
+    read it with parent="diagnosis" (an ignored argument), the read defaulted to
+    the Desktop and answered "File not found" — the report was in runtime/diagnosis
+    all along. READ ONLY: only read_file calls this; write/delete never resolve here.
+    """
+    raw = (name or Path(str(path or "")).name).strip()
+    if not _DIAG_REPORT_NAME.fullmatch(raw):
+        return None
+    try:
+        from actions.self_diagnosis import REPORT_DIR
+    except Exception:
+        return None
+    candidate = REPORT_DIR / (raw if raw.endswith(".md") else f"{raw}.md")
+    return candidate if candidate.is_file() and not candidate.is_symlink() else None
+
+
 def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
     try:
         base = _resolve_path(path)
         target = (base / name) if name else base
+        if not target.exists():
+            report = _diagnosis_report(path, name)
+            if report is not None:
+                target = report
         if not is_safe_path(target):
             return f"Access denied: {target}"
 
@@ -1257,6 +1283,42 @@ def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
         return f"Could not read file: {e}"
 
 
+def _name_key(stem: str) -> str:
+    """Case, separators and plural-s folded: 'System Limitations Log' ~ 'system_limitation_log'."""
+    words = re.findall(r"[a-z0-9]+", stem.lower())
+    return "".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words)
+
+
+def _existing_twin(target: Path) -> Path | None:
+    """The ONE existing file in target's folder whose name is the same name, spelled
+    differently. None when there is no such file or more than one could be meant.
+
+    2026-11-05/06 live: Era created "System Limitations Log.txt", then the next day
+    appended to "system_limitation_log.txt". Append to a missing file silently CREATED
+    a second file and still said "Appended to", so the user's notes split across two
+    files and Era "forgot" the one they had made together.
+    """
+    folder = target.parent
+    if not folder.is_dir():
+        return None
+    key = _name_key(target.stem)
+    if len(key) < 4:
+        return None
+    matches = []
+    try:
+        for p in folder.iterdir():
+            if not p.is_file() or p == target:
+                continue
+            if target.suffix and p.suffix.lower() != target.suffix.lower():
+                continue
+            other = _name_key(p.stem)
+            if other == key or difflib.SequenceMatcher(None, key, other).ratio() >= 0.9:
+                matches.append(p)
+    except OSError:
+        return None
+    return matches[0] if len(matches) == 1 else None
+
+
 def write_file(
     path: str, name: str = "", content: str = "", append: bool = False, overwrite: bool = False
 ) -> str:
@@ -1265,8 +1327,14 @@ def write_file(
         target = (base / name) if name else base
         if name:
             target = _ensure_openable_extension(target)
+        matched_from = ""
+        if append and not target.exists():
+            twin = _existing_twin(target)
+            if twin is not None:
+                matched_from, target = target.name, twin
         if not is_safe_path(target):
             return f"Access denied: {target}"
+        created = not target.exists()
         if target.exists() and not append:
             if not overwrite:
                 return (
@@ -1280,8 +1348,16 @@ def write_file(
         mode = "a" if append else "w"
         with open(target, mode, encoding="utf-8") as f:
             f.write(content)
-        action = "Appended to" if append else "Written to"
+        if append and created:
+            # Never say "Appended to" a file that did not exist: that hid a duplicate.
+            action = "Created new file (no existing file had that name)"
+        else:
+            action = "Appended to" if append else "Written to"
         result = f"{action}: {target.name}"
+        if matched_from:
+            result += f" (the existing file; you asked for '{matched_from}')"
+        if append or created:
+            result += f" (path: {target})"
         if not append and "backup_path" in locals() and backup_path:
             result += f" (backup: {Path(backup_path).name})"
         return result

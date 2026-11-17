@@ -175,6 +175,32 @@ def _step(params: dict) -> int:
     return 10
 
 
+def _evidence(res, suffix: str = ""):
+    """A verified ToolResult when core.audio_endpoints READ the change back.
+
+    Every device write there re-reads the hardware before answering, but the
+    answer reached Era as bare text, so she said "I couldn't confirm it took
+    effect" about a level she had just measured (PF-030). Only an ok result whose
+    read-back matches the request is upgraded; anything else stays text, because
+    the dispatcher does `r or "Done."` and a failed ToolResult is falsy.
+    """
+    from core.tool_result import ToolResult
+
+    data = dict(getattr(res, "data", None) or {})
+    message = res.message + suffix
+    requested, level = data.get("requested"), data.get("volume")
+    if not res.ok or "device" not in data or data.get("not_switched"):
+        return message
+    if requested is not None and (level is None or abs(level - requested) > 2):
+        return message  # a quantising driver: reported truthfully, not confirmed
+    result = ToolResult.ok(message, data=data, tool_name="audio_control")
+    result.verified = True
+    result.verifier_name = "audio_endpoint"
+    result.verification_status = "VERIFIED"
+    result.verification_message = "Read back from the Windows audio endpoint after the change."
+    return result
+
+
 def _system(action: str, params: dict) -> str:
     """The unchanged system-mixer path (computer_settings)."""
     from actions import computer_settings as cs
@@ -230,8 +256,8 @@ def audio_control(
 
                 ep, err = ae.resolve(device, ae.OUTPUT)
                 if ep is not None and err is None:
-                    return res.message + mr.held_elsewhere_note(ep)
-            return res.message
+                    return _evidence(res, mr.held_elsewhere_note(ep))
+            return _evidence(res)
 
         if action == "route_media":
             from core import media_routing as mr
@@ -306,12 +332,12 @@ def audio_control(
             v = _parse_volume_value(params.get("value"))
             if v is None:
                 return f"Tell me a level from 0 to 100 for {device}, sir."
-            return ae.set_device_volume(device, v, flow).message
+            return _evidence(ae.set_device_volume(device, v, flow))
         if action in ("up", "down"):
             step = _step(params)
-            return ae.step_device_volume(device, step if action == "up" else -step, flow).message
+            return _evidence(ae.step_device_volume(device, step if action == "up" else -step, flow))
         muted = {"mute": True, "unmute": False, "toggle_mute": None}[action]
-        return ae.set_device_mute(device, muted, flow).message
+        return _evidence(ae.set_device_mute(device, muted, flow))
     except Exception as e:  # last-resort: the tool must always answer
         print(f"[audio_control] unexpected failure: {type(e).__name__}: {e}")
         return "I couldn't complete that audio command, sir."

@@ -63,8 +63,10 @@ async def handle_tool(engine: Any, args: dict):
 
 
 async def create_service() -> CallCoordinator:
+    from core.protected_config import ProtectedConfigError
     from core.telegram_call_setup import load_settings, private_directory
 
+    setup_error = ""
     try:
         settings = await asyncio.to_thread(lambda: load_settings(private_directory()))
         verified = all(
@@ -77,10 +79,13 @@ async def create_service() -> CallCoordinator:
         from core.telegram_call_activation import calling_enabled
 
         enabled = calling_enabled(settings)
+    except ProtectedConfigError:
+        owner, enabled = None, False
+        setup_error = "credentials_unreadable"
     except Exception:
         owner, enabled = None, False
     if owner is None:
-        return CallCoordinator(
+        service = CallCoordinator(
             None,
             enabled=False,
             provider=None,
@@ -88,6 +93,8 @@ async def create_service() -> CallCoordinator:
             input_policy=None,
             notify=hud.telegram_call_observed,
         )
+        service.error = setup_error
+        return service
     from core.telegram_call_tools import RemoteTools, declarations
 
     actor = RemoteTools(owner)

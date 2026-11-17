@@ -101,6 +101,23 @@ improvement themes to revisit against evidence; #44 visual polish stays paused.
 
 ## 🔴 In progress
 
+**2026-11-16 · PF-035/036/037 built and independently ACCEPTED:**
+the inactivity HUD uses theme tokens and an opaque panel plus a transition-only
+sound cue; requested restart acknowledgment is bound to an expiring one-shot
+ready marker; YouTube supports bounded Latin/Arabic transliteration and gives
+real candidate titles when distinct recordings remain ambiguous. Windows
+focused tests: 4,219 passed; all protected guards: 409 passed; registry OK;
+Windows Vite build and isolated dark/light preview checked. Exact review targets
+and initial hashes: `docs/tasks/hud-reboot-youtube-review-20261116.md`.
+Claude found two real failures, then accepted the corrected pinned candidate
+(`qitem-20261116213431-a6ea7d70`). Claude ran 362 focused Windows tests,
+registry check and all 409 guards; the corrected bytes are in
+`docs/tasks/hud-reboot-youtube-review2-20261116.md`.
+Owed after normal reload: check live inactivity
+transition/sound, requested restart pre-notice and actual-ready acknowledgment,
+and the selected YouTube recording plus fresh playback state. No live restart or
+media was run for this assignment.
+
 **2026-11-16 · PF-034 + PF-008 built (Claude, in dev-review):** the window now
 really expires: music pauses and scheduled reports no longer re-open it
 (root cause of Era answering unnamed speech at 18:04 UTC). Any mute, incl. a

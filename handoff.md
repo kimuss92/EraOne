@@ -9,6 +9,69 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 > **EVERY AGENT, BEFORE ANY EDIT:** read `docs/PROTECTED_FIXES.md` and follow
 > `AGENTS.md` §0. The gate re-runs every protected fix's guard tests.
 
+### 2026-11-16 · Claude review accepted · PF-035/036/037 pinned candidate
+
+Claude independently checked the exact seven revised file hashes in
+`docs/tasks/hud-reboot-youtube-review2-20261116.md`, accepted the F1/F2
+corrections, and recorded the verdict in
+`docs/tasks/hud-reboot-youtube-claude-review-20261116.md` and queue row
+`qitem-20261116213431-a6ea7d70`. Claude ran 362 focused Windows tests,
+registry validation, and all 409 protected guards. The two distinct YouTube
+recordings still require the owner to choose, with real titles shown. Live
+reboot, HUD transition/cue and YouTube playback remain unproven and owed.
+
+### 2026-11-16 · Codex · PF-036/037 review corrections: muted reboot and Latin-only title
+
+**Wrong:** Claude's pinned-candidate review found that a muted reboot would
+still speak after the new process started, because UI mute reset on boot. The
+logged "Sabr Al Rijal" query matched the bilingual screenshot title only
+through its Arabic segment; the Latin-only "Saber Elrjel" form failed.
+
+**Changed:** the one-shot reboot receipt now carries the mute choice; the new
+process consumes it and stays silent, including its ordinary boot greeting.
+The title matcher accepts the logged Latin spelling when a six-plus consonant
+skeleton is identical and the character ratio is at least 0.7. The candidate
+and exact hashes are in `docs/tasks/hud-reboot-youtube-review2-20261116.md`.
+
+**Verified:** Windows 233 focused tests and all 409 protected guards passed;
+registry OK; Ruff lint/format clean. Claude's independent re-review and live
+reboot/YouTube checks remain owed. No live restart or media was run.
+
+### 2026-11-16 · Codex · PF-035/036/037: inactivity cue, restart readiness, YouTube selection
+
+**Wrong:** the inactivity chip looked detached from Era's appearance and had no
+entry cue. A requested reboot had no correlated "ready" acknowledgment. The
+owner's YouTube query for "Sabr Al Rijal Mikasa Music" found distinct Arabic /
+transliterated recordings but returned a generic failure after candidate
+extraction.
+
+**Changed:** PF-035 integrates the accessible inactivity state with theme
+warning/panel/text tokens, uses an opaque panel surface in both themes, and cues
+only on a live active-to-inactive transition through existing sound gates.
+PF-036 adds an expiring, one-shot restart-ready marker bound to the requested
+relaunch, speaks before the authorized exit, and acknowledges only after the
+new connection is ready; muted speech remains suppressed. PF-037 adds bounded
+Arabic/Latin transliteration matching, preserves genuine ambiguity, and returns
+actual visible choice titles. Scoped candidate, source anchors and current file
+hashes are in `docs/tasks/hud-reboot-youtube-review-20261116.md`.
+
+**Verified:** Windows focused suite reported 4,219 passed, 2 warnings; Windows
+protected guards 409 passed, 2 warnings; `protected_fixes.py check` reported
+REGISTRY OK. Windows Ruff check and format check passed after Python style
+corrections. Windows Vite build passed after the final CSS adjustment (1,844
+modules). Isolated preview screenshots were inspected in dark/Neon and
+light/Aurora; they use synthetic UI state and a disconnected backend. Full
+`era_gate.py --changed` ran its tests/guards/manifest/doctor successfully, but
+returned nonzero on Ruff before the subsequent Python style corrections; the
+separate Ruff checks then passed. The gate regenerated `docs/MANIFEST.md`; this
+is a generated current-tree artifact and was preserved.
+
+**Not proven / owed:** no live restart, voice timing, microphone transition or
+YouTube media playback was run. The preview does not prove live listening-mode
+delivery or sound unlock. These three scoped candidates are awaiting
+dev-build's independent verdict on the pinned files in the review note; do not
+mark accepted until that verdict lands.
+
 ### 2026-11-16 · Claude · PF-034: only real conversation re-anchors the window; PF-008: voice unmute after any mute
 
 **Wrong (live logs, UTC):** owner voiceprint verification is disabled, so all

@@ -78,7 +78,7 @@ from core.llm.toolspec import (
 # 58 -> 57 on 2026-10-06: `claude_bridge` removed — Era no longer drives or reads the
 # Claude Code GUI (window-polling gave false statuses, e.g. "still working, 3 min").
 # Self-improve uses `claude -p` internally; core/claude_headless.py is kept as a library.
-EXPECTED_TOOL_COUNT = 59  # Native Telegram calling plus explicit CodeMode.
+EXPECTED_TOOL_COUNT = 60  # Adds the explicit Era workbench capability surface.
 
 # Tools declaring at least one required parameter. Pinned for the same reason as
 # EXPECTED_TOOL_COUNT: it is the non-vacuity floor for test_required_sets_survive,
@@ -97,7 +97,7 @@ EXPECTED_TOOL_COUNT = 59  # Native Telegram calling plus explicit CodeMode.
 # 40 -> 42 on 2026-10-04: `vault_bridge` and `crew` each require `action`, so a bare
 # call can never be read as a write or as a task for the crew.
 # 42 -> 41 on 2026-10-06: `claude_bridge` (required `action`) removed.
-EXPECTED_TOOLS_WITH_REQUIRED = 43
+EXPECTED_TOOLS_WITH_REQUIRED = 44  # era_workbench requires capability and action.
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "tool_declarations_anthropic.json"
 

@@ -22,6 +22,7 @@ from actions.computer_settings import computer_settings
 from actions.design_studio import design_studio
 from actions.desktop import desktop_control
 from actions.dev_agent import dev_agent
+from actions.era_workbench import era_workbench
 from actions.file_controller import file_controller
 from actions.file_processor import file_processor
 from actions.flight_finder import flight_finder
@@ -167,6 +168,7 @@ _CANCEL_DISCARD = (
 # "always background" would ack over ~2000 pause/next/volume calls that already
 # return in under a second; a grace discriminates by what actually happened.
 _BG_GRACE_S: dict[str, float] = {
+    "era_workbench": 1.5,  # Office/REA/network work must not block voice reception.
     "open_app": 1.5,  # Window read-back/catalog discovery must not stall voice reception.
     "system_performance": 1.5,  # PC Manager UIA can stall for minutes.
     "media_coordinator": 1.5,  # Browser/CDP recovery can exceed 45 seconds.
@@ -180,6 +182,8 @@ _BG_GRACE_S: dict[str, float] = {
     "file_processor": 2.0,  # median 5.8s  / p90 22.0s
     "screen_process": 2.5,  # median 6.3s  / p90 30.7s
 }
+
+_WEB_API_GRACE_S = 8.0
 
 # Model-facing text for a tool that outlived its grace. It must not let the
 # model invent an outcome: the real one is spoken later by _deliver_tool_outcome
@@ -268,6 +272,48 @@ _STATE_TOOL_KIND = {
     "set_microphone": "microphone",
 }
 _STATE_TOOL_WINDOW_S = 60.0
+
+# PF-028: starting music needs the owner's words too. Live 2026-11-15 23:06:
+# "Open Spotify" made the model add spotify_control play, music the owner never
+# asked for (opening Spotify must not start playback, decided 2026-09-25). The
+# app's name alone ("Open Spotify") is never an order to play.
+_MEDIA_START_ORDER = re.compile(
+    r"\b(?:play\w*|music|song|songs|track|tracks|resume|unpause|continue|put\s+on|listen\w*"
+    r"|playlist|album|mix|beats?|tune|tunes|radio|jou\w*|mets|musique|chanson\w*|reprend\w*"
+    r"|[eé]cout\w*|lance\s+(?:la|une|de\s+la)\s+musique)\b"
+    r"|شغل|شغّل|موسيقى|موسيقا|اغنية|أغنية|اغاني|أغاني",
+    re.IGNORECASE,
+)
+_MEDIA_START_ACTIONS = frozenset({"play", "resume", "spotify_play", "spotify_resume"})
+
+
+def _ungrounded_media_start(era, tool_name: str, args: dict | None) -> str | None:
+    """A refusal when the model starts playback nobody asked for, else None."""
+    args = args or {}
+    action = str(args.get("action") or "").strip().lower()
+    if action not in _MEDIA_START_ACTIONS:
+        return None
+    if tool_name == "media_coordinator":
+        target = str(args.get("target") or args.get("app") or "").strip().lower()
+        if target not in {"", "spotify", "music"}:
+            return None
+    elif tool_name != "spotify_control":
+        return None
+    utterances = _user_utterances(era, _STATE_TOOL_WINDOW_S)
+    if any(_MEDIA_START_ORDER.search(t or "") for _, t in utterances):
+        return None
+    heard = _current_user_text(era)
+    log_event(
+        main_logger, "tool.grounding.refused", "WARNING", tool=tool_name, heard=(heard or "")[:80]
+    )
+    print(
+        f"[era] [GROUNDING] refused {tool_name} {action}: nobody asked for music (heard={heard!r})"
+    )
+    return (
+        "Not done: the user did not ask for music, so playback was NOT started. "
+        "Do not start it. Answer only what the user actually asked."
+    )
+
 
 # Granting a per-category HIGH-risk waiver (manage_preference) needs the user's own
 # words: a "don't ask / without confirmation" phrase AND the category named.
@@ -406,7 +452,7 @@ def _user_utterances(era, window_s: float, since_ts: float = 0.0) -> list[tuple[
     return [(ts, t) for ts, t in texts if now - ts <= window_s and ts >= since_ts]
 
 
-def _ungrounded_state_change(era, tool_name: str) -> str | None:
+def _ungrounded_state_change(era, tool_name: str, relaunch: bool = False) -> str | None:
     """A refusal string when the model called a session-state tool (shutdown,
     standby, mic) without the user having asked for it, else None.
 
@@ -419,13 +465,29 @@ def _ungrounded_state_change(era, tool_name: str) -> str | None:
     if kind is None:
         return None
     pattern = _STATE_TOOL_ORDERS[kind]
-    if any(pattern.search(t or "") for _, t in _user_utterances(era, _STATE_TOOL_WINDOW_S)):
+    utterances = _user_utterances(era, _STATE_TOOL_WINDOW_S)
+    if any(pattern.search(t or "") for _, t in utterances):
         return None
+    if kind == "shutdown":
+        from core.era_relaunch import is_reboot_command
+
+        is_order = getattr(era, "_is_reboot_order", is_reboot_command)
+        if any(is_order(t or "") for _, t in utterances):
+            return None
     heard = _current_user_text(era)
     log_event(
         main_logger, "tool.grounding.refused", "WARNING", tool=tool_name, heard=(heard or "")[:80]
     )
     print(f"[era] [GROUNDING] refused {tool_name}: no matching spoken order (heard={heard!r})")
+    if relaunch and heard:
+        # She often says "Restarting" before this returns, so silence here reads as a
+        # restart that never comes. The user spoke: tell them it did not happen.
+        return (
+            f"Not done: Era did NOT restart. The words came through as {heard[:60]!r}, not "
+            "'reboot Era One'. If you said you were restarting, correct that now in one short "
+            "sentence: say you did not restart, and ask the user to repeat it or use the "
+            "restart button on the HUD."
+        )
     return (
         f"Not done: nobody asked for {tool_name.replace('_', ' ')} just now. "
         "That call came from background audio or an internal turn. "
@@ -576,6 +638,97 @@ def _scheduled_by_voice(tool: str) -> bool:
     if VOICE_GATED_ACTIONS.get(tool) != norm_action(step.get("args")):
         return False  # this step is not the gated action the grant was given for
     return voice_authorized_for(task, tool)
+
+
+def finalize_tool_result(
+    era,
+    tool_name: str,
+    parameters: dict,
+    raw,
+    *,
+    risk_level: str = "LOW",
+    requires_confirmation: bool = False,
+    duration_ms: int | None = None,
+) -> ToolResult:
+    """Convert, verify, tag and log ONE executed tool call.
+
+    Module-level, not a mixin method, because callers and tests bind the
+    dispatcher's individual steps onto duck-typed objects: a method call would
+    make "has the finalizer" a requirement of every test double. `era` is only
+    used for the optional caught-exception hook.
+
+    Until 2026-11-11 the `confirm_pending_confirmation` branch returned
+    `_execute_tool_raw` directly, so the action that needed approval most — a
+    delete, a send, an overwrite — was the one action whose postcondition was
+    never checked. Both paths now end here.
+    """
+    if isinstance(raw, str) and ("Unknown tool:" in raw or "Unknown action:" in raw):
+        return ToolResult.fail(
+            message=raw,
+            error_type="UnknownTool",
+            tool_name=tool_name,
+            action_name=parameters.get("action"),
+            duration_ms=duration_ms,
+        )
+
+    result = ToolResult.from_any(
+        raw,
+        tool_name=tool_name,
+        action_name=parameters.get("action"),
+        duration_ms=duration_ms,
+    )
+
+    result.risk_level = risk_level
+    result.requires_confirmation = requires_confirmation
+
+    result = verify_tool_result(result, tool=tool_name, parameters=parameters)
+    # Evidence-gated completion (core/completion_contract.py): what the runtime
+    # can PROVE rides with the result, so neither the model nor the speech layer
+    # has to infer success from the absence of an exception.
+    try:
+        from core.completion_contract import annotate
+
+        result = annotate(result, tool_name, parameters.get("action"))
+    except Exception as _completion_err:  # never change an outcome here
+        print(f"[era] [COMPLETION] annotation skipped for {tool_name}: {_completion_err}")
+
+    recovery = result.data.get("recovery") if isinstance(result.data, dict) else None
+    if isinstance(recovery, dict) and recovery.get("strategy") == "same_read_once":
+        recovery["verification"] = result.verification_status
+        if not result.success and recovery.get("outcome") == "returned_success":
+            recovery["outcome"] = "verification_failed"
+        log_event(
+            main_logger,
+            "tool.recovery.verified",
+            "INFO",
+            tool=tool_name,
+            action=parameters.get("action"),
+            success=result.success,
+            recovery=recovery,
+        )
+
+    if not result.success:
+        print(
+            f"[era] [ERROR] {tool_name} failed: {result.error_type} - {result.short_message(200)}"
+        )
+        log_event(
+            main_logger,
+            "tool.execution.failed",
+            "ERROR",
+            tool=tool_name,
+            action=parameters.get("action"),
+            error_type=result.error_type,
+            # Without the message, self_diagnosis could only guess at causes
+            # ("2x tool=file_controller") — and a cancelled confirmation looks
+            # identical to a crash. The message is what tells them apart.
+            error=result.short_message(200),
+            duration_ms=result.duration_ms,
+        )
+        log_caught = getattr(era, "_log_caught_exception", None)
+        if callable(log_caught):
+            log_caught(tool_name, parameters, result)
+
+    return result
 
 
 class ToolDispatchMixin:
@@ -876,7 +1029,7 @@ class ToolDispatchMixin:
             f"1. If the user says 'close this app' or 'minimize this', extract \"{foreground_window}\" as the target parameter for window_control.\n"
             f"2. NEVER use screen_process (vision) to verify media state. Vision costs 12+ seconds and is unnecessary:\n"
             f"   - To check if Spotify is playing, a playlist/song actually started, or the window state: call spotify_control with action='status'. It reads the real Windows audio session instantly.\n"
-            f"   - spotify_control already verifies playback internally before it reports success, so trust its returned message. If it says playback did not start, report that honestly instead of screenshotting.\n"
+            f"   - Fresh post-command live_app_state observations outrank command receipts and this older context. Unknown telemetry is unverified; never infer playback from a window title.\n"
             f"3. Window operations on Spotify ('minimize spotify', 'maximize spotify', 'focus spotify') target the DESKTOP APP window. Use spotify_control action='minimize' for minimize, or window_control with title='Spotify' for other window actions. NEVER open the Spotify web player (open.spotify.com) for these commands — the desktop app is already running.\n"
             f"4. Trust window_control's returned message: it verifies the real window state after acting. Do not follow a successful window action with another tool call to 'check' it.\n\n"
         )
@@ -968,7 +1121,8 @@ class ToolDispatchMixin:
             "On resumed sessions, do not say full greetings like:\n"
             '"era online", "At your service", "What is the objective?"\n'
             "Only acknowledge reconnect if instructed by session state, for example:\n"
-            '"Back online, sir."\n'
+            '"Era One online." Only after reconnection, never before a restart.\n'
+            "For a request to reboot or restart yourself, call shutdown_era with relaunch=true immediately. Never merely promise to restart.\n"
         )
 
         parts = [os_vision_ctx]
@@ -1003,6 +1157,24 @@ class ToolDispatchMixin:
         except Exception as _lessons_err:
             print(f"[era] [LESSONS] prompt injection skipped: {_lessons_err}")
 
+        # ── What her last tool calls REALLY did ──
+        # The session is rebuilt every couple of minutes; without this she
+        # restarts blind to whether "open Instagram" ever worked, and answers
+        # "did you do it?" from a hopeful reading of the last reply.
+        try:
+            from core.task_trace import recent_tool_calls, render_recent_calls
+
+            _recent_calls = recent_tool_calls(5, max_age_s=900)
+            if _recent_calls:
+                parts.append(
+                    "[RECENT TOOL OUTCOMES - the runtime's record, newest last]\n"
+                    "Only CONFIRMED proves an effect. FAILED / NOT CONFIRMED means it did not "
+                    "demonstrably happen: say so, never claim it. 'Era actually ran' means the "
+                    "router swapped the tool. For anything older or unclear, call "
+                    "protocol_one(action='recent').\n" + render_recent_calls(_recent_calls)
+                )
+        except Exception as _recent_err:  # noqa: BLE001
+            print(f"[era] [OUTCOMES] context skipped: {_recent_err}")
 
         parts.append(ANTI_HALLUCINATION_INSTR)
 
@@ -1234,6 +1406,11 @@ class ToolDispatchMixin:
                 finished, result, task = await run_with_grace(self._execute_tool_result(fc), grace)
                 if not finished:
                     detached = True
+                    # Declared so the log can match a call that has no inline
+                    # outcome: its real result lands later, in the trace.
+                    log_event(
+                        main_logger, "tool.execution.detached", "INFO", tool=name, grace_s=grace
+                    )
                     REGISTRY.attach_task(hud_call, task)
                     self._spawn_background_deliver(fc, hud_call, hud_args, task)
         finally:
@@ -1334,7 +1511,21 @@ class ToolDispatchMixin:
         )
         self._learn_routed = _routed
         self._trace_routed = self._trace_safety = None
+        # Telemetry that was declared but never fed: tool_ms/tool_count in
+        # `turn.latency` read 0 on every turn because nothing called note_tool.
+        try:
+            from app.era_live.audio import _latency_mark
+
+            _latency_mark(self, "note_tool", result.duration_ms or 0)
+        except Exception:  # noqa: BLE001 - instrumentation never breaks a tool
+            pass
         if result.success:
+            try:
+                from core.completion_contract import completion_tag
+
+                _verdict = (completion_tag(result) or {}).get("verdict")
+            except Exception:  # noqa: BLE001
+                _verdict = None
             log_event(
                 main_logger,
                 "tool.execution.completed",
@@ -1342,6 +1533,11 @@ class ToolDispatchMixin:
                 tool=name,
                 duration_ms=result.duration_ms,
                 verification_status=result.verification_status,
+                verdict=_verdict,
+                # The tool that really ran, when the router swapped it. Without
+                # this the log shows computer_control "completed" for a
+                # netflix_control status.
+                ran=(_routed[0] if _routed and _routed[0] != name else None),
             )
 
         try:
@@ -1359,7 +1555,50 @@ class ToolDispatchMixin:
         result = speak_once(result, name, fc_args_to_dict(fc), getattr(self, "_live_turn_text", ""))
         # Through the class: partial test stand-ins borrow this method without the mixin.
         result = ToolDispatchMixin._attach_learned_fix(self, result, name, fc)
+        result = ToolDispatchMixin._attach_route_notice(self, result, name, fc)
         return build_function_response(fc, result, types.FunctionResponse)
+
+    def _attach_route_notice(self, result, name: str, fc):
+        """Tell the model when the router ran a DIFFERENT tool than it asked for.
+
+        The reply is returned under the REQUESTED name, so a `computer_control
+        press` answered with "Netflix state: unknown" read as a keypress that
+        worked (live 2026-11-15). Model-facing only; it never changes success,
+        the verdict or an error - those stay exactly as the tool left them.
+        """
+        try:
+            from dataclasses import replace
+
+            routed = getattr(self, "_learn_routed", None)
+            if not routed or not routed[0] or routed[0] == name:
+                return result
+            asked = fc_args_to_dict(fc)
+            ran_args = routed[1] if isinstance(routed[1], dict) else {}
+
+            def label(tool, args):
+                action = args.get("action") if isinstance(args, dict) else None
+                return f"{tool}({action})" if action else str(tool)
+
+            note = (
+                f"ROUTING NOTE: you asked for {label(name, asked)} but Era executed "
+                f"{label(routed[0], ran_args)} instead. The result below belongs to "
+                f"{routed[0]}; it does not prove the requested action happened."
+            )
+            data = dict(result.data) if isinstance(result.data, dict) else {"result": result.data}
+            data["routed"] = {"asked": label(name, asked), "ran": label(routed[0], ran_args)}
+            log_event(
+                main_logger,
+                "tool.routed",
+                "INFO",
+                asked=data["routed"]["asked"],
+                ran=data["routed"]["ran"],
+                success=bool(result.success),
+            )
+            return replace(
+                result, message=(note + chr(10) + (result.message or "")).strip(), data=data
+            )
+        except Exception:  # noqa: BLE001
+            return result
 
     def _attach_learned_fix(self, result, name: str, fc):
         """A failed call that Era has failed (and recovered from) before gets the
@@ -1368,7 +1607,7 @@ class ToolDispatchMixin:
         try:
             from dataclasses import replace
 
-            from core.task_lessons import hint_for_failure
+            from core.task_lessons import diagnostic_for_failure, hint_for_failure
             from core.tool_result import BENIGN_ERROR_TYPES
 
             if result.success or result.error_type in BENIGN_ERROR_TYPES:
@@ -1381,6 +1620,8 @@ class ToolDispatchMixin:
                 routed[1] if isinstance(routed[1], dict) else fc_args_to_dict(fc),
                 result.error_type,
             )
+            diagnostic = diagnostic_for_failure(routed[0] or name, routed[1], result.error_type)
+            hint = "\n".join(part for part in (hint, diagnostic) if part)
             if not hint:
                 return result
             return replace(
@@ -1400,6 +1641,10 @@ class ToolDispatchMixin:
         another lane or the batch itself needs the REAL result, not a promise.
         """
         grace = _BG_GRACE_S.get(name, 1.5)
+        if name == "era_workbench" and (args or {}).get("capability") == "web_api":
+            # A search or call takes 1-3 s and the model needs the answer to reply. Detached,
+            # the answer can only be spoken as one sentence, so it would be lost.
+            grace = _WEB_API_GRACE_S
         from app.era_live.tool_batch import HALTING_TOOLS
 
         if name in HALTING_TOOLS:
@@ -1489,6 +1734,19 @@ class ToolDispatchMixin:
                 )
             except Exception:  # noqa: BLE001
                 pass
+            if result.success:
+                # The inline path logs this; a detached call never did, so 8 of
+                # 14 calls in the 2026-11-15 session had no outcome event at all.
+                log_event(
+                    main_logger,
+                    "tool.execution.completed",
+                    "INFO",
+                    tool=name,
+                    duration_ms=result.duration_ms,
+                    verification_status=result.verification_status,
+                    ran=(routed[0] if routed and routed[0] != name else None),
+                    detached=True,
+                )
             if name == "web_search":
                 await self._report_search_outcome(hud_call, hud_args, result)
             else:
@@ -1647,7 +1905,7 @@ class ToolDispatchMixin:
 
         async def _worker() -> None:
             try:
-                result = await offload(lambda: run_tool(dict(hud_args)))
+                result = await offload(lambda: run_tool(dict(hud_args), user_text=user_text))
             except Exception as exc:  # noqa: BLE001 — a crew crash is still an outcome to report
                 result = ToolResult.fail(
                     message=f"The crew failed: {type(exc).__name__}",
@@ -1959,10 +2217,14 @@ class ToolDispatchMixin:
         from core import era_relaunch
 
         supervised = era_relaunch.is_supervised()
-        era_relaunch.request_relaunch(reason=reason, source=source, **extra)
-        recoverable = supervised or era_relaunch.spawn_supervisor(_os.getpid())
+        flag_written = era_relaunch.request_relaunch(reason=reason, source=source, **extra)
+        recoverable = flag_written and (supervised or era_relaunch.spawn_supervisor(_os.getpid()))
         if not recoverable:
             print("[era] [RELAUNCH] WARNING: no supervisor and could not start one.")
+        elif reason == "user said 'reboot Era One'":
+            # This marker is separate from the supervisor's consumed relaunch
+            # flag and is spent only when the new engine reaches ready.
+            era_relaunch.arm_ready_ack(source, muted=bool(getattr(self.ui, "muted", False)))
         log_event(
             main_logger,
             "era.relaunch.requested",
@@ -1972,9 +2234,9 @@ class ToolDispatchMixin:
             reason=reason,
             source=source,
         )
-        self._shutdown_requested = True
+        self._shutdown_requested = bool(recoverable)
         self._shutdown_awaiting_confirm = False
-        return recoverable
+        return bool(recoverable)
 
     def _exit_after_speaking(self, *, close_hud: bool) -> None:
         """Leave the process on purpose, once Era has finished her sentence.
@@ -2027,7 +2289,13 @@ class ToolDispatchMixin:
                     close_hud_windows()
                 except Exception as e:
                     print(f"[era] [SHUTDOWN] could not close the HUD window: {e}")
-            os._exit(0)
+            try:
+                from core import era_relaunch
+
+                # PF-024: no DLL teardown that can hang past the supervisor's grace.
+                era_relaunch.hard_exit(0)
+            finally:
+                os._exit(0)
 
         threading.Thread(target=_leave, daemon=True).start()
 
@@ -2206,13 +2474,17 @@ class ToolDispatchMixin:
         self._shutdown_awaiting_confirm = False
 
         if relaunch:
-            self._arm_relaunch(
+            if not self._arm_relaunch(
                 reason="user said 'reboot Era One'",
                 source=str(args.get("_source", "voice")),
                 interrupted_job=(f"{job.get('brand')}/{job.get('task_type')}" if job else None),
-            )
+            ):
+                self._shutdown_requested = False
+                self.speak("I could not schedule my restart. I am still running.")
+                return "Restart failed; Era is still running."
             self.ui.write_log("SYS: Reboot ordered; relaunching Era One.")
-            self.speak("Rebooting now, sir. Back in a few seconds.")
+            if not getattr(self.ui, "muted", False):
+                self.speak("I'm restarting now, sir.")
         else:
             # Tell the watchdog this exit is INTENTIONAL, BEFORE exiting, so it does
             # not relaunch Era. Same path era_supervisor.py watches: ~/.era/era.stop.
@@ -2637,7 +2909,7 @@ class ToolDispatchMixin:
             inflight = getattr(self, "_inflight_user_text", "") or user_text
             if remote is None:
                 tool_name, parameters = divert_era_reboot(tool_name, parameters, inflight)
-                tool_name, parameters = route_tool_call(tool_name, parameters, user_text)
+                tool_name, parameters = route_tool_call(tool_name, parameters, inflight)
                 from core.personal_media import divert_personal_song, resolve_song
 
                 tool_name, parameters = divert_personal_song(tool_name, parameters, inflight)
@@ -2676,7 +2948,7 @@ class ToolDispatchMixin:
 
             _jit_action = parameters.get("action", "")
             if isinstance(_jit_action, str):
-                await jit_vision_capture(tool_name, _jit_action.lower().strip())
+                await jit_vision_capture(tool_name, _jit_action.lower().strip(), parameters)
         except Exception:
             pass
 
@@ -2909,63 +3181,22 @@ class ToolDispatchMixin:
                 duration_ms=dur,
             )
 
-        dur = duration()
+        verify_tool, verify_parameters = tool_name, parameters
+        if tool_name == "confirm_pending_confirmation":
+            confirmed = getattr(self, "_confirmed_action", None)
+            if isinstance(confirmed, tuple) and len(confirmed) == 2:
+                verify_tool, verify_parameters = confirmed
+                self._confirmed_action = None
 
-        if isinstance(raw, str) and ("Unknown tool:" in raw or "Unknown action:" in raw):
-            return ToolResult.fail(
-                message=raw,
-                error_type="UnknownTool",
-                tool_name=tool_name,
-                action_name=parameters.get("action"),
-                duration_ms=dur,
-            )
-
-        result = ToolResult.from_any(
+        return finalize_tool_result(
+            self,
+            verify_tool,
+            verify_parameters,
             raw,
-            tool_name=tool_name,
-            action_name=parameters.get("action"),
-            duration_ms=dur,
+            risk_level=risk_level,
+            requires_confirmation=requires_confirmation,
+            duration_ms=duration(),
         )
-
-        result.risk_level = risk_level
-        result.requires_confirmation = requires_confirmation
-
-        result = verify_tool_result(result, tool=tool_name, parameters=parameters)
-        recovery = result.data.get("recovery") if isinstance(result.data, dict) else None
-        if isinstance(recovery, dict) and recovery.get("strategy") == "same_read_once":
-            recovery["verification"] = result.verification_status
-            if not result.success and recovery.get("outcome") == "returned_success":
-                recovery["outcome"] = "verification_failed"
-            log_event(
-                main_logger,
-                "tool.recovery.verified",
-                "INFO",
-                tool=tool_name,
-                action=parameters.get("action"),
-                success=result.success,
-                recovery=recovery,
-            )
-
-        if not result.success:
-            print(
-                f"[era] [ERROR] {tool_name} failed: {result.error_type} - {result.short_message(200)}"
-            )
-            log_event(
-                main_logger,
-                "tool.execution.failed",
-                "ERROR",
-                tool=tool_name,
-                action=parameters.get("action"),
-                error_type=result.error_type,
-                # Without the message, self_diagnosis could only guess at causes
-                # ("2x tool=file_controller") — and a cancelled confirmation looks
-                # identical to a crash. The message is what tells them apart.
-                error=result.short_message(200),
-                duration_ms=result.duration_ms,
-            )
-            self._log_caught_exception(tool_name, parameters, result)
-
-        return result
 
     def _log_caught_exception(self, tool_name: str, parameters: dict, result) -> None:
         """A tool that caught its own exception returned a string, so no stack
@@ -3127,9 +3358,14 @@ class ToolDispatchMixin:
         # Session-state tools need a matching order from the user, never just the
         # model's say-so (ambient audio shut Era down and flipped standby/mic).
         if not scheduled_run:
-            _ungrounded = _ungrounded_state_change(self, tool_name)
+            _ungrounded = _ungrounded_state_change(
+                self, tool_name, relaunch=bool((args or {}).get("relaunch"))
+            )
             if _ungrounded:
                 return _ungrounded
+            _unasked_music = _ungrounded_media_start(self, tool_name, args)
+            if _unasked_music:
+                return _unasked_music
 
         # ── System-state awareness gate (pre-command telemetry) ──────────────
         # Before acting ON an application (pause/next/minimize/close/focus/…),
@@ -3167,6 +3403,12 @@ class ToolDispatchMixin:
 
         if tool_name == "enter_standby":
             self.enter_standby()
+            from core.session import standby_enabled
+
+            if not standby_enabled():
+                # One-mode session (2026-11-11): there is no teardown and no
+                # code-spoken notice, so the model owns the single line.
+                return "Session closed. Say exactly 'System offline.' once, then stop."
             # Do NOT ask the model to speak here — core/prompt.txt already
             # tells it to stay silent around this tool, and the code plays
             # its own "Standby mode active" line in wait_and_mute(). Telling
@@ -3473,7 +3715,16 @@ class ToolDispatchMixin:
                 tool=pending.tool,
                 confirmation_id=pending.confirmation_id,
             )
-            return await self._execute_tool_raw(pending.tool, stored_params, fc)
+            raw = await self._execute_tool_raw(pending.tool, stored_params, fc)
+            # A confirm call RUNS a different tool than its own name. The outer
+            # dispatcher (and every duck-typed caller of this handler) only sees
+            # "confirm_pending_confirmation", so record what actually ran and
+            # with which parameters. `_execute_tool_result_inner` uses this to
+            # verify the real action; without it, verify_action_result looks up
+            # a verifier for the confirm handler, finds none, and the approved
+            # delete/send/overwrite is the one action never checked.
+            self._confirmed_action = (pending.tool, dict(stored_params))
+            return raw
 
         if tool_name == "cancel_pending_confirmation":
             if self._pending_store.is_pending():
@@ -3622,6 +3873,9 @@ class ToolDispatchMixin:
             r = await offload(lambda: web_search_action(parameters=args, player=self.ui))
             result = r or "Done."
 
+        elif tool_name == "era_workbench":
+            result = await offload(lambda: era_workbench(args))
+
         elif tool_name == "file_processor":
             if not args.get("file_path") and self.ui.current_file:
                 args["file_path"] = self.ui.current_file
@@ -3720,8 +3974,10 @@ class ToolDispatchMixin:
             # Read here, on the loop: run_in_executor does not carry ContextVars into
             # the worker thread, so a verify_candidate approval would be invisible.
             approved = APPROVED_CONFIRMATION.get()
+            said = getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", "")
             pending = loop.run_in_executor(
-                None, lambda: run_tool(dict(args), approved_confirmation=approved)
+                None,
+                lambda: run_tool(dict(args), approved_confirmation=approved, user_text=said),
             )
             if str(args.get("action") or "ask").lower() == "ask":
                 # _say_exactly: in gemini_audio mode speak() feeds the live session, which
@@ -3893,6 +4149,19 @@ class ToolDispatchMixin:
                     reason="user_enabled_auto_memory" if enable else "user_disabled_auto_memory",
                     allowed=True,
                 )
+            elif pref_action in ("set_session_window", "set_session"):
+                from core.session import set_window_from_text
+
+                seconds = args.get("seconds")
+                if seconds in (None, ""):
+                    # The phrase itself, when the model passed words instead of
+                    # the converted number ("2 minutes").
+                    seconds = args.get("rule") or args.get("value") or ""
+                result = set_window_from_text(seconds)
+            elif pref_action in ("get_session_window", "session_status"):
+                from core.session import describe
+
+                result = describe()
             elif pref_action == "add_rule":
                 result = add_behavior_rule(pref_rule)
             elif pref_action == "remove_rule":
@@ -3948,11 +4217,30 @@ class ToolDispatchMixin:
                 confirm_pending_fixes,
                 launch_protocol_one,
                 protocol_status,
+                read_recent,
+                read_report,
             )
 
             p1_args = dict(args)
             p1_action = str(p1_args.get("action") or "status").lower().strip()
-            if p1_action == "confirm":
+            if p1_action == "recent":
+                # Read-only: what Era's last tool calls REALLY did (asked vs ran,
+                # confirmed or not), straight from the task trace. The answer to
+                # "did you actually do that?" - never the model's own recollection.
+                result = {
+                    "success": True,
+                    "message": await asyncio.to_thread(read_recent, p1_args.get("limit")),
+                }
+            elif p1_action == "report":
+                # Read-only: hand back the real report file (or one section), with
+                # its age and whether the code changed since. Explicit success, for
+                # the same reason as status: the text is made of "failed"/"error".
+                section = str(p1_args.get("section") or "").strip() or None
+                result = {
+                    "success": True,
+                    "message": await asyncio.to_thread(read_report, section),
+                }
+            elif p1_action == "confirm":
                 # The one-word approval: apply the fixes a prior cycle staged.
                 # Same word-grounding as launch — the user must have SAID "yes"
                 # and a fresh batch must be waiting — so a stray affirmation, or
@@ -4048,14 +4336,17 @@ class ToolDispatchMixin:
             from core import visual_engine
 
             try:
-                command = json.loads(args.get("command", "{}"))
-                result = json.dumps(
-                    await asyncio.to_thread(
-                        visual_engine.snapshot
-                        if command.get("action") == "snapshot"
-                        else lambda: visual_engine.apply(command)
-                    )
+                raw_command = args.get("command", "{}")
+                command = json.loads(raw_command) if isinstance(raw_command, str) else raw_command
+                if not isinstance(command, dict):
+                    raise ValueError("Visual command must be a JSON object")
+                result = await asyncio.to_thread(
+                    visual_engine.snapshot
+                    if command.get("action") == "snapshot"
+                    else lambda: visual_engine.apply(command)
                 )
+                if "success" not in result:
+                    result = {"success": True, "message": "HUD command applied.", "data": result}
             except ValueError as exc:
                 # apply()/snapshot() reject an invalid HUD command by design —
                 # edited state is never trusted as markup (and json.loads raises
@@ -4276,4 +4567,6 @@ class ToolDispatchMixin:
         else:
             result = f"Unknown tool: {tool_name}"
 
-        return result
+        from core.live_app_state import refresh_after_command
+
+        return await refresh_after_command(tool_name, args, result)

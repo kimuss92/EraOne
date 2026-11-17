@@ -4413,6 +4413,9 @@ def _handle_fullscreen_real_click(sess, page) -> str:
             except Exception:
                 pass
             print("[Netflix] Exited fullscreen via CDP window state")
+            after, _ = _window_state(cdp)
+            if after != "fullscreen":
+                return _browser_window_proof("Netflix left fullscreen.", after)
             return "Exited fullscreen."
 
         # Some window managers reject a direct →fullscreen unless the window
@@ -4443,7 +4446,7 @@ def _handle_fullscreen_real_click(sess, page) -> str:
         confirmed = sess.run(cdp.send("Browser.getWindowBounds", {"windowId": window_id}))
         if (confirmed.get("bounds") or {}).get("windowState") == "fullscreen":
             print("[Netflix] Fullscreen via CDP window state")
-            return "Fullscreen toggled."
+            return _browser_window_proof("Netflix is fullscreen.", "fullscreen")
         print("[Netflix] CDP window fullscreen not confirmed — trying F11 fallback")
     except Exception as exc:
         print(f"[Netflix] CDP window fullscreen failed: {exc}")
@@ -4460,6 +4463,27 @@ def _handle_fullscreen_real_click(sess, page) -> str:
         return "Fullscreen toggled."
     except Exception as exc:
         return f"Fullscreen error: {exc}"
+
+
+def _browser_window_proof(message: str, window_state: str, url: str = ""):
+    """PF-030: a change the browser itself reported, as a verified result.
+
+    Fullscreen: CDP `Browser.getWindowBounds`. Open: the tab's own address read
+    after navigation. The blind F11 fallback keeps returning plain text.
+    """
+    from core.tool_result import ToolResult
+
+    data = {"window_state": window_state, **({"url": url} if url else {})}
+    result = ToolResult.ok(message, data=data, tool_name="netflix_control")
+    result.verified = True
+    result.verifier_name = "browser_window"
+    result.verification_status = "VERIFIED"
+    result.verification_message = (
+        f"The Netflix tab's address read back: {url}."
+        if url
+        else f"Browser.getWindowBounds read back windowState={window_state}."
+    )
+    return result
 
 
 def _handle_cdp_action(action: str, sess, page, player=None) -> str:
@@ -4746,8 +4770,19 @@ def _handle_open(sess, page, player=None, params: dict | None = None) -> str:
     outcome = _clear_profile_gate(sess, page, wait=True, profile=name, ordinal=ordinal)
 
     if outcome["status"] == "selected":
-        return f"Netflix is open on the {outcome['profile']} profile."
-    return _profile_outcome_text(outcome, prefix="Netflix is open. ") or "Netflix is open."
+        message = f"Netflix is open on the {outcome['profile']} profile."
+    else:
+        message = _profile_outcome_text(outcome, prefix="Netflix is open. ") or "Netflix is open."
+    # PF-030: a visible browser does not prove Netflix loaded; the tab's own
+    # address, read AFTER navigation, does. An unsettled profile stays unconfirmed.
+    if outcome["status"] in ("selected", "no-gate") and page is not None:
+        try:
+            url = str(sess.run(page.evaluate("window.location.href")) or "")
+        except Exception:
+            url = ""
+        if "netflix.com" in url.lower():
+            return _browser_window_proof(message, "netflix_page", url=url)
+    return message
 
 
 def _handle_scroll(params: dict) -> str:

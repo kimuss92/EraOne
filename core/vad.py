@@ -252,6 +252,10 @@ class BargeInDetector:
     """
 
     _VAD_FRAME_MS = 30  # webrtcvad accepts only 10/20/30 ms frames
+    # Runaway breaker: this many fires inside the window pauses interruption.
+    RUNAWAY_FIRES = 3
+    RUNAWAY_WINDOW_S = 15.0
+    RUNAWAY_SUSPEND_S = 300.0
 
     def __init__(
         self,
@@ -270,8 +274,14 @@ class BargeInDetector:
         # one that divides by zero.
         self.enabled = bool(enabled)
         self.require_speech_vad = bool(require_speech_vad)
+        self._configured_require_speech_vad = self.require_speech_vad
         self.amplitude_threshold = max(0.0, min(1.0, float(amplitude_threshold)))
         self._configured_amplitude_threshold = self.amplitude_threshold
+        self._input_wearable = False
+        self._output_open_speaker = False  # unknown until the speaker opens
+        self._fires: collections.deque[float] = collections.deque()
+        self._suspended_until = 0.0
+        self.last_trip_ts = 0.0  # monotonic time the breaker last tripped (for logging)
         self.min_speech_ms = max(self._VAD_FRAME_MS, int(min_speech_ms))
         self.onset_grace_ms = max(0, int(onset_grace_ms))
         self.echo_factor = max(0.0, min(10.0, float(echo_factor)))  # 0 = off
@@ -315,17 +325,79 @@ class BargeInDetector:
         with self._lock:
             self.enabled = bool(value)
 
+    @staticmethod
+    def _is_wearable(device_name: str) -> bool:
+        name = "".join(c for c in str(device_name or "").lower() if c.isalnum())
+        return "cy03cb36" in name or "starglass" in name
+
+    def _apply_floor(self) -> None:
+        """Pick the floor for the current mic + speaker pair (caller holds _lock).
+
+        The quiet 0.012 floor is only safe when Era's voice plays IN the wearable
+        (earpiece: almost no echo reaches its mic). With the glasses mic and her
+        voice on open PC speakers, the 8x-boosted mic hears the speakers far above
+        0.012 and she interrupted herself, then answered her own echo, every turn
+        (2026-11-05 22:10). That pair keeps the configured floor and needs real
+        speech.
+        """
+        open_speaker_echo = self._input_wearable and self._output_open_speaker
+        quiet_floor = self._input_wearable and not open_speaker_echo
+        self.amplitude_threshold = (
+            min(self._configured_amplitude_threshold, 0.012)
+            if quiet_floor
+            else self._configured_amplitude_threshold
+        )
+        self.require_speech_vad = self._configured_require_speech_vad or open_speaker_echo
+
     def configure_input(self, device_name: str) -> bool:
         """A known wearable mic needs a quieter floor than the laptop array."""
-        name = "".join(c for c in device_name.lower() if c.isalnum())
-        wearable = "cy03cb36" in name or "starglass" in name
+        wearable = self._is_wearable(device_name)
         with self._lock:
-            self.amplitude_threshold = (
-                min(self._configured_amplitude_threshold, 0.012)
-                if wearable
-                else self._configured_amplitude_threshold
-            )
+            if wearable != self._input_wearable:
+                self._fires.clear()
+                self._suspended_until = 0.0
+            self._input_wearable = wearable
+            self._apply_floor()
         return wearable
+
+    def configure_output(self, device_name: str) -> bool:
+        """Record where Era's voice plays. True == an open speaker (echo-prone).
+
+        An empty/unknown name changes nothing: the floor stays as configured for
+        the mic, exactly as before this was known.
+        """
+        if not str(device_name or "").strip():
+            return self._output_open_speaker
+        open_speaker = not self._is_wearable(device_name)
+        with self._lock:
+            if open_speaker != self._output_open_speaker:
+                self._fires.clear()
+                self._suspended_until = 0.0
+            self._output_open_speaker = open_speaker
+            self._apply_floor()
+        return open_speaker
+
+    def suspended(self) -> bool:
+        """True while the runaway breaker holds interruption off."""
+        with self._lock:
+            return time.monotonic() < self._suspended_until
+
+    def _note_fire(self) -> bool:
+        """Record a fire (caller holds _lock). True == this fire trips the breaker.
+
+        A person does not cut Era off within seconds on every reply, several
+        times running; her own echo does. Whatever the mic/speaker pair, that
+        pattern pauses interruption so the self-answer loop cannot sustain itself.
+        """
+        now = time.monotonic()
+        self._fires.append(now)
+        while self._fires and now - self._fires[0] > self.RUNAWAY_WINDOW_S:
+            self._fires.popleft()
+        if len(self._fires) >= self.RUNAWAY_FIRES:
+            self._fires.clear()
+            self._suspended_until = now + self.RUNAWAY_SUSPEND_S
+            return True
+        return False
 
     # ── Detection (mic-callback thread) ────────────────────────────────────────
     def _count_voiced(self, buffer_bytes: bytes) -> int:
@@ -395,6 +467,8 @@ class BargeInDetector:
         with self._lock:
             if not self._active:
                 return False
+            if time.monotonic() < self._suspended_until:
+                return False  # runaway breaker: her echo was cutting her off
             level = _frame_rms(buffer_bytes)
             if (time.time() - self._onset_ts) * 1000.0 < self.onset_grace_ms:
                 self._echo.append(level)  # her own voice, settling: the echo seed
@@ -427,6 +501,9 @@ class BargeInDetector:
             if self._voiced_ms >= self.min_speech_ms:
                 self._active = False  # one-shot; re-arms on the next note_speaking(True)
                 self._burst.clear()
+                if self._note_fire():
+                    self.last_trip_ts = time.monotonic()
+                    return False  # the fire that proves a loop is not acted on
                 return True
             return False
 

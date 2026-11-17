@@ -216,6 +216,13 @@ def test_frame_bytes_matches_chunk_size_of_int16():
     assert pcm.FRAME_BYTES == CHUNK_SIZE * 2
 
 
+def test_the_send_frame_is_inside_the_live_api_recommended_range():
+    """Live best practices: 20-40 ms chunks. 64 ms cut words at the boundary."""
+    from app.audio_config import SEND_SAMPLE_RATE
+
+    assert 0.020 <= CHUNK_SIZE / SEND_SAMPLE_RATE <= 0.040
+
+
 def test_iter_frames_exact_division():
     data = bytes(800)
     frames = list(pcm.iter_pcm_frames(data, frame_bytes=200))

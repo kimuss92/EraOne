@@ -49,6 +49,16 @@ VOICE_RMS = 0.015
 EPISODE_GAP_S = 0.9
 
 
+def _fabric(component: str, kind: str | None = None, detail: str = "") -> None:
+    """Era Fabric F1: the same observation, on the shared health registry."""
+    try:
+        from core.fabric import health
+
+        health.note(component, kind, detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def enabled() -> bool:
     """Off switch: ERA_LIVE_HEALTH=0."""
     return os.getenv("ERA_LIVE_HEALTH", "1").strip().lower() not in ("0", "false", "off")
@@ -180,12 +190,14 @@ class LiveHealth:
             self._pending_text = False
             self._unheard_n = 0
             self._longest_unheard_s = 0.0
+        _fabric("live.gemini")
 
     def note_upstream_error(self) -> None:
         now = self._clock()
         with self._lock:
             self._errors.append(now)
             self._trim(now)
+        _fabric("live.gemini", "Unavailable", "Live upstream service error")
 
     def _trim(self, now: float) -> None:
         while self._errors and now - self._errors[0] > self._flaky_window_s:

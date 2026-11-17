@@ -495,6 +495,13 @@ def open_app(parameters=None, response=None, player=None, session_memory=None) -
         return "Opening link in your default browser, sir."
 
     print(f"[open_app] Launch request: '{app_name}' (mode={mode})")
+    if mode in {"open", "play"}:
+        try:
+            from core.user_prefs.minimize_rule import note_opened_on_request
+
+            note_opened_on_request(app_name)  # a minimize-after-use rule must not hide it
+        except Exception:
+            pass
 
     if mode in {"close", "toggle"}:
         hwnd = _find_launch_window(app_name)

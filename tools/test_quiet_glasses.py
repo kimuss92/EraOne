@@ -36,6 +36,51 @@ def test_wearable_floor_accepts_quiet_speech_and_restores_pc_floor():
     assert det.amplitude_threshold == 0.04
 
 
+def test_glasses_mic_with_open_speakers_keeps_the_pc_floor():
+    # 2026-11-05 22:10: glasses mic + voice on the Realtek speakers. The quiet
+    # 0.012 floor let her own echo cut her off and become "user" speech.
+    det = BargeInDetector(amplitude_threshold=0.04, onset_grace_ms=0, min_speech_ms=150)
+    det._vad = None
+    det.configure_input("Casque (CY03-CB36)")
+    assert det.configure_output("pc - speakers (Realtek(R) Audio")
+    assert det.amplitude_threshold == 0.04
+    assert det.require_speech_vad
+    det.note_speaking(True)
+    echo = np.full(480 * 5, 600, dtype="<i2").tobytes()  # ~0.018: above 0.012
+    assert not any(det.feed(echo) for _ in range(10))
+
+
+def test_glasses_mic_with_glasses_speaker_keeps_the_quiet_floor():
+    det = BargeInDetector(amplitude_threshold=0.04, onset_grace_ms=0, min_speech_ms=150)
+    det._vad = None
+    det.configure_input("Casque (CY03-CB36)")
+    assert not det.configure_output("Star glass (CY03-CB36)")
+    assert det.amplitude_threshold == 0.012
+    assert not det.require_speech_vad
+    # An unknown speaker name changes nothing.
+    det.configure_output("")
+    assert det.amplitude_threshold == 0.012
+
+
+def test_runaway_self_interruptions_pause_barge_in():
+    det = BargeInDetector(amplitude_threshold=0.04, onset_grace_ms=0, min_speech_ms=150)
+    det._vad = None
+    loud = np.full(480 * 5, 3000, dtype="<i2").tobytes()
+    results = []
+    for _ in range(4):
+        det.note_speaking(True)
+        results.append(det.feed(loud))
+    # Two cut-ins act; the third proves a loop and trips the breaker.
+    assert results == [True, True, False, False]
+    assert det.suspended()
+    assert det.last_trip_ts > 0
+    # Changing the speaker clears the pause (new acoustics, new verdict).
+    det.configure_output("pc - speakers (Realtek(R) Audio")
+    assert not det.suspended()
+    det.note_speaking(True)
+    assert det.feed(loud)
+
+
 def test_wearable_floor_keeps_adaptive_echo_protection():
     det = BargeInDetector(amplitude_threshold=0.04, onset_grace_ms=0, min_speech_ms=150)
     det._vad = None

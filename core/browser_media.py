@@ -37,7 +37,9 @@ READ_MEDIA = """() => {
   else if (media.some(m => !m.error && !m.paused && !m.ended && m.readyState >= 2)) status = 'playing';
   else if (media.every(m => !m.error && m.ended)) status = 'ended';
   else if (media.every(m => !m.error && m.paused && m.readyState >= 1)) status = 'paused';
-  return { url: location.href, status };
+  const current = media.find(m => !m.paused && !m.ended) || media[0];
+  return { url: location.href, status, title: document.title,
+           position_ms: current ? Math.round(current.currentTime * 1000) : null };
 }"""
 
 
@@ -71,7 +73,7 @@ def listener_script(binding):
         document.addEventListener(event, notify, true);
       mutation = new MutationObserver(notify);
       mutation.observe(document, { childList: true, subtree: true });
-      interval = setInterval(notify, 15000);
+      interval = setInterval(notify, 2000);
       notify();
     })()""".replace("BINDING", json.dumps(binding))
 
@@ -252,6 +254,7 @@ class BrowserMediaObserver:
             self.remove(page)
             return
         self.sampling.add(page)
+        sample_started_at = time.time()
         try:
             data = await asyncio.wait_for(page.evaluate(READ_MEDIA), timeout=2)
             if (
@@ -266,6 +269,11 @@ class BrowserMediaObserver:
                     self.cache.remove(ident)
                 return
             self.cache.update(ident, self.browser, source, data.get("status"))
+            from core.media_observation import publish
+
+            publish(source, {"source": "browser_dom", "sample_started_at": sample_started_at,
+                             "observed_at": time.time(), "url": expected, "title": data.get("title", ""),
+                             "playback": data.get("status", "unknown"), "position_ms": data.get("position_ms")})
         except Exception as exc:
             self.cache.remove(ident)
             _log("read_failed", exc)

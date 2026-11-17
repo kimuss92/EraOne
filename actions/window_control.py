@@ -7,6 +7,7 @@ Features an aggressive Windows 11 foreground stealer and class-based master reso
 import re
 import subprocess
 import sys
+import threading
 import time
 
 if sys.platform == "win32":
@@ -213,8 +214,24 @@ def find_window_by_master_spec(app_name: str):
     return None
 
 
+# PF-030: the exact window an action acted on, so the read-back checks THAT
+# window, never "some window of the same process / a caption that mentions it".
+# Thread-local: window_control runs in an executor thread and reads it back in
+# the same thread straight after the action.
+_acted = threading.local()
+
+
+def acted_hwnd() -> int | None:
+    return getattr(_acted, "hwnd", None)
+
+
+def _note_acted(hwnd) -> None:
+    _acted.hwnd = int(hwnd) if hwnd else None
+
+
 def _focus_hwnd(target) -> None:
     hwnd = target.getHandle()
+    _note_acted(hwnd)
     if _WIN32_GUI and win32gui.IsIconic(hwnd):
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
     force_absolute_focus(hwnd)
@@ -553,6 +570,7 @@ def restore_window(title_fragment: str) -> str:
     if not _WIN32_GUI:
         return "Restore only supported on Windows."
     hwnd = target.getHandle()
+    _note_acted(hwnd)
     name = target.title[:40] or title_fragment
     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
     _await_window_state(hwnd, lambda h: not win32gui.IsIconic(h))
@@ -568,6 +586,7 @@ def show_window(title_fragment: str) -> str:
     if not _WIN32_GUI:
         return "Show only supported on Windows."
     hwnd = target.getHandle()
+    _note_acted(hwnd)
     name = target.title[:40] or title_fragment
     if win32gui.IsIconic(hwnd):
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
@@ -606,7 +625,11 @@ def window_control(parameters: dict, player=None, speak=None) -> str:
                 return "Title parameter required."
             func = ACTION_MAP.get(action)
             if func:
-                return func(title)
+                from actions.window_evidence import with_evidence
+
+                _note_acted(None)  # never read back a previous call's window
+                message = func(title)
+                return with_evidence(action, params, message, hwnd=acted_hwnd())
             else:
                 return f"Unsupported action: {action}"
         elif action == "move":
@@ -631,7 +654,13 @@ def window_control(parameters: dict, player=None, speak=None) -> str:
 
             if action == "monitors":
                 return describe_monitors()
-            return move_window_to_monitor(params.get("title", ""), params.get("screen", "other"))
+            from actions.window_evidence import with_evidence
+
+            return with_evidence(
+                action,
+                params,
+                move_window_to_monitor(params.get("title", ""), params.get("screen", "other")),
+            )
         elif action == "tile":
             style = params.get("style", "grid")
             return tile_windows(style)

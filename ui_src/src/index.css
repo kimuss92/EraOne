@@ -332,6 +332,12 @@
     padding: var(--sp-1) 10px; font-size: var(--fs-meta); color: var(--text-1); transition: background var(--dur-1);
   }
   .mini-btn:hover { background: var(--hover); }
+  /* a choice button that is the active option: filled accent + check, never colour alone */
+  .mini-btn-choice[aria-pressed=true] {
+    color: var(--accent); border-color: var(--accent-line, var(--accent));
+    background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 600;
+  }
+  .mini-btn-choice[aria-pressed=false] { color: var(--text-2); }
   /* a file/folder path inside any HUD text: click opens it (components/PathText.tsx) */
   .path-link {
     display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent);
@@ -719,7 +725,7 @@ button.src-row:hover { border-color:var(--line); background:color-mix(in srgb,va
 }
 
 /* Luminous HUD: restrained surfaces leave the canvas connections readable. */
-.era-view-nav { position: relative; z-index: 30; display: flex; justify-content: center; gap: 5px; padding: 8px 14px; flex-shrink: 0; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.era-view-nav { position: relative; z-index: calc(var(--z-header) - 1); display: flex; justify-content: center; gap: 5px; padding: 8px 14px; flex-shrink: 0; overflow-x: auto; border-bottom: 1px solid var(--line); }
 .era-view-nav button { white-space: nowrap; padding: 7px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-2); font-size: 11px; background: var(--field); }
 .era-view-nav button:hover, .era-view-nav button[aria-pressed='true'] { color: var(--text-1); background: var(--accent-soft); border-color: var(--accent-line); }
 .era-unified .era-orbit { display: none; }

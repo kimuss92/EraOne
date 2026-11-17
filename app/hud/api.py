@@ -46,6 +46,11 @@ class HudApi:
         self.s = server
 
     def register(self, app: web.Application) -> None:
+        from app.hud.capability_controls import EmpowerApi
+        from app.hud.telegram_setup import TelegramSetupApi
+
+        EmpowerApi(self.s).register(app)
+        TelegramSetupApi().register(app)
         r = app.router
         r.add_get("/api/health", self.health)
         r.add_get("/api/status", self.get_status)

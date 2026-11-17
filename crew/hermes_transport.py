@@ -378,4 +378,47 @@ class HermesAgentTransport(InProcessTransport):
         tout = int(usage.get("completion_tokens") or crew_router.estimate_tokens(text))
         crew_router.log_turn(spec.id, tier, "hermes", tin, tout, False)
         obj = parse_json_object(text)
-        return obj if obj else {"__bad_output__": text[:200]}
+        if obj:
+            return obj
+        provider_error = _provider_error(body, text)
+        if provider_error:
+            # Hermes answers HTTP 200 even when ITS provider failed (expired Nous login,
+            # a provider with no key, MoA turned back on) and puts the reason in the
+            # message text. That is not a bot that misbehaved: report the real reason
+            # so the user hears "the model login expired", not "gave no usable reply".
+            self._toolsets_ok_until = 0.0
+            log_event(
+                runtime_logger,
+                "crew.hermes.provider_failed",
+                "WARNING",
+                bot=spec.id,
+                detail=provider_error,
+            )
+            return {"__unavailable__": f"Hermes could not reach its model: {provider_error}"}
+        return {"__bad_output__": text[:200]}
+
+
+def _provider_error(body: dict, text: str) -> str:
+    """Hermes's own failure reason when a 200 reply carries no model output; else "".
+
+    Signals (2026-11-06 live): `hermes.failed: true` / `finish_reason: "error"` (MoA with
+    a keyless provider) and — for an expired Nous login — a plain "stop" reply whose
+    usage reports ZERO prompt and completion tokens. A real model call always bills
+    prompt tokens, so an explicit 0/0 means no model ever ran.
+    """
+    meta = body.get("hermes") if isinstance(body.get("hermes"), dict) else {}
+    try:
+        finish = body["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        finish = None
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    no_model_ran = (
+        "prompt_tokens" in usage
+        and not usage.get("prompt_tokens")
+        and not usage.get("completion_tokens")
+    )
+    if not (meta.get("failed") or finish == "error" or no_model_ran):
+        return ""
+    reason = meta.get("error") if isinstance(meta.get("error"), str) else ""
+    reason = (reason or text).strip().lstrip("⚠️").strip()
+    return reason[:200] or "the gateway returned no model output"

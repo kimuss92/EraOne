@@ -100,6 +100,30 @@ def _condense(text: str, limit: int = 140) -> str:
     return cut + "..."
 
 
+def _relevant_summary(decl: dict, wanted: set[str]) -> str:
+    """The summary, plus the sentence that matches the question if the cut hid it.
+
+    era_workbench holds many capabilities in one description, and its first 140
+    characters only ever describe Office files. Asked about reading websites, Era
+    was shown Word and Excel and concluded she could not do it.
+    """
+    description = " ".join(str(decl.get("description") or "").split())
+    head = _condense(description)
+    if len(description) <= 140:
+        return head
+    best, score = "", 1
+    for sentence in re.split(r"(?<=[.;])\s+", description):
+        hits = len(wanted & _tokens(sentence.replace("_", " ")))
+        if hits > score:
+            best, score = sentence, hits
+    return f"{head} | {_condense(best, 260)}" if best and best not in head else head
+
+
+def _capabilities_of(decl: dict) -> list[str]:
+    spec = (decl.get("parameters") or {}).get("properties", {}).get("capability") or {}
+    return [str(item) for item in spec.get("enum") or []]
+
+
 def _actions_of(decl: dict) -> list[str]:
     from actions.protocol_zero import action_tokens
 
@@ -138,7 +162,32 @@ def _evidence(decl: dict, wanted: set[str]) -> tuple[int, list[str]]:
     return len(in_name) * 2 + len(in_prose), sorted(in_name) + sorted(in_prose)
 
 
+def _with_health(text: str) -> str:
+    """Era Fabric F1 (design 6.4 rule 4): health is part of the self-model. What is
+    DOWN right now comes from the health registry, measured, and is appended only
+    when something is not healthy -- so a healthy answer is exactly as before."""
+    try:
+        from core.fabric import health
+
+        note = health.self_model_note()
+    except Exception:  # noqa: BLE001 -- the fabric is optional
+        note = ""
+    if not note or "LIVE HEALTH" in text:
+        return text
+    return f"{text}\n{note}"
+
+
 def summary(limit: int = 0) -> str:
+    """Every tool Era has (plus what is down right now, when anything is)."""
+    return _with_health(_summary(limit))
+
+
+def check(claim: str) -> str:
+    """Can Era do `claim`? Grounded in the declarations, plus live health."""
+    return _with_health(_check(claim))
+
+
+def _summary(limit: int = 0) -> str:
     """Every tool Era actually has, one line each, for her to phrase herself.
 
     Names and summaries only, and no grouping invented here: a category table
@@ -160,6 +209,9 @@ def summary(limit: int = 0) -> str:
     for decl in rows:
         actions = _actions_of(decl)
         suffix = f"  [actions: {', '.join(actions[:8])}]" if actions else ""
+        capabilities = _capabilities_of(decl)
+        if capabilities:
+            suffix += f"  [capabilities: {', '.join(capabilities)}]"
         lines.append(f"- {decl.get('name')}: {_condense(decl.get('description'))}{suffix}")
     return (
         f"These are the {len(rows)} tools you actually have right now, read from your own "
@@ -168,7 +220,7 @@ def summary(limit: int = 0) -> str:
     )
 
 
-def check(claim: str) -> str:
+def _check(claim: str) -> str:
     """Can Era do `claim`? An answer grounded in the real declarations.
 
     The verdict is stated for the model rather than left implied, because a bare
@@ -199,7 +251,7 @@ def check(claim: str) -> str:
 
     best = scored[0][0] if scored else 0
     evidence = "\n".join(
-        f"- {name}: {_condense(decl.get('description'))}  (matched: {', '.join(words)})"
+        f"- {name}: {_relevant_summary(decl, wanted)}  (matched: {', '.join(words)})"
         for _n, name, decl, words in scored[:5]
     )
 

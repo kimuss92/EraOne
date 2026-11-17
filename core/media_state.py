@@ -129,14 +129,10 @@ def mark_paused(source: str, player=None) -> None:
 
 # ── state reconciliation bridge (GSMTC → MEDIA_STATE) ────────────────────────
 def get_live_spotify_status() -> dict:
-    """Real-time query via spotify_control(status). Source of truth over MEDIA_STATE."""
-    try:
-        from app.era_live.tool_dispatch import dispatch
+    """Read the OS directly; never fall back to requested/cached playback."""
+    from core.live_app_state import collect_live_state
 
-        # Direct tool query supersedes assumed/visual/cache per goal step 3.
-        return dispatch({"name": "spotify_control", "arguments": {"action": "status"}})
-    except Exception:
-        return {}
+    return collect_live_state("spotify")
 
 
 def reconcile_from_os_sessions(sessions: list[dict]) -> None:

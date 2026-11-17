@@ -2,7 +2,7 @@ id: cody
 role: Coding and technical checks
 description: Reads project source, stages coordinated candidates and reports verification; live application needs the user's approval.
 prompt: prompts/cody.md
-capabilities: [source.inspect, source.read, source.stage, code.propose, code.check, vault.read, vault.search, diagnosis.list, diagnosis.read]
+capabilities: [source.inspect, source.read, source.stage, code.propose, code.check, vault.read, vault.search, diagnosis.list, diagnosis.read, era.list, era.read, development.list, development.read]
 model_tier: smart
 brands: ["*"]
 write_zones: [inbox]

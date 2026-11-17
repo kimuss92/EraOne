@@ -108,6 +108,8 @@ RELAUNCH_DELAY_S = float(os.getenv("ERA_RELAUNCH_DELAY", "1"))  # user-asked reb
 HANG_TIMEOUT_S = float(os.getenv("ERA_HANG_TIMEOUT", "180"))  # 0 disables hang check
 RELAUNCH_GRACE_S = float(os.getenv("ERA_RELAUNCH_GRACE", "25"))  # then force-kill
 POLL_S = float(os.getenv("ERA_POLL", "1"))
+# --wait-pid: how long a hand-started Era gets to exit before she is killed.
+PREVIOUS_ERA_WAIT_S = float(os.getenv("ERA_PREVIOUS_WAIT", "60"))
 
 # Must match app/hud/instance.py (not imported: the watchdog never imports Era).
 # An overridden ERA_HOME (tests, stand-ins) gets its own name, so a test
@@ -174,22 +176,78 @@ def consume_relaunch_request() -> None:
         pass
 
 
-def kill_tree(proc: subprocess.Popen) -> None:
-    """Kill Era and everything she started (browser helpers, audio workers)."""
-    if os.name == "nt":
+def _taskkill_tree(pid: int) -> None:
+    try:
         subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             check=False,
             creationflags=NO_WINDOW,
+            timeout=15,
         )
+    except Exception as e:  # a hung taskkill must not hang the watchdog
+        log.error("taskkill of pid %s failed: %s", pid, e)
+
+
+def kill_tree(proc: subprocess.Popen) -> bool:
+    """Kill Era and everything she started (browser helpers, audio workers).
+
+    Bounded (~35 s worst case) and never raises: a watchdog that crashes here
+    leaves the old Era running and nobody to replace her. Returns True only
+    when the process is really gone (PF-024).
+    """
+    if os.name == "nt":
+        _taskkill_tree(proc.pid)
     else:
-        proc.kill()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    for _ in range(2):
+        try:
+            proc.wait(timeout=10)
+            return True
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+    return proc.poll() is not None
+
+
+def is_era_process(pid: int) -> bool | None:
+    """Is `pid` this repo's Era (a Python running MAIN_PY)? None = cannot tell.
+
+    The pid came from Era herself, but once she exits Windows may hand it to
+    anything; only a verified Era is ever killed by pid (PF-024).
+    """
     try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
+        import psutil
+    except ImportError:
+        return None
+    try:
+        p = psutil.Process(pid)
+        exe = Path(p.exe() or "").name.lower()
+        cmd = [str(c) for c in (p.cmdline() or [])]
+        cwd = p.cwd()
+    except psutil.NoSuchProcess:
+        return False
+    except Exception:
+        return None
+    if not exe.startswith("python"):
+        return False
+    return any(_same_file(c, cwd, MAIN_PY) for c in cmd[1:])
+
+
+def _same_file(arg: str, cwd: str, path: Path) -> bool:
+    """Does command-line `arg` (relative to the process's `cwd`) name `path`?"""
+    try:
+        p = Path(arg)
+        if not p.is_absolute():
+            p = Path(cwd) / p
+        return os.path.normcase(str(p.resolve())) == os.path.normcase(str(path.resolve()))
+    except Exception:
+        return False
 
 
 def pid_alive(pid: int) -> bool:
@@ -211,11 +269,46 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
-def wait_for_pid(pid: int, timeout_s: float = 60) -> None:
-    """Started by Era herself (she had no supervisor): let her exit first."""
+def wait_for_pid(pid: int, timeout_s: float = 60) -> bool:
+    """Wait (bounded) for `pid` to exit. True when it is gone."""
     deadline = time.time() + timeout_s
     while pid_alive(pid) and time.time() < deadline:
         time.sleep(0.5)
+    return not pid_alive(pid)
+
+
+def retire_previous_era(pid: int, timeout_s: float = 60) -> bool:
+    """Started by Era herself (she had no supervisor): make sure she is gone
+    before a replacement takes the mic, the HUD port and the dispatch lock.
+
+    Waits for her own exit first; past the deadline, kills her tree ONLY if
+    `pid` is verifiably still this repo's Era. Returns False when the old Era
+    is still alive, so the caller does not start a second one (PF-024).
+    """
+    if wait_for_pid(pid, timeout_s):
+        return True
+    identity = is_era_process(pid)
+    if identity is False:
+        log.info("pid %s is alive but is no longer Era (reused) - treating Era as gone.", pid)
+        return True
+    if identity is None:
+        log.error("Previous Era pid %s still alive and cannot be verified - not killing it.", pid)
+        record_lifecycle("relaunch.previous_unverified", wait_pid=pid)
+        return False
+    log.warning("Previous Era (pid %s) ignored its exit for %.0fs - killing it.", pid, timeout_s)
+    _taskkill_tree(pid) if os.name == "nt" else _kill_pid(pid)
+    gone = wait_for_pid(pid, 10)
+    record_lifecycle("relaunch.previous_killed", wait_pid=pid, gone=gone)
+    return gone
+
+
+def _kill_pid(pid: int) -> None:
+    import signal
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 def heartbeat_age(since: float) -> float | None:
@@ -441,7 +534,13 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Era supervisor starting. python=%s  main=%s  cwd=%s", PYTHON, MAIN_PY, BASE_DIR)
     if opts.wait_pid:
         log.info("Waiting for the previous Era (pid %s) to exit...", opts.wait_pid)
-        wait_for_pid(opts.wait_pid)
+        if not retire_previous_era(opts.wait_pid, PREVIOUS_ERA_WAIT_S):
+            # Two Eras would fight over the mic, the HUD port and the dispatch
+            # lock. Stay down and say why; the user can start Era again.
+            write_halt(
+                f"Previous Era (pid {opts.wait_pid}) would not exit - not starting a second one."
+            )
+            return 1
     # A leftover halt flag from a previous run should not silently keep us down,
     # but we DO surface it so you know the last stop was a crash-loop halt.
     if HALT_FLAG.exists():
@@ -503,6 +602,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         ran_for = time.time() - started
+        if proc.poll() is None and not kill_tree(proc):
+            # PF-024: never launch a replacement while the previous Era lives.
+            record_lifecycle("relaunch.previous_alive", era_pid=proc.pid, why=why)
+            write_halt(f"Era (pid {proc.pid}) could not be stopped - not starting a second one.")
+            return 1
         if code == EXIT_ALREADY_RUNNING and why == "exit":
             log.info("Era found another backend already running - supervisor stands down.")
             record_lifecycle("supervisor.stand_down", reason="backend_already_running")

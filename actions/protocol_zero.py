@@ -190,7 +190,9 @@ def _condense(description: str) -> str:
 
 # ── auditing ─────────────────────────────────────────────────────────────────
 def entries_for(decls: list[dict], hand_text: str) -> dict[str, str]:
-    """name -> one index line, only for what the hand-written prompt lacks."""
+    """Index missing capabilities without duplicating lazy-loaded domain rules."""
+    from core import prompt_packs
+
     out: dict[str, str] = {}
     for d in decls:
         name = d["name"]
@@ -203,7 +205,9 @@ def entries_for(decls: list[dict], hand_text: str) -> dict[str, str]:
             if required:
                 line += f" Required: {', '.join(required)}."
         else:
-            missing = [a for a in actions if not _mentioned(a, hand_text)]
+            pack = prompt_packs.TOOL_PACKS.get(name)
+            coverage = hand_text + "\n" + (prompt_packs.load(pack) if pack else "")
+            missing = [a for a in actions if not _mentioned(a, coverage)]
             if not missing:
                 continue
             line = f"- {name} — further actions: {' | '.join(missing)}."
@@ -225,6 +229,8 @@ class SyncReport:
     added: list[str] = field(default_factory=list)
     modified: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    # Left the auto index but the tool still exists: the hand-written prompt names it now.
+    covered: list[str] = field(default_factory=list)
     truncated: list[str] = field(default_factory=list)
     written: bool = False
     backup: str = ""
@@ -248,8 +254,15 @@ class SyncReport:
             parts.append(f"added {len(self.added)} ({', '.join(self.added)})")
         if self.modified:
             parts.append(f"updated {len(self.modified)} ({', '.join(self.modified)})")
-        if self.removed:
-            parts.append(f"removed {len(self.removed)} ({', '.join(self.removed)})")
+        # Spoken to the user: "removed era_workbench" made Era say a working tool was gone.
+        gone = [name for name in self.removed if name not in self.covered]
+        if gone:
+            parts.append(f"removed {len(gone)} tool(s) that no longer exist ({', '.join(gone)})")
+        if self.covered:
+            parts.append(
+                "moved out of the auto index because the hand-written prompt now describes "
+                f"them, still fully available ({', '.join(self.covered)})"
+            )
         verb = "synced" if self.written else "would sync"
         text = f"Protocol Zero {verb} prompt.txt: {'; '.join(parts)}."
         if self.truncated:
@@ -300,6 +313,8 @@ def sync(
 
     report.added = sorted(set(kept) - set(old))
     report.removed = sorted(set(old) - set(kept))
+    declared = {d["name"] for d in decls}
+    report.covered = [name for name in report.removed if name in declared]
     report.modified = sorted(n for n in set(kept) & set(old) if kept[n] != old[n])
     if not (apply and report.changed):
         return report

@@ -140,7 +140,11 @@ class CallCoordinator:
         active = bool(self._task and not self._task.done())
         reason = ""
         if self.owner_id is None:
-            reason = "account_not_configured"
+            reason = (
+                "credentials_unreadable"
+                if self.error == "credentials_unreadable"
+                else "account_not_configured"
+            )
         elif not self.enabled:
             reason = "validation_pending"
         elif not self.ready:

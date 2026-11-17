@@ -1,0 +1,120 @@
+"""PF-036 guards, isolated (copied from tools/test_era_relaunch.py)."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+
+import pytest
+
+from core import era_relaunch
+
+REPO = Path(__file__).resolve().parent.parent
+
+def test_relaunch_ready_ack_is_one_shot_and_expires(tmp_path, monkeypatch):
+    monkeypatch.setenv("ERA_HOME", str(tmp_path / "home"))
+    assert era_relaunch.arm_ready_ack("voice")
+    marker = json.loads(era_relaunch.ready_ack_file().read_text(encoding="utf-8"))
+    assert not era_relaunch.consume_ready_ack(
+        now=marker["requested_at"] + 1, current_pid=marker["pid"]
+    )
+    assert era_relaunch.ready_ack_file().exists()
+    assert era_relaunch.consume_ready_ack(
+        now=marker["requested_at"] + 1, current_pid=marker["pid"] + 1
+    )
+    assert not era_relaunch.consume_ready_ack(
+        now=marker["requested_at"] + 2, current_pid=marker["pid"] + 1
+    )
+
+    assert era_relaunch.arm_ready_ack("typed", muted=True)
+    muted_marker = json.loads(era_relaunch.ready_ack_file().read_text(encoding="utf-8"))
+    assert (
+        era_relaunch.consume_ready_ack(
+            now=muted_marker["requested_at"] + 1, current_pid=muted_marker["pid"] + 1
+        )
+        == "muted"
+    )
+    assert not era_relaunch.ready_ack_file().exists()
+
+    era_relaunch.ready_ack_file().write_text(
+        json.dumps({"requested_at": 1, "source": "typed"}), encoding="utf-8"
+    )
+    assert not era_relaunch.consume_ready_ack(
+        now=era_relaunch.READY_ACK_MAX_AGE_S + 2, current_pid=os.getpid() + 1
+    )
+    assert not era_relaunch.ready_ack_file().exists()
+
+
+def test_relaunch_ready_ack_rejects_non_owner_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("ERA_HOME", str(tmp_path / "home"))
+    assert era_relaunch.arm_ready_ack("watchdog")
+    marker = json.loads(era_relaunch.ready_ack_file().read_text(encoding="utf-8"))
+    assert not era_relaunch.consume_ready_ack(
+        now=marker["requested_at"] + 1, current_pid=marker["pid"] + 1
+    )
+
+
+def test_ready_ack_is_only_spoken_after_the_new_live_session_is_connected():
+    source = (REPO / "main.py").read_text(encoding="utf-8")
+    connected = source.index('print("[era] [OK] Connected.")')
+    consume = source.index("reboot_ready = era_relaunch.consume_ready_ack()")
+    ready = source.index('self.speak("I\'m back and ready, sir.")')
+    assert connected < consume < ready
+    assert (
+        'reboot_ready != "muted" and not getattr(self.ui, "muted", False)' in source[consume:ready]
+    )
+
+
+@pytest.mark.parametrize(
+    "muted, expected_spoken", [(False, ["I'm restarting now, sir."]), (True, [])]
+)
+def test_shutdown_era_relaunch_writes_relaunch_not_stop(
+    tmp_path, monkeypatch, muted, expected_spoken
+):
+    from app.era_live import tool_dispatch
+
+    monkeypatch.setenv("ERA_HOME", str(tmp_path))
+    monkeypatch.setenv("ERA_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("ERA_SUPERVISED", "1")
+
+    class _NoThread:  # the real thread would os._exit the test process
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(tool_dispatch.threading, "Thread", _NoThread)
+
+    class _UI:
+        def write_log(self, *_):
+            pass
+
+    ui = _UI()
+    ui.muted = muted
+
+    class _Era(tool_dispatch.ToolDispatchMixin):
+        def __init__(self):
+            self.ui = ui
+            self.spoken = []
+            self._shutdown_requested = False
+            self._shutdown_awaiting_confirm = False
+            self._is_speaking = False
+
+        def speak(self, text):
+            self.spoken.append(text)
+
+    import era_dispatch
+
+    monkeypatch.setattr(era_dispatch, "current_job", lambda: None)
+    era = _Era()
+    assert era._shutdown_era({"relaunch": True}) == "Relaunching..."
+    assert (tmp_path / "era.relaunch").exists()
+    marker = json.loads((tmp_path / "era.relaunch.ready").read_text(encoding="utf-8"))
+    assert marker["muted"] is muted
+    assert era.spoken == expected_spoken
+    assert not (tmp_path / "era.stop").exists()
+    assert era._shutdown_era({"relaunch": True}).endswith("already in progress.")
+

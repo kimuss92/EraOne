@@ -290,6 +290,17 @@ def format_media_observations() -> str:
         "sessions": view["sessions"],
     }
     data["browser"] = get_browser_media_cache().snapshot()
+    from core.media_observation import snapshot as fresh_media_snapshot
+
+    fresh = fresh_media_snapshot("spotify")
+    if fresh is not None:
+        # A command-scoped read may precede the observer's next notification.
+        # Do not simultaneously feed the model a newer title and an older one.
+        data["freshSpotify"] = fresh
+        if fresh["sample_started_at"] >= data["observedAt"]:
+            data["sessions"] = [
+                row for row in data["sessions"] if "spotify" not in str(row.get("app", "")).lower()
+            ]
     data["foreground"] = get_foreground_awareness().snapshot()
     data["processes"] = process_summary()
     data["files"] = file_summary()

@@ -201,6 +201,24 @@ def _mic_state(engine: Any) -> str:
         return "unavailable"
 
 
+def listening_mode(engine: Any) -> str:
+    """Read the engine's real window; never start or re-anchor one for the HUD."""
+    if engine is None:
+        return "unavailable"
+    try:
+        mic = _mic_state(engine)
+        if mic != "active":
+            return mic
+        state = getattr(engine, "_listening", None)
+        if state is None:
+            return "unavailable"
+        if state.window_open() or engine._attention_keep_open():
+            return "active"
+        return "inactive"
+    except Exception:
+        return "unavailable"
+
+
 def health(server: Any, engine: Any) -> dict:
     ready = engine is not None
     return {
@@ -232,6 +250,7 @@ def status(server: Any, engine: Any) -> dict:
         },
         "voice": voice_providers(engine),
         "mic": _mic_state(engine),
+        "listeningMode": listening_mode(engine),
         "voiceLock": _voice_lock(),
         "audioOutput": audio_output(),
         "tools": {"count": tools["count"], "active": hud.active_tools()},
@@ -251,6 +270,16 @@ def _voice_lock() -> bool | None:
         return None
 
 
+def _fabric_health() -> list[dict]:
+    """Era Fabric F1 breakers (core/fabric/health.py); [] when the fabric is absent."""
+    try:
+        from core.fabric import health
+
+        return health.snapshot()
+    except Exception:
+        return []
+
+
 def diagnostics(server: Any, engine: Any) -> dict:
     from core.tool_health import snapshot as tool_health
     from crew.reliability import snapshot as crew_health
@@ -261,6 +290,7 @@ def diagnostics(server: Any, engine: Any) -> dict:
         "failures": hud.failures(),
         "toolHealth": tool_health(),
         "crewHealth": crew_health(),
+        "fabricHealth": _fabric_health(),
         "recentEvents": hud.recent_events(60),
         "websocket": {"clients": server.client_count() if hasattr(server, "client_count") else 0},
         "process": {"pid": os.getpid(), "python": platform.python_version(), "os": os_name()},

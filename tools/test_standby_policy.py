@@ -16,6 +16,9 @@ from core.era_state import EraState
 @pytest.fixture(autouse=True)
 def isolated_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(policy, "POLICY_PATH", tmp_path / "standby.json")
+    # These cases test the OPTIONAL standby mode. Shipped default is OFF while
+    # the one-mode listening session is evaluated (core/session.py).
+    monkeypatch.setattr("core.session.standby_enabled", lambda: True)
 
 
 @pytest.mark.parametrize(
@@ -260,6 +263,33 @@ def test_repeated_standby_does_not_start_a_second_transition():
     era._standby_entering = True
     main.EraLive.enter_standby(era)
     assert era._standby_entering and era.spoken == []
+
+
+def test_standby_disabled_closes_the_session_and_keeps_the_mic_warm(monkeypatch):
+    """The shipped one-mode model (2026-11-11): no teardown, no wake listener."""
+    import main
+
+    monkeypatch.setattr("core.session.standby_enabled", lambda: False)
+    era = era_stub()
+    closed: list[bool] = []
+    states: list[str] = []
+    transitions: list[EraState] = []
+    era._listening_state = lambda: SimpleNamespace(close_session=lambda: closed.append(True))
+    era.ui.set_state = states.append
+    era.session_manager.transition_to = lambda state, **kw: transitions.append(state)
+
+    main.EraLive.enter_standby(era)
+
+    assert closed == [True], "the conversation window must close"
+    assert transitions == [EraState.ONLINE_IDLE], (
+        "EraState.STANDBY sets standby_active in the snapshot, which makes the "
+        "audio loop drop every frame and the input gate refuse typed orders"
+    )
+    assert "STANDBY" not in states, "the HUD must not show STANDBY"
+    assert era._browser_mic_active is True, "the microphone keeps capturing locally"
+    assert era._mic_muted is False, "closing the session is not a mute"
+    assert era._standby_active is False, "no standby teardown happens"
+    assert any("Session closed" in line for line in era.logs)
 
 
 @pytest.mark.parametrize(

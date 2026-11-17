@@ -228,6 +228,74 @@ def verify_media(result: ToolResult, parameters: dict) -> ToolResult:
     return result
 
 
+def verify_spotify_control(result: ToolResult, parameters: dict) -> ToolResult:
+    """Synchronous dispatcher contract; use native evidence, never a command receipt."""
+    if not result.success:
+        return result
+    from core import media_observation
+
+    action = str(parameters.get("action", "")).lower().strip()
+    query = parameters.get("value") or parameters.get("query")
+    result.verifier_name = "spotify_native"
+    result.verified = False
+    result.verification_status = "NOT_VERIFIED"
+    reads = {
+        "status",
+        "current_track",
+        "current_track_data",
+        "playback_state",
+        "is_playing",
+        "verify",
+        "check",
+    }
+    playback = {"play", "play_uri", "search", "resume", "open"}
+    if action in {"next", "previous", "skip", "forward", "back", "rewind"}:
+        # The native handler must compare samples taken before and after the skip.
+        # A post-command playing sample alone cannot prove that the track changed.
+        result.verification_message = "No before/after track-change evidence was supplied."
+        return result
+    if action in reads or action in playback:
+        try:
+            if action == "play_uri" and not query:
+                from core.personal_media import saved_song
+                from core.spotify_api import identity
+
+                saved = saved_song()
+                if identity(parameters.get("uri") or parameters.get("track_id")) == saved.get(
+                    "uri"
+                ):
+                    query = saved.get("value")
+            observation = media_observation.spotify()
+            result.data = {**result.data, "media_observation": observation}
+            available = observation.get("available") and bool(observation.get("title"))
+            if action in reads:
+                result.verified = bool(available)
+            else:
+                result.verified = bool(
+                    available
+                    and observation.get("playback") == "playing"
+                    and (
+                        media_observation.matches_track(observation, query)
+                        if isinstance(query, str) and query.strip()
+                        else action in {"play", "resume", "open"}
+                    )
+                )
+            if result.verified:
+                result.message = f"Spotify {observation['playback']}: '{observation['title']}' by {observation.get('artist', '')}."
+                result.verification_status = "VERIFIED"
+                result.verification_message = "Fresh Windows media metadata and playback state."
+            else:
+                result.verification_message = (
+                    "Fresh Windows media state has not confirmed the requested action."
+                )
+        except Exception as exc:
+            result.verification_message = f"Spotify verification unavailable: {exc}"
+        return result
+    # Other commands need their own postcondition; message text alone is not proof.
+    result.verification_message = "No native postcondition was checked for this Spotify action."
+    return result
+
+
 verify_web_search = _message_verifier(
     "web_search",
     extra_markers=("no results", "please provide"),
@@ -283,6 +351,7 @@ _VERIFIER_MAP: dict[str, callable] = {
     "computer_settings": verify_computer_settings,
     "media": verify_media,
     "media_coordinator": verify_media,
+    "spotify_control": verify_spotify_control,
     "web_search": verify_web_search,
     "weather_report": verify_weather,
     "code_helper": verify_code_helper,
@@ -304,6 +373,26 @@ def verify_action_result(
     timeout_seconds: float | None = None,
 ) -> ToolResult:
     if not result.success:
+        return result
+
+    # The dispatcher already sampled AFTER execution. Do not overwrite those
+    # observations with a message-only verifier or a second, window-only check.
+    if (
+        result.verifier_name
+        in {
+            "spotify_api",
+            "spotify_native",
+            "youtube_dom",
+            "window_native",
+            "browser_window",
+            "audio_endpoint",
+        }
+        and result.verified
+    ):
+        return result
+    if result.verifier_name == "live_app_state" and (
+        "live_app_state" in result.data or "live_app_states" in result.data
+    ):
         return result
 
     verifier = _VERIFIER_MAP.get(tool)

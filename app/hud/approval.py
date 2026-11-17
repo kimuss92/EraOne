@@ -18,7 +18,17 @@ def submit_decision(engine, confirmation_id: str, created_at: float, decision: s
     if pending is None or pending.created_at != created_at:
         return False
     if decision == "cancel":
-        return store.cancel(confirmation_id, expected_created_at=created_at)
+        cancelled = store.cancel(confirmation_id, expected_created_at=created_at)
+        if cancelled:
+            # Speak confirmation so user hears the cancel worked (mirrors typed-text path)
+            try:
+                engine.ui.write_log("SYS: Action cancelled by user.")
+                speak = getattr(engine, "speak", None)
+                if speak:
+                    speak("Action cancelled.")
+            except Exception:
+                pass
+        return cancelled
     loop = getattr(engine, "_loop", None)
     if loop is None or not loop.is_running():
         return False

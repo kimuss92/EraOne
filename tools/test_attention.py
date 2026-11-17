@@ -54,10 +54,15 @@ def _config(monkeypatch, tmp_path):
     config_path.write_text(json.dumps({"listening": {"attention_window_s": 45}}))
     monkeypatch.setattr(attention, "_VOICE_JSON", config_path)
     monkeypatch.setattr(attention, "_names", lambda: {"era", "shazam"})
+    # 2026-11-11: the window moved to core/session.py and is 2 minutes by
+    # default. These cases keep the historical 45 s so their boundary numbers
+    # stay meaningful.
+    monkeypatch.setattr("core.session.window_seconds", lambda: 45.0)
 
 
 def test_explicit_long_reply_leaves_a_full_two_minute_followup_window(monkeypatch):
     monkeypatch.setattr(attention, "get_listening_config", lambda: dict(attention.DEFAULTS))
+    monkeypatch.setattr("core.session.window_seconds", lambda: 120.0)
     clock = Clock()
     state = ListeningState(clock=clock, media_active=lambda: True)
     state.note_activity(explicit=True)
@@ -69,10 +74,11 @@ def test_explicit_long_reply_leaves_a_full_two_minute_followup_window(monkeypatc
     assert not state.window_open()
 
 
-def test_always_listening_setting_passes_first_request_after_idle_with_media(monkeypatch, tmp_path):
-    config_path = tmp_path / "voice.json"
-    config_path.write_text(json.dumps({"listening": {"attention_window_s": 0}}))
-    monkeypatch.setattr(attention, "_VOICE_JSON", config_path)
+def test_a_zero_window_is_clamped_and_never_means_always_listening(monkeypatch):
+    """0 is no longer the "rule off" switch: 10 s is the floor."""
+    from core import session
+
+    monkeypatch.setattr("core.session.window_seconds", lambda: session.MIN_WINDOW_S)
     clock = Clock()
     state = ListeningState(clock=clock, media_active=lambda: True)
     calls = []
@@ -84,23 +90,16 @@ def test_always_listening_setting_passes_first_request_after_idle_with_media(mon
     gate = AttentionGate(state, recognizer)
     clock.t += 3600
     frame = _speech()
-    assert gate.feed(frame) == [frame]
-    assert calls == []  # No name recognition delay or name-related loss.
-    state.era_finished_speaking(interrupted=False)
-    assert state.echo_hold_active()  # Turning off name gating retains echo protection.
+    assert all(o == bytes(len(o)) for o in gate.feed(frame))
+    assert calls, "a clamped window still costs a local name check"
 
 
-def test_only_one_reply_can_refresh_an_explicit_conversation_anchor():
+def test_a_reply_to_unaddressed_speech_does_not_renew_the_window():
     clock = Clock()
-    state = ListeningState(clock=clock, media_active=lambda: True)
-    state.note_activity(explicit=True)
-    clock.t += 20
-    state.era_finished_speaking(interrupted=False)
-    clock.t += 40
-    state.note_activity()  # Possible background speech must not renew the anchor.
-    state.era_finished_speaking(interrupted=False)
-    clock.t += 6
-    assert not state.window_open()  # 46s since the one explicit reply finished.
+    state = ListeningState(clock=clock)
+    clock.t += 60  # window lapsed
+    state.era_finished_speaking(interrupted=False)  # her reply to something ignored
+    assert not state.window_open(), "her own reply must not re-open a closed session"
 
 
 def test_named_transcript_anchors_an_already_open_conversation():
@@ -171,27 +170,33 @@ def test_the_window_closes_after_its_length_and_reopens_on_activity():
     assert s.window_open()
 
 
-def test_with_nothing_playing_the_window_never_lapses():
-    """Era must answer the owner's FIRST sentence, however long the silence.
+def test_with_nothing_playing_the_window_still_lapses():
+    """2026-11-11 (owner): one rule everywhere.
 
-    The timeout used to apply with no media too, so after 45 s of quiet Era
-    ignored whatever was said next and had to be woken by name -- a constant
-    cost to protect against lyrics that were not playing. What guards a silent
-    room is the owner voice gate and the wake word, not this.
+    The window used to apply only while media played, so with music Era needed
+    her name every 45 s and in a silent room never — the two behaviours the
+    owner kept tripping over. It now applies always: after the window, the next
+    sentence must carry her name, media or not.
     """
     clock = Clock()
     s = ListeningState(clock=clock)
-    clock.t += 36_000  # ten hours
+    clock.t += 60  # past 45 s of quiet
+    assert not s.window_open()
+    s.note_activity(explicit=True)  # "Era, ..."
     assert s.window_open()
 
 
-def test_a_gate_with_no_media_passes_unnamed_speech_without_checking():
+def test_a_gate_with_no_media_holds_unnamed_speech_once_the_window_closed():
+    clock = Clock()
+    state = ListeningState(clock=clock)
+    clock.t += 60
+    events = []
     gate = AttentionGate(
-        ListeningState(clock=Clock()),
-        lambda: pytest.fail("a silent room must not cost a name check"),
+        state, lambda: FakeRec("i'll call you back"), lambda k, h: events.append(k)
     )
-    frame = _speech()
-    assert gate.feed(frame) == [frame]
+    out = [o for _ in range(6) for o in gate.feed(_speech())]
+    assert all(o == bytes(len(o)) for o in out)
+    assert events == ["ignored"]
 
 
 def test_named_speech_is_held_then_sent_whole_and_in_order():
@@ -241,6 +246,8 @@ def test_no_vosk_model_means_fail_open():
     clock.t += 60
     gate = AttentionGate(state, None)
     frame = _speech()
+    assert gate.feed(frame) == [bytes(len(frame))]
+    state.note_activity(explicit=True)
     assert gate.feed(frame) == [frame]
 
 
@@ -252,17 +259,20 @@ def test_a_recognizer_crash_never_deafens_era():
 
     gate._make_rec = boom
     frame = _speech()
+    assert gate.feed(frame) == [bytes(len(frame))]
+    assert not gate.state.window_open()
+    gate.state.note_activity(explicit=True)
     assert gate.feed(frame) == [frame]
 
 
-def test_window_zero_turns_the_rule_off(tmp_path, monkeypatch):
-    vj = tmp_path / "voice.json"
-    vj.write_text(json.dumps({"listening": {"attention_window_s": 0}}))
-    monkeypatch.setattr(attention, "_VOICE_JSON", vj)
-    clock = Clock()
-    s = ListeningState(clock=clock)
-    clock.t += 9999
-    assert s.window_open()
+def test_window_zero_is_clamped_to_the_minimum(tmp_path, monkeypatch):
+    """A zero/negative window is no longer "off": 10 s is the floor."""
+    from core import session
+
+    cfg = tmp_path / "session.json"
+    cfg.write_text(json.dumps({"window_s": 0}))
+    monkeypatch.setattr(session, "CONFIG_PATH", cfg)
+    assert session.get_config()["window_s"] == session.MIN_WINDOW_S
 
 
 def test_config_is_clamped(tmp_path, monkeypatch):
@@ -347,7 +357,8 @@ class ConfRec(FakeRec):
         return json.dumps({"result": [{"word": w, "conf": c} for w, c in self.words]})
 
 
-def test_ignored_media_cannot_keep_listening_closed_after_playback_stops():
+def test_media_stopping_no_longer_bypasses_the_name_check():
+    """Media used to be the only reason the window existed; it no longer is."""
     clock = Clock()
     media = [True]
     state = ListeningState(clock=clock, media_active=lambda: media[0])
@@ -357,9 +368,9 @@ def test_ignored_media_cannot_keep_listening_closed_after_playback_stops():
     gate.feed(_speech())
     assert gate.mode == attention.DROPPING
     media[0] = False
-    frame = _speech()
-    assert gate.feed(frame) == [frame]
-    assert gate.mode == attention.PASSING
+    out = gate.feed(_speech())
+    assert all(o == bytes(len(o)) for o in out), "silence: nobody addressed her"
+    assert gate.mode != attention.PASSING
 
 
 def test_continuous_ignored_audio_rearms_the_name_check_without_silence():
@@ -520,17 +531,17 @@ def test_handover_zero_means_only_after_every_retry():
 
 
 # ── 2026-10-10: Spotify lyrics ("es", "¿Qué") got "Sorry, I did not catch that" ──
-def test_with_music_her_name_opens_a_normal_conversation_but_replies_do_not():
-    """Live 2026-10-10, twice: first a reply to a lyric re-opened the window for
-    the next lyric (a loop); then requiring her name on EVERY sentence made her
-    deaf mid-conversation. Now: a deliberate address opens 45 s, her replies
-    unrelated replies never extend it while media plays."""
+def test_her_name_opens_a_conversation_and_her_reply_extends_it():
+    """2026-11-11: one window, media irrelevant.
+
+    A deliberate address opens it; her reply to that address leaves a full
+    follow-up window; a reply to unaddressed speech does not.
+    """
     clock = Clock()
-    playing = [True]
-    s = ListeningState(clock=clock, media_active=lambda: playing[0])
+    s = ListeningState(clock=clock)
     clock.t += 60  # long after start
-    s.era_finished_speaking(interrupted=False)  # she replied to something (a lyric?)
-    assert not s.window_open(), "her reply alone must not open it during music"
+    s.era_finished_speaking(interrupted=False)  # she replied to something else
+    assert not s.window_open(), "her reply alone must not open a session"
     s.note_activity(explicit=True)  # "Era, ..." / typing / wake
     clock.t += 30
     s.era_finished_speaking(interrupted=False)
@@ -539,9 +550,6 @@ def test_with_music_her_name_opens_a_normal_conversation_but_replies_do_not():
     assert s.window_open(), "the explicit reply leaves a full configured follow-up window"
     clock.t += 26
     assert not s.window_open(), "45 s after the explicit reply finishes it closes"
-    playing[0] = False
-    s.era_finished_speaking(interrupted=False)
-    assert s.window_open(), "no music: her replies keep the conversation open as before"
 
 
 def test_a_name_heard_through_music_at_085_counts():

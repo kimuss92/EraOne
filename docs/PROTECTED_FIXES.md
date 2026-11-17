@@ -7,6 +7,27 @@
 - **Guards:** `tools/test_reanchor_sources.py`
 - **Since:** 2026-11-16 · Claude · Windows tests only; live "wait 2+ min, talk without Era -> ignored; music playing -> window still expires" owed
 
+### PF-035 · Inactivity state follows the HUD theme and cues on entry
+- **Files:** `ui_src/src/components/CoreStage.tsx`, `ui_src/src/lib/transport.ts`, `ui_src/src/lib/sounds.ts`, `ui_src/src/eclipse.css`
+- **Rule:** The online inactive listening state uses the HUD's semantic warning and appearance tokens in both themes and presets. Its short sound plays only on a live active-to-inactive transition through the existing sound enable/unlock/visibility/speech gates; the nonverbal cue may bypass microphone-capture suppression only while the backend reports inactive, where the attention gate sends silence unless a real wake is recognized. Snapshots and reconnects never replay it.
+- **Why:** The original amber badge looked detached from the HUD's themes, and inactivity had no entry cue. Replaying from snapshots or outputting ordinary speech-like audio could mislead the owner or wake path.
+- **Guards:** `tools/test_hud_inactivity.py::test_inactivity_cue_requires_a_live_entry_transition_only`, `tools/test_hud_inactivity.py::test_inactivity_indicator_uses_theme_tokens_and_static_accessible_markup`
+- **Since:** 2026-11-16 · Codex · source guards and isolated visual preview; installed HUD appearance and live timeout/wake exercise owed
+
+### PF-036 · Owner reboot acknowledgement is one-shot and readiness-bound
+- **Files:** `core/era_relaunch.py`, `app/era_live/tool_dispatch.py`, `main.py`
+- **Rule:** An explicit owner reboot may speak a short pre-exit notice unless voice output is muted. A separate expiring one-shot marker carries the mute choice across the process boundary and is consumed only by a different process after its Live session connects; a muted reboot stays silent, including the ordinary boot greeting. The readiness acknowledgement is suppressed while muted/standby and never replays on later reconnects. Ordinary boot and recovery behavior remains distinct.
+- **Why:** Reboot had no correlated return acknowledgement; a generic boot greeting could not prove that the owner's restart had completed and must not be mistaken for one.
+- **Guards:** `tools/test_era_relaunch.py::test_relaunch_ready_ack_is_one_shot_and_expires`, `tools/test_era_relaunch.py::test_relaunch_ready_ack_rejects_non_owner_source`, `tools/test_era_relaunch.py::test_ready_ack_is_only_spoken_after_the_new_live_session_is_connected`, `tools/test_era_relaunch.py::test_shutdown_era_relaunch_writes_relaunch_not_stop`
+- **Since:** 2026-11-16 · Codex · Windows regression tests; live owner reboot intentionally not exercised
+
+### PF-037 · YouTube matches transliterated titles and names distinct choices
+- **Files:** `utils/media_match.py`, `actions/youtube_video.py`
+- **Rule:** A conservative Latin/Arabic transliteration match, including the logged Latin-only "Sabr Al Rijal" / "Saber Elrjel" spelling with the same six-plus consonant skeleton, may raise a weak candidate score but never lower an exact match. Distinct close YouTube recordings remain ambiguous; the response names visible candidates and starts nothing until selected. A clear candidate still requires the owned page's requested video ID and advancing playback (PF-005).
+- **Why:** The query "Sabr Al Rijal Mikasa Music" did not match the displayed bilingual title "Hassen Thabet - Saber Elrjel | صبر الرجال (Mikasa Music)"; close Arabic/Latin versions also need a choice rather than a search-rank guess.
+- **Guards:** `tools/test_media_hud_reliability.py::test_youtube_transliteration_survives_artist_and_music_terms`, `tools/test_media_selection.py::TestSelectBestMediaCandidate::test_transliterated_query_keeps_distinct_youtube_recordings_ambiguous`, `tools/test_youtube_direct_play.py::test_ambiguous_video_choices_name_the_visible_candidates`
+- **Since:** 2026-11-16 · Codex · Windows deterministic tests; no browser media was started
+
 ### PF-033 · HUD shows the actual inactivity window
 - **Files:** `app/hud/status.py`, `app/websocket_server.py`, `ui_src/src/lib/store.ts`, `ui_src/src/lib/transport.ts`, `ui_src/src/components/CoreStage.tsx`
 - **Rule:** HUD listening mode reads the existing engine ListeningState without constructing or refreshing its session. Expired window with no busy exemption is inactive; wake is active; standby/muted/off/unavailable remain distinct. WebSocket greeting and the existing two-second push refresh the mode, even in quiet. The HUD shows INACTIVITY MODE with the wake hint only for an online inactive engine, and clears the reading on disconnect.

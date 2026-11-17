@@ -2387,6 +2387,18 @@ class EraLive(
 
                     start_drain(self)
 
+                    # A reboot receipt is one-shot, short-lived, and only
+                    # consumed once this new Live connection is ready.
+                    from core import era_relaunch
+
+                    reboot_ready = era_relaunch.consume_ready_ack()
+                    reboot_ready = reboot_ready and not self._standby_active
+                    if reboot_ready:
+                        self.ui.set_state("LISTENING")
+                        if reboot_ready != "muted" and not getattr(self.ui, "muted", False):
+                            self.ui.write_log("SYS: Restart complete; Era is ready.")
+                            self.speak("I'm back and ready, sir.")
+
                     # ── UX: first boot audible greeting; routine rotations silent;
                     # a genuine outage (quota cooldown / auth fix / network blip)
                     # gets a short acknowledgment naming the last topic instead of
@@ -2394,10 +2406,14 @@ class EraLive(
                     if self._standby_active:
                         self.ui.set_state("STANDBY")
                         print("[era] [SILENT] Reconnected in background (standby).")
+                    elif reboot_ready:
+                        self._has_completed_initial_boot = True
+                        self.ui.set_state("LISTENING")
+                        print("[era] [OK] Owner-requested restart reached readiness.")
                     elif buffer_for(self).items:
                         self._has_completed_initial_boot = True
                         self.ui.set_state("LISTENING")
-                    elif not self._has_completed_initial_boot:
+                    elif not self._has_completed_initial_boot and not reboot_ready:
                         self._has_completed_initial_boot = True
                         self.ui.set_state("LISTENING")
                         self.ui.write_log("SYS: era ready.")

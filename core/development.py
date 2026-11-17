@@ -423,6 +423,9 @@ def propose(request: str, paths: list[str] | None = None, *, reload: bool = True
             "reload": bool(reload),
             "approval": "",
         }
+        ctx_id = _open_context(job)
+        if ctx_id:
+            job["ctx_id"] = ctx_id
         _active = job["id"]
         try:
             _save(job)
@@ -582,6 +585,89 @@ def report_text(job: dict) -> str:
     )
 
 
+def _open_context(job: dict) -> str | None:
+    """Era Fabric F2: one TaskContext per job, opened at propose time with the job as
+    its artifact. Returns its id, or None on any failure (the job runs either way)."""
+    try:
+        from core.fabric.context import dev_job_ref, new_context
+
+        ref = dev_job_ref(job["id"], job.get("state", ""), job.get("request", ""))
+        ctx = new_context(
+            origin="development",
+            intent="dev.proposed",
+            task=str(job.get("request", "")),
+            artifacts=[ref] if ref else [],
+            discover=False,  # the request is free text; the job itself is the artifact
+        )
+        _dev_event("dev.proposed", "progress", job, ctx.ctx_id)
+        return ctx.ctx_id
+    except Exception:  # noqa: BLE001 - evidence only, never a failure source
+        return None
+
+
+# Era Fabric F0: the event a finished job emits, and its fault kind when it is one.
+_DEV_TOPIC = {
+    "awaiting_approval": "dev.verified",
+    "activated": "dev.activated",
+    "rejected": "dev.rejected",
+    "cancelled": "dev.cancelled",
+}
+_DEV_FAULT = {"failed": "BadOutput", "recovery_required": "Internal"}
+
+
+def _dev_event(topic: str, outcome: str, job: dict, ctx_id: str | None, fault=None) -> None:
+    try:
+        from core.fabric import events
+
+        events.emit(
+            topic,
+            component="dev.development",
+            outcome=outcome,
+            ctx_id=ctx_id,
+            summary=f"Development {job.get('id')} {job.get('state', '')}",
+            fault=fault,
+            provenance={"job": job.get("id")},
+        )
+    except Exception:  # noqa: BLE001 - evidence only
+        pass
+
+
+_CTX_OUTCOME = {
+    "awaiting_approval": "ok",
+    "activated": "ok",
+    "rejected": "info",
+    "cancelled": "info",
+}
+
+
+def _record_context(job: dict) -> None:
+    """Era Fabric F2: a finished job is a step on the context its propose opened, so
+    the job can be followed across hops. Jobs from before F2 get a context of their
+    own. Never raises."""
+    try:
+        from core.fabric.context import add_step
+
+        ctx_id = job.get("ctx_id") or _open_context(job)
+        state = str(job.get("state", ""))
+        add_step(
+            ctx_id,
+            "development",
+            _CTX_OUTCOME.get(state, "fault"),
+            f"Development {job.get('id')} finished: {state}",
+            state=state,
+        )
+        fault = None
+        if state not in _DEV_TOPIC:
+            from core.fabric import faults
+
+            kind = _DEV_FAULT.get(state, "Internal")
+            fault = faults.make(kind, "dev.development", job.get("error") or state)
+        outcome = _CTX_OUTCOME.get(state, "fault")
+        _dev_event(_DEV_TOPIC.get(state, "dev.failed"), outcome, job, ctx_id, fault)
+    except Exception:  # noqa: BLE001 - evidence only, never a failure source
+        pass
+
+
 def report_finished(job: dict) -> None:
     """Queue this job's outcome and wake the speaker. Never raises."""
     try:
@@ -594,6 +680,7 @@ def report_finished(job: dict) -> None:
         )
         if _notifier is not None:
             _notifier()
+        _record_context(job)
     except Exception as exc:  # noqa: BLE001 - a worker thread must not die reporting
         print(f"[DEV] could not queue the outcome report: {type(exc).__name__}: {exc}")
 

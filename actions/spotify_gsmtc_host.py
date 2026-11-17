@@ -51,9 +51,7 @@ function Await($op, $resultType) {
 $PS = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]
 
 function Get-SpotifySession {
-    if ($null -eq $script:mgr) {
-        $script:mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
-    }
+    $script:mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
     foreach ($s in $script:mgr.GetSessions()) {
         if ($s.SourceAppUserModelId -like '*Spotify*') { return $s }
     }

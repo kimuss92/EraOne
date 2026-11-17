@@ -732,6 +732,12 @@ def run(parameters: dict, caller: Caller | None = None) -> ToolResult:
         return ToolResult.fail(message=exc.message, error_type=exc.error_type, action_name=action)
     except VaultLockUnavailable as exc:
         log_event(bridge_logger, "vault.bridge.lock_unavailable", "WARNING", error=str(exc))
+        try:  # Era Fabric F1: the lock-busy rate, on the health registry (Transient)
+            from core.fabric import health
+
+            health.note("vault", "Transient", "vault lock busy")
+        except Exception:  # noqa: BLE001
+            pass
         return ToolResult.fail(
             message=f"Vault is busy; nothing was written. ({exc})",
             error=str(exc),

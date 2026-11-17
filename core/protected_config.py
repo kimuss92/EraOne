@@ -52,19 +52,65 @@ def decode(value):
     return value
 
 
+_UNREADABLE = object()
+
+
+def _decode_lenient(value, path: str, stale: list[str]):
+    """decode(), but a blob this Windows account cannot open is dropped and named.
+
+    DPAPI blobs die together when the account's master key changes (a password
+    RESET, a profile rebuild, a file synced in from another machine). Failing the
+    whole file then turned one stale key into "no keys at all", and the HUD
+    could not even load the form needed to re-enter them.
+    """
+    if isinstance(value, dict):
+        if MARKER in value:
+            try:
+                return decode(value)
+            except ProtectedConfigError:
+                stale.append(path)
+                return _UNREADABLE
+        out = {}
+        for key, item in value.items():
+            decoded = _decode_lenient(item, f"{path}.{key}" if path else key, stale)
+            if decoded is not _UNREADABLE:
+                out[key] = decoded
+        return out
+    if isinstance(value, list):
+        items = (_decode_lenient(item, f"{path}[{i}]", stale) for i, item in enumerate(value))
+        return [item for item in items if item is not _UNREADABLE]
+    return value
+
+
+def read_config_lenient(path: Path) -> tuple[dict, list[str]]:
+    """Readable settings plus the dotted paths of credentials that would not decrypt.
+
+    Malformed JSON still raises: only undecryptable credentials are tolerated.
+    """
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ProtectedConfigError("Configuration root must be an object")
+    stale: list[str] = []
+    return _decode_lenient(data, "", stale), stale
+
+
 def _secret_field(key: str) -> bool:
     name = key.lower()
     return any(part in name for part in ("api_key", "apikey", "token", "password", "secret"))
 
 
-def seal(value, secret=False):
+def seal(value, secret=False, *, strict=True):
     if isinstance(value, dict):
         if MARKER in value:
-            decode(value)  # validate readability, never double-encrypt
+            if strict:
+                decode(value)  # validate readability, never double-encrypt
             return value
-        return {key: seal(item, secret or _secret_field(key)) for key, item in value.items()}
+        return {
+            key: seal(item, secret or _secret_field(key), strict=strict)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [seal(item, secret) for item in value]
+        return [seal(item, secret, strict=strict) for item in value]
     if isinstance(value, str) and value.strip() and (secret or _LITERAL.search(value)):
         upper = value.strip().upper()
         if not (
@@ -83,11 +129,7 @@ def read_config(path: Path) -> dict:
     return decode(data)
 
 
-def write_config(path: Path, data: dict, *, expected_bytes: bytes | None = None) -> None:
-    """Seal, verify and replace atomically. Never create a plaintext backup."""
-    secured = seal(data)
-    if decode(secured) != data:
-        raise ProtectedConfigError("Credential round-trip verification failed")
+def _replace_atomically(path: Path, secured: dict, verify, expected_bytes: bytes | None) -> None:
     payload = json.dumps(secured, ensure_ascii=False, indent=2) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".api_keys-", suffix=".tmp", dir=path.parent)
@@ -97,15 +139,48 @@ def write_config(path: Path, data: dict, *, expected_bytes: bytes | None = None)
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        if read_config(temporary_path) != data:
+        if not verify(temporary_path):
             raise ProtectedConfigError("Credential file read-back failed")
-        if expected_bytes is not None and path.read_bytes() != expected_bytes:
+        current = path.read_bytes() if path.exists() else None
+        if expected_bytes is not None and current != expected_bytes:
             raise ProtectedConfigError(
                 "Configuration changed during migration; retry after closing editors"
             )
         os.replace(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def write_config(path: Path, data: dict, *, expected_bytes: bytes | None = None) -> None:
+    """Seal, verify and replace atomically. Never create a plaintext backup."""
+    secured = seal(data)
+    if decode(secured) != data:
+        raise ProtectedConfigError("Credential round-trip verification failed")
+    _replace_atomically(path, secured, lambda tmp: read_config(tmp) == data, expected_bytes)
+
+
+def update_fields(path: Path, patch: dict) -> None:
+    """Set top-level fields without needing to decrypt the rest of the file.
+
+    Credentials this account cannot open are kept byte-for-byte rather than
+    dropped, so re-entering one key never destroys the others — they may still
+    open under the account or machine that sealed them.
+    """
+    original = path.read_bytes() if path.exists() else None
+    raw = json.loads(original.decode("utf-8-sig")) if original else {}
+    if not isinstance(raw, dict):
+        raise ProtectedConfigError("Configuration root must be an object")
+    expected, stale = read_config_lenient(path) if original else ({}, [])
+    expected.update(patch)
+    still_stale = sorted(p for p in stale if p.split(".", 1)[0].split("[", 1)[0] not in patch)
+    raw.update(patch)
+    secured = seal(raw, strict=False)
+
+    def verify(tmp: Path) -> bool:
+        data, now_stale = read_config_lenient(tmp)
+        return data == expected and sorted(now_stale) == still_stale
+
+    _replace_atomically(path, secured, verify, original)
 
 
 def migrate(path: Path) -> bool:

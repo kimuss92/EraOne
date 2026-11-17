@@ -66,6 +66,12 @@ class LegacyObserverMixin:
                 self._turn_done_at = None
             if s in ("THINKING", "PROCESSING") and not self._standby:
                 self._set_phase("thinking", "Thinking")
+        elif s in ("IDLE", "ONLINE", "READY"):
+            # The one-mode session close (2026-11-11) is NOT standby: clear any
+            # latched standby flag so the HUD cannot stay on STANDBY after the
+            # engine has moved to ONLINE_IDLE.
+            self._standby = False
+            self._phase = None
         elif s == "STANDBY":
             self._standby = True
             self._phase = None

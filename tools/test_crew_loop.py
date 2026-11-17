@@ -870,6 +870,28 @@ class TestBreakItOnPurpose:
                 assert res.error_type in {"BadRequest", "UnknownBot", "LLMUnavailable"}
             res = runtime.run_tool({"action": "ask", "bot": "bob", "task": "hi"})
             assert res.error_type == "UnknownBot"
+            # A one-word unknown action is still refused, never guessed at.
+            assert runtime.run_tool({"action": "explode", "task": "x"}).error_type == "BadRequest"
+        finally:
+            runtime.reset_transport(None)
+
+    def test_a_sentence_in_the_action_field_is_asked_as_the_task(self, vault):
+        # 2026-11-06 live: action="Ask them to acknowledge this connection check." was
+        # refused as an unsupported action, so the user's connection check never ran.
+        seen = []
+
+        class Rec:
+            def dispatch(self, bot, turn):
+                seen.append((bot, turn.task))
+                return runtime.ToolResult.ok(message="ack")
+
+        runtime.reset_transport(Rec(), {})
+        try:
+            res = runtime.run_tool(
+                {"bot": "laura", "action": "Ask them to acknowledge this connection check."}
+            )
+            assert res.success
+            assert seen == [("laura", "Ask them to acknowledge this connection check.")]
         finally:
             runtime.reset_transport(None)
 

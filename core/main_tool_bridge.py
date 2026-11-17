@@ -148,6 +148,22 @@ def tool_result_to_response_payload(result: ToolResult) -> dict:
         "duration_ms": result.duration_ms,
         "confirmation_id": result.confirmation_id,
     }
+    # Evidence-gated completion (core/completion_contract.py). The verdict is
+    # computed once, at dispatch time, and travels with the result. When a
+    # side-effecting action returned without proof, the instruction below is the
+    # only thing standing between "the tool returned" and a spoken success
+    # claim. It is data for the model, not a tool result the HUD renders.
+    try:
+        from core.completion_contract import completion_tag, model_note
+
+        tag = completion_tag(result)
+        if tag is not None:
+            payload["completion"] = tag
+            note = model_note(result)
+            if note:
+                payload["completion_instruction"] = note
+    except Exception:
+        pass
     if result.confirmation_id:
         payload["suggested_confirmation_question"] = _build_suggested_confirmation_question(result)
 

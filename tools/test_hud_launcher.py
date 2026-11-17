@@ -34,6 +34,90 @@ def test_mutex_names_are_scoped_to_an_overridden_home():
     assert instance.EXIT_ALREADY_RUNNING == era_supervisor.EXIT_ALREADY_RUNNING == 86
 
 
+def test_tray_open_focuses_existing_window_without_client_count(monkeypatch):
+    from app.hud import browser
+
+    monkeypatch.delenv("ERA_NO_BROWSER")
+    monkeypatch.setattr(browser, "focus_existing", lambda: True)
+
+    def duplicate(*args):
+        pytest.fail("An existing HUD must not launch another browser window")
+
+    monkeypatch.setattr(browser, "launch_app_window", duplicate)
+    monkeypatch.setattr(browser.webbrowser, "open", duplicate)
+    assert browser.open_hud("http://127.0.0.1:8765/") == "focused"
+
+
+def test_concurrent_clicks_launch_one_window_while_chromium_starts(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.hud import browser
+
+    monkeypatch.delenv("ERA_NO_BROWSER")
+    monkeypatch.setattr(browser, "_last_launch", ("", 0.0))
+    monkeypatch.setattr(browser, "focus_existing", lambda: False)
+    launched = []
+    monkeypatch.setattr(browser, "launch_app_window", lambda url: launched.append(url) or True)
+    url = "http://127.0.0.1:8765/"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: browser.open_hud(url), range(8)))
+    assert launched == [url]
+    assert results.count("app") == 1 and results.count("opening") == 7
+    monkeypatch.setattr(browser, "focus_existing", lambda: True)
+    assert browser.open_hud(url) == "focused"
+
+
+def test_launch_can_retry_after_startup_coalescing_window(monkeypatch):
+    from app.hud import browser
+
+    monkeypatch.delenv("ERA_NO_BROWSER")
+    url = "http://127.0.0.1:8765/"
+    monkeypatch.setattr(browser, "_last_launch", (url, browser.time.monotonic() - 6))
+    monkeypatch.setattr(browser, "focus_existing", lambda: False)
+    monkeypatch.setattr(browser, "launch_app_window", lambda url: True)
+    assert browser.open_hud(url) == "app"
+
+
+def test_closing_last_interface_restores_hidden_floating_icon(monkeypatch):
+    from app.hud import browser, floating_launcher
+
+    settings.update({"floating_icon": False})
+    monkeypatch.setattr(browser, "find_hud_window", lambda: None)
+    actual = floating_launcher.restore_access_when_closed(settings.load())
+    assert actual["floating_icon"] is True
+    assert settings.load()["floating_icon"] is True
+
+
+def test_hide_stays_respected_while_interface_exists_including_minimized(monkeypatch):
+    from app.hud import browser, floating_launcher
+
+    settings.update({"floating_icon": False})
+    monkeypatch.setattr(browser, "find_hud_window", lambda: 1234)
+    actual = floating_launcher.restore_access_when_closed(settings.load())
+    assert actual["floating_icon"] is False
+    assert settings.load()["floating_icon"] is False
+
+
+def test_hide_stays_respected_when_no_workspace_was_open(monkeypatch):
+    from app.hud import browser, floating_launcher
+
+    settings.update({"floating_icon": False})
+    monkeypatch.setattr(browser, "find_hud_window", lambda: None)
+    actual = floating_launcher.restore_access_when_closed(settings.load(), workspace_was_open=False)
+    assert actual["floating_icon"] is False
+    assert settings.load()["floating_icon"] is False
+
+
+def test_visible_floating_icon_does_not_rewrite_settings_each_poll(monkeypatch):
+    from app.hud import floating_launcher
+
+    def unexpected_write(*args):
+        pytest.fail("Visible icon must not rewrite settings on each poll")
+
+    monkeypatch.setattr(settings, "update", unexpected_write)
+    assert floating_launcher.restore_access_when_closed({"floating_icon": True})["floating_icon"]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="named mutexes are Windows-only")
 def test_a_second_owner_is_refused_and_released_on_close():
     a = instance.NamedMutex(instance.backend_mutex_name())

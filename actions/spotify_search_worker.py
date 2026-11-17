@@ -79,6 +79,11 @@ def open_track_uri(uri: str, *, timeout_s: float = 1.5) -> tuple[bool, str]:
     return _run_worker({"mode": "uri", "uri": canonical}, timeout_s)
 
 
+def play_track_page(query: str, *, timeout_s: float = 4.0) -> tuple[bool, str]:
+    """Activate the named track on the opened page, without searching or reopening it."""
+    return _run_worker({"mode": "track_page", "query": query, "cold": False}, timeout_s)
+
+
 def primary_ui(
     label: str, *, cold: bool, timeout_s: float = 12.0, open_row: str | None = None
 ) -> tuple[bool, str]:
@@ -143,7 +148,9 @@ def main() -> None:
         result = (False, "Spotify window verification failed")
     else:
         control._focus_spotify_window(hwnd)  # restore before reading: see module doc
-        if args.get("mode") == "primary":
+        if args.get("mode") == "track_page":
+            result = invoke_search_result(hwnd, args["query"], timeout_s=2.0, prefer_click=True)
+        elif args.get("mode") == "primary":
             if args.get("open_row") and not open_library_row(hwnd, args["open_row"]):
                 result = (False, f"'{args['open_row']}' is not in the Spotify library sidebar")
             else:

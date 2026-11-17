@@ -41,8 +41,13 @@ class ReconnectMixin:
         return message
 
     def _auto_standby_due(self) -> bool:
+        from core.session import standby_enabled
         from core.standby_policy import auto_standby_enabled
 
+        if not standby_enabled():
+            # One-mode session model: inactivity closes the conversation window
+            # (core/attention.py), it never dismantles the microphone.
+            return False
         if not auto_standby_enabled() or self._standby_active:
             return False
         if getattr(self, "_standby_entering", False):

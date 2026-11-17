@@ -71,14 +71,39 @@ def get_config_dir() -> Path:
     return cfg_dir
 
 
-def load_config() -> dict:
-    """Load the API keys / settings JSON file."""
-    try:
-        from core.protected_config import read_config
+_reported_stale: tuple[str, ...] = ()
 
-        return read_config(CONFIG_PATH)
+
+def stale_credentials() -> list[str]:
+    """Config credentials that exist but cannot be decrypted by this Windows account."""
+    try:
+        from core.protected_config import read_config_lenient
+
+        return read_config_lenient(CONFIG_PATH)[1]
+    except Exception:
+        return []
+
+
+def load_config() -> dict:
+    """Load the API keys / settings JSON file.
+
+    A credential this account cannot decrypt is left out (and logged once)
+    instead of emptying the whole config, so every other setting still loads.
+    """
+    global _reported_stale
+    try:
+        from core.protected_config import read_config_lenient
+
+        data, stale = read_config_lenient(CONFIG_PATH)
     except Exception:
         return {}
+    if stale and tuple(stale) != _reported_stale:
+        _reported_stale = tuple(stale)
+        print(
+            "[era] [AUTH] These saved keys cannot be decrypted on this Windows account "
+            f"and were skipped: {', '.join(stale)}. Re-enter them in HUD Settings."
+        )
+    return data
 
 
 def get_api_key() -> str:
@@ -144,6 +169,12 @@ def get_api_keys() -> list[str]:
         _add(os.environ.get("GEMINI_API_KEY", ""))
 
     if not keys:
+        if any(p.split(".", 1)[0] in _LIVE_KEY_NAMES for p in stale_credentials()):
+            raise RuntimeError(
+                "Gemini key in config/api_keys.json cannot be decrypted on this Windows "
+                "account (sealed before a password reset or on another PC). Re-enter it "
+                "in HUD Settings > Gemini voice key."
+            )
         raise RuntimeError("gemini_api_key not found in config/api_keys.json")
     return keys
 

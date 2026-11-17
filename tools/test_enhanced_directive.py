@@ -140,12 +140,26 @@ def test_spotify_exact_ids_cache_and_no_mutation_replay(monkeypatch):
     monkeypatch.setenv("ERA_SPOTIFY_ACCESS_TOKEN", "test-token")
     monkeypatch.setattr(api, "_cooldown_until", 0)
     monkeypatch.setattr(api, "_cached", None)
-    request = Mock(return_value=SimpleNamespace(status_code=204))
-    monkeypatch.setattr(api.requests, "request", request)
     uri = "spotify:track:" + "A" * 22
-    assert "accepted play uri" in api.execute("play_uri", {"uri": uri})
-    assert request.call_args.kwargs["json"] == {"uris": [uri]}
-    assert request.call_args.kwargs["allow_redirects"] is False
+    # play_uri is no longer "accepted" on the PUT's 204: it must read back the
+    # player and see the SAME uri playing (2026-11-11 media honesty repair).
+    playing = SimpleNamespace(
+        status_code=200, json=lambda: {"is_playing": True, "item": {"uri": uri, "name": "T"}}
+    )
+    request = Mock(
+        side_effect=lambda method, *a, **kw: (
+            playing if method == "GET" else SimpleNamespace(status_code=204)
+        )
+    )
+    monkeypatch.setattr(api.requests, "request", request)
+    result = api.execute("play_uri", {"uri": uri})
+    assert result.success and result.verification_status == "VERIFIED"
+    mutations = [c for c in request.call_args_list if c.args[0] == "PUT"]
+    assert len(mutations) == 1  # exactly one mutation, never replayed
+    assert mutations[0].kwargs["json"] == {"uris": [uri]}
+    assert mutations[0].kwargs["allow_redirects"] is False
+    request.side_effect = None
+    request.return_value = SimpleNamespace(status_code=204)
     assert "accepted queue" in api.execute("queue", {"uri": uri})
     assert request.call_args.kwargs["params"] == {"uri": uri}
     response = SimpleNamespace(status_code=200, json=lambda: {"is_playing": True})

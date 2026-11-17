@@ -59,6 +59,9 @@ class _CachedButton:
     def click_input(self):
         return self._wrapper().click_input()
 
+    def scroll_into_view(self):
+        return self._wrapper().iface_scroll_item.ScrollIntoView()
+
 
 def _buttons(win):
     raise_if_cancelled()
@@ -254,6 +257,8 @@ def _best_search_match(btns, query: str):
     "Chill Hits"), fall back to the TOP-of-screen result — Spotify orders the best
     hit first, so that is what the user means. Ties break toward the shorter title
     (plain track over "... - Live at ...") then the higher-on-screen result."""
+    from utils.media_match import title_spelling_variant
+
     q = _norm(query or "")
     qtokens = set(q.split())
     requested_title, separator, requested_artist = (query or "").lower().partition(" by ")
@@ -279,6 +284,8 @@ def _best_search_match(btns, query: str):
         top = _btn_top(b)
         if separator and title == _norm(requested_title):
             score = (6 if artist_raw else 5, 0, -len(title))
+        elif title_spelling_variant(query, title_raw):
+            score = (4, 0, -len(title))
         elif q and title == q:
             score = (5, 0, -len(title))
         elif qtokens - {"by"} and (qtokens - {"by"}).issubset(ttokens | atokens):
@@ -300,6 +307,8 @@ def _best_search_match(btns, query: str):
         return None, -1
     best = max(plays, key=lambda x: (x[0], -x[1]))
     level = best[0][0]
+    if level < 3 and not qtokens.intersection({"music", "songs", "playlist", "chill", "jazz"}):
+        return None, 0
     if level == 0:
         # No result shares a word with the query. In practice this means the new
         # results have not rendered yet (the page still shows the previous query),
@@ -460,12 +469,18 @@ def invoke_search_result(
         steps = [("clicked", "click_input"), ("invoked", "invoke")]
         if not prefer_click:
             steps.reverse()
+        try:
+            # The control's own name ("Play Chill Hits", "Play X by Y") tells the
+            # caller WHAT was started, so it can verify that and not the query.
+            name = (target.window_text() or "").strip()
+        except Exception:
+            name = ""
         last_exc = None
         for how, method in steps:
             raise_if_cancelled()
             try:
                 getattr(target, method)()
-                return True, how
+                return True, f"{how}: {name}" if name else how
             except Exception as exc:
                 last_exc = exc
         return False, f"invoke failed: {last_exc}"
@@ -485,6 +500,17 @@ def invoke_search_result(
             sleep_cancellable(0.15)
             continue
         target, level = _best_search_match(_on_screen(btns, win), query)
+        if target is None:
+            # Matching rows can be below the viewport. Reveal a strong named
+            # match through UIA, never click a guessed offscreen coordinate.
+            hidden, strength = _best_search_match(btns, query)
+            if hidden is not None and strength >= 4:
+                try:
+                    hidden.scroll_into_view()
+                    hidden.invoke()
+                    return True, "invoked matching result after scrolling into view"
+                except Exception:
+                    pass
         # Only act on a real textual match (exact / all-words / overlap / substring).
         # level 0 (no shared word) means the new results are not up yet — keep
         # polling rather than grab the stale page's top result.
