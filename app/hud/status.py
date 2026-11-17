@@ -201,22 +201,58 @@ def _mic_state(engine: Any) -> str:
         return "unavailable"
 
 
+_last_mode: dict = {"mode": None, "kind": None}
+
+
+def _reason_kind(why: str) -> str:
+    """The reason without its ticking numbers ("window open, 23s left" ->
+    "window open"), so a countdown never floods the log."""
+    return why.split(",")[0].strip()
+
+
 def listening_mode(engine: Any) -> str:
     """Read the engine's real window; never start or re-anchor one for the HUD."""
+    mode, why = _listening_mode_and_reason(engine)
+    kind = _reason_kind(why)
+    if mode != _last_mode["mode"] or kind != _last_mode.get("kind"):
+        # PF-040: every change of mode OR of reason is logged, so "inactivity
+        # never came" is traced even while the mode stays "active" (window
+        # open -> busy: processing; dev-review).
+        _last_mode["mode"] = mode
+        _last_mode["kind"] = kind
+        try:
+            from core.logger import log_event, main_logger
+
+            log_event(main_logger, "listening.mode", "INFO", mode=mode, reason=why)
+        except Exception:
+            pass
+    return mode
+
+
+def _listening_mode_and_reason(engine: Any) -> tuple[str, str]:
     if engine is None:
-        return "unavailable"
+        return "unavailable", "no engine"
     try:
         mic = _mic_state(engine)
         if mic != "active":
-            return mic
+            return mic, "mic"
         state = getattr(engine, "_listening", None)
         if state is None:
-            return "unavailable"
-        if state.window_open() or engine._attention_keep_open():
-            return "active"
-        return "inactive"
-    except Exception:
-        return "unavailable"
+            return "unavailable", "no listening state yet"
+        if state.window_open():
+            return "active", f"window open, {state.session_remaining_s():.0f}s left"
+        from app.era_live.audio import AudioIOMixin
+
+        reason = (
+            AudioIOMixin._busy_reason(engine)
+            if isinstance(engine, AudioIOMixin)
+            else ("busy" if engine._attention_keep_open() else None)
+        )
+        if reason:
+            return "active", f"busy: {reason}"
+        return "inactive", "window expired"
+    except Exception as e:
+        return "unavailable", f"{type(e).__name__}"
 
 
 def health(server: Any, engine: Any) -> dict:

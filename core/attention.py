@@ -56,6 +56,26 @@ DEFAULTS = {
 }
 _VOICE_JSON = Path(__file__).resolve().parent.parent / "config" / "voice.json"
 _END_SILENCE_S = 0.7  # this much quiet ends an utterance
+# PF-039: "stay silent" / "remain silent" puts Era straight into inactivity mode
+# (window closed, mic and session warm; only her name reopens it). Whole utterance
+# only, so "stay silent when I'm on a call" or "why did you stay silent" never
+# match. Optional greeting/name before, "please"/"now"/"sir" after.
+_SILENCE_ORDER = re.compile(
+    r"^\W*(?:(?:hey|ok|okay)\s+)?(?:era(?:\s+one)?\s*[,;:]?\s*)?(?:please\s+)?"
+    r"(?:(?:remain|stay|keep|be|go)\s+(?:silent|quiet)"
+    r"|(?:reste[zr]?|restez)\s+silencieu(?:x|se))"
+    r"(?:[\s,]+(?:now|please|for\s+now|sir|era))*\W*$",
+    re.IGNORECASE,
+)
+
+
+def is_silence_order(text: str) -> bool:
+    return bool(text) and _SILENCE_ORDER.match(text.strip()) is not None
+
+
+# PF-038: Era's reply must finish within this long of the owner's in-window turn
+# to continue the conversation (covers a reply that ends just after expiry).
+OWNER_TURN_REPLY_S = 60.0
 _PREROLL_FRAMES = 5  # ~0.3 s at 64 ms frames: the word's onset, kept for Gemini
 
 IDLE, CHECKING, PASSING, DROPPING = "idle", "checking", "passing", "dropping"
@@ -156,6 +176,8 @@ class ListeningState:
         self._hold_until = 0.0
         # The user deliberately addressed Era (her name, a wake, typing).
         self._explicit_reply_pending = False
+        # When the owner took a voice turn inside an OPEN window (PF-038).
+        self._owner_turn_at: float | None = None
 
     def era_finished_speaking(self, interrupted: bool, internal: bool = False) -> None:
         """Era's reply re-anchors the window only after an explicit address.
@@ -164,9 +186,20 @@ class ListeningState:
         report, a background result). That is not conversation with the owner,
         so it neither re-anchors the window nor consumes a pending address.
         """
-        if self._explicit_reply_pending and not internal:
-            self._session.note_accepted()
+        if not internal:
+            # PF-038: her reply to an owner turn taken inside an OPEN window keeps
+            # the conversation going, music or not (live 2026-11-16 21:49-21:53:
+            # Spotify on, owner talking every 10-20 s, the window lapsed mid-chat).
+            # A reply can still never RE-open a closed window (2026-10-10 loop).
+            # The turn itself was taken inside the window, so a reply that
+            # finishes just after expiry still continues it (review F1), but a
+            # stale turn (> OWNER_TURN_REPLY_S) does not.
+            turn_at = self._owner_turn_at
+            conversing = turn_at is not None and (self._clock() - turn_at <= OWNER_TURN_REPLY_S)
+            if self._explicit_reply_pending or conversing:
+                self._session.note_accepted()
             self._explicit_reply_pending = False
+            self._owner_turn_at = None
         if not interrupted:
             self._hold_until = self._clock() + get_listening_config()["echo_hold_ms"] / 1000.0
 
@@ -186,9 +219,24 @@ class ListeningState:
         if explicit:
             self._explicit_reply_pending = True
 
+    def note_owner_turn(self, verified: bool = False) -> None:
+        """A voice input turn was accepted (PF-038).
+
+        Counts only inside an OPEN window. While media plays it counts only when
+        the voice was verified as the owner's (voice lock on and ready): with
+        the lock off a transcribed lyric or film line is indistinguishable from
+        the owner, and the owner refused to let those keep Era listening.
+        """
+        if not self._session.open():
+            return
+        if self._media_playing() and not verified:
+            return
+        self._owner_turn_at = self._clock()
+
     def close_session(self) -> None:
         """Close the session ("standby" in the one-mode model)."""
         self._explicit_reply_pending = False
+        self._owner_turn_at = None
         self._session.close()
 
     def echo_hold_active(self) -> bool:

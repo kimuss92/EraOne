@@ -9,6 +9,74 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 > **EVERY AGENT, BEFORE ANY EDIT:** read `docs/PROTECTED_FIXES.md` and follow
 > `AGENTS.md` §0. The gate re-runs every protected fix's guard tests.
 
+### 2026-11-16 · Claude · PF-040: a busy exemption can never keep Era listening forever
+
+**Wrong (live, UTC):** 22:24:51 window set to 60 s; nobody spoke until 22:29:45,
+yet no inactivity, no HUD badge, and the gate sent room audio to Gemini (22:29:16
+`engine.gemini.unresponsive`: 3 spoken episodes). No `attention.*` events after
+21:58 UTC. Only an unbounded busy exemption explains passing audio past an expired
+window: PROCESSING is left only when Era finishes speaking, and the check failed
+open on any error. State transitions were never logged, so the trigger is unproven.
+**Changed:** `app/era_live/audio.py` `_busy_reason` (PROCESSING busy only 120 s
+after last entering it; errors -> window decides); `app/hud/status.py` logs
+`listening.mode` with its reason on every change (read-only, PF-033).
+**Verified:** Windows: tools/test_busy_bounded.py 6, focused 853, protected guards
+455, registry OK, ruff clean. **Owed live:** set 1 min, stay silent: HUD shows
+INACTIVITY MODE within 1 min (up to 2 min after her last tool call); if not, `logs/era.log` `listening.mode` names the reason.
+
+### 2026-11-16 · Claude · PF-039 "stay silent" -> inactivity mode; PF-038 per-turn voice verdict
+
+**Owner:** saying "remain silent" / "stay silent" must put Era straight into
+inactivity mode; she answers again only when named.
+**Changed:** `core/attention.is_silence_order` (whole utterance only);
+`main.EraLive._enter_inactivity` closes the window (mic + Live session warm,
+never real STANDBY; `config/session.json` has `standby_enabled: true`), drops her
+reply to that turn, speaks nothing, once per turn. Wired: voice mid-turn
+(`app/era_live/audio.py`), typed (before `_STANDBY_INTENT`), and an
+`enter_standby` tool call whose user text is a silence order (`tool_dispatch`).
+**PF-038 (dev-review F2 again):** lock readiness is not a per-utterance verdict;
+the speaker gate passes short follow-ups unscored. `UtteranceGate.last_pass_fully_verified`
+(read-only) + `main._owner_voice_verified(era)` now require the latest passed
+utterance to be a full scored match. Guard drives the real UtteranceGate.
+**Verified:** Windows: test_silence_order 21, test_reanchor_sources 16, focused
+403 (incl. speaker-gate suites), protected guards 440, registry OK, ruff clean.
+**Owed live:** "stay silent" by voice and typed (no reply, HUD inactivity,
+"Era, ..." answers); voice re-enroll + lock, then music chat.
+
+### 2026-11-16 · Claude · PF-038 revised after dev-review (F1 near-expiry, F2 lyrics) + owner rule
+
+**Owner (2026-11-16):** Era must never interact with lyrics, films or her own voice.
+**Changed:** an in-window voice turn is remembered with its time; Era's reply within
+60 s continues the window even if it finishes just after expiry (F1). While media
+plays a voice turn counts only if the voice lock is ON and ready
+(`main._owner_voice_verified`), because only the voiceprint can tell the owner
+from a song (F2). With the lock off + media, "Era" is needed after 2 min.
+**Root fix needs the owner:** the voice profile (2026-10-10) predates the glasses
+mic; with the lock on 19:08-19:14 local about half the owner's commands scored
+0.19-0.35 < 0.49 and he turned it off. Re-enroll with
+`python tools/enroll_speaker.py` on the current mic, then turn the voice lock on.
+**Verified:** Windows: 15 PF-034/038 guards, 135 focused, 418 protected guards,
+registry OK, ruff clean. Live owed.
+
+### 2026-11-16 · Claude · PF-038: a real conversation keeps the window open, music or not
+
+**Wrong (live, UTC):** 21:49:02 "Era" accepted, Spotify started 21:49:34, owner
+kept talking every 10-20 s; from 21:53:53 every utterance was `attention.ignored`
+(inactivity mode mid-conversation). Cause: my PF-034 stopped unnamed passing
+speech re-anchoring during media, and Era's replies re-anchored only after an
+explicit address, so nothing extended the window while music played.
+
+**Changed:** `core/attention.py` `ListeningState.note_owner_turn` (only inside an
+open window) + `era_finished_speaking` re-anchors on a reply to that turn
+(never re-opens a closed window; internal speech skipped; echo hold unchanged).
+`main.py` `_accept_input` calls it for voice inputs.
+
+**Verified:** Windows: `tools/test_reanchor_sources.py` (+4), attention/session/
+inactivity/HUD/input-ownership suites 130 passed; all protected guards 413
+passed; registry OK; ruff clean. **Owed live:** "Era" once, music on, talk 3+ min
+unnamed -> she keeps answering; then silence 2+ min -> inactivity; lyrics alone
+must not keep it open.
+
 ### 2026-11-16 · Claude review accepted · PF-035/036/037 pinned candidate
 
 Claude independently checked the exact seven revised file hashes in

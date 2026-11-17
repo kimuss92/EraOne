@@ -1,0 +1,327 @@
+diff --git a/app/era_live/audio.py b/app/era_live/audio.py
+index 4958799..658d246 100644
+--- a/app/era_live/audio.py
++++ b/app/era_live/audio.py
+@@ -169,4 +169,54 @@ def _latency_mark(host, name: str, *args) -> None:
+ 
+ 
++def _emit_or_hold(era, emit) -> None:
++    """PF-039: deliver reply output now, or let the engine hold it while a bare
++    "stay silent" may still grow into a longer sentence. Test doubles without
++    the hook deliver immediately."""
++    hook = getattr(era, "_emit_or_hold", None)
++    if callable(hook):
++        hook(emit)
++    else:
++        emit()
++
++
++def _silence_turn_end(era, text: str) -> None:
++    """PF-039: resolve a pending silence hold at turn_complete (test doubles
++    without the hook have nothing held)."""
++    hook = getattr(era, "_silence_finished", None)
++    if callable(hook):
++        hook(text, at_turn_end=True)
++
++
++# PF-040: the longest Era may stay "busy" in PROCESSING before the normal
++# window rules apply again (every tool call re-enters PROCESSING and resets it).
++BUSY_PROCESSING_MAX_S = 120.0
++
++
++_HISTORY_ERROR_LOGGED = [False]  # PF-040: the history-read error is logged once
++
++
++def _processing_age_s(manager) -> float:
++    """Seconds since the session last entered PROCESSING.
++
++    0 when the manager keeps no history (test doubles): the old, unbounded
++    behaviour. The real SessionManager records every transition.
++    """
++    history = getattr(manager, "get_state_history", None)
++    if not callable(history):
++        return 0.0
++    try:
++        for t in reversed(history()):
++            if str(getattr(t.new, "name", t.new)).upper().endswith("PROCESSING"):
++                return max(0.0, time.time() - float(t.timestamp))
++    except Exception as e:
++        # dev-review: an unreadable history must not mean "fresh" on every
++        # check (endless busy). No proof of recent work = no exemption.
++        if not _HISTORY_ERROR_LOGGED[0]:
++            _HISTORY_ERROR_LOGGED[0] = True
++            print(f"[ATTENTION] state history unreadable ({type(e).__name__}: {e}); not busy")
++        return float("inf")
++    return float("inf")  # in PROCESSING with no record of entering it
++
++
+ class AudioIOMixin:
+     def _owned_speech_event(self, phrase, status: str) -> None:
+@@ -530,13 +580,27 @@ class AudioIOMixin:
+         replying locally. The window counts from when she is DONE (live
+         2026-10-10: a slow reply let it expire before she even answered)."""
++        return AudioIOMixin._busy_reason(self) is not None
++
++    def _busy_reason(self) -> str | None:
++        """Which busy exemption keeps the window open, or None (PF-040).
++
++        Bounded: PROCESSING counts only for BUSY_PROCESSING_MAX_S after Era last
++        entered it (every tool call re-enters it). Live 2026-11-16 22:25-22:31
++        UTC: with a 60 s window and nobody talking, inactivity never came and
++        the HUD never showed it, while the gate kept sending room audio to
++        Gemini ("3 spoken episodes"); a state that never left PROCESSING (or a
++        check that raised and failed open) could hold the exemption forever.
++        An error now lets the window rules decide instead of "busy" forever.
++        """
+         try:
+             store = getattr(self, "_pending_store", None)
+             if store is not None and store.peek() is not None:
+-                return True
++                return "confirmation"
+             from core.media_activity import media_playing
+ 
+             if media_playing():
+-                return False  # music/video: "busy" must not let lyrics through
+-            snap = self.session_manager.get_state_snapshot()
++                return None  # music/video: "busy" must not let lyrics through
++            manager = self.session_manager
++            snap = manager.get_state_snapshot()
+             if str(snap.get("current_state", "")).upper().endswith("PROCESSING"):
+                 # PF-034: busy with HIS request only. A scheduled report or
+@@ -550,11 +614,17 @@ class AudioIOMixin:
+                     and tracker.reason == "unowned_model_request"
+                 )
+-                return not internal
++                if not internal and _processing_age_s(manager) <= BUSY_PROCESSING_MAX_S:
++                    return "processing"
+             task = getattr(self, "_local_turn_task", None)
+             if task is not None and not task.done():
+-                return True
+-            return bool(getattr(self, "_local_speaking", False))
+-        except Exception:
+-            return True  # unsure: listen (fail-open, like the gate)
++                return "local_turn"
++            if getattr(self, "_local_speaking", False):
++                return "local_speaking"
++            return None
++        except Exception as e:
++            if not getattr(self, "_busy_error_logged", False):
++                self._busy_error_logged = True
++                print(f"[ATTENTION] busy check failed ({type(e).__name__}: {e}); window decides")
++            return None
+ 
+     def _attention_event(self, kind: str, heard: str) -> None:
+diff --git a/app/hud/status.py b/app/hud/status.py
+index b4bc776..f07a85e 100644
+--- a/app/hud/status.py
++++ b/app/hud/status.py
+@@ -202,4 +202,58 @@ def _mic_state(engine: Any) -> str:
+ 
+ 
++_last_mode: dict = {"mode": None, "kind": None}
++
++
++def _reason_kind(why: str) -> str:
++    """The reason without its ticking numbers ("window open, 23s left" ->
++    "window open"), so a countdown never floods the log."""
++    return why.split(",")[0].strip()
++
++
++def listening_mode(engine: Any) -> str:
++    """Read the engine's real window; never start or re-anchor one for the HUD."""
++    mode, why = _listening_mode_and_reason(engine)
++    kind = _reason_kind(why)
++    if mode != _last_mode["mode"] or kind != _last_mode.get("kind"):
++        # PF-040: every change of mode OR of reason is logged, so "inactivity
++        # never came" is traced even while the mode stays "active" (window
++        # open -> busy: processing; dev-review).
++        _last_mode["mode"] = mode
++        _last_mode["kind"] = kind
++        try:
++            from core.logger import log_event, main_logger
++
++            log_event(main_logger, "listening.mode", "INFO", mode=mode, reason=why)
++        except Exception:
++            pass
++    return mode
++
++
++def _listening_mode_and_reason(engine: Any) -> tuple[str, str]:
++    if engine is None:
++        return "unavailable", "no engine"
++    try:
++        mic = _mic_state(engine)
++        if mic != "active":
++            return mic, "mic"
++        state = getattr(engine, "_listening", None)
++        if state is None:
++            return "unavailable", "no listening state yet"
++        if state.window_open():
++            return "active", f"window open, {state.session_remaining_s():.0f}s left"
++        from app.era_live.audio import AudioIOMixin
++
++        reason = (
++            AudioIOMixin._busy_reason(engine)
++            if isinstance(engine, AudioIOMixin)
++            else ("busy" if engine._attention_keep_open() else None)
++        )
++        if reason:
++            return "active", f"busy: {reason}"
++        return "inactive", "window expired"
++    except Exception as e:
++        return "unavailable", f"{type(e).__name__}"
++
++
+ def health(server: Any, engine: Any) -> dict:
+     ready = engine is not None
+diff --git a/tools/test_busy_bounded.py b/tools/test_busy_bounded.py
+new file mode 100755
+index 0000000..7caf02f
+--- /dev/null
++++ b/tools/test_busy_bounded.py
+@@ -0,0 +1,145 @@
++"""PF-040: a busy exemption can never keep Era listening forever.
++
++Live 2026-11-16 22:25-22:31 UTC: window set to 60 s, nobody talking, yet
++inactivity never came and the HUD never showed it, while the gate kept sending
++room audio to Gemini. A state that never left PROCESSING (or a check that raised
++and failed open) held the busy exemption indefinitely.
++"""
++
++from __future__ import annotations
++
++from types import SimpleNamespace
++
++import pytest
++
++from app.era_live import audio
++from app.era_live.audio import AudioIOMixin
++from core.attention import ListeningState
++from core.session_manager import EraState, SessionManager
++
++
++class _Era(AudioIOMixin):
++    def __init__(self, manager):
++        self.session_manager = manager
++        self._pending_store = None
++        self._model_reply_ownership = None
++        self._local_turn_task = None
++        self._local_speaking = False
++
++
++@pytest.fixture
++def clock(monkeypatch):
++    now = [1_000_000.0]
++    monkeypatch.setattr(audio.time, "time", lambda: now[0])
++    import core.session_manager as sm
++
++    monkeypatch.setattr(sm.time, "time", lambda: now[0])
++    return now
++
++
++def test_a_fresh_tool_call_still_counts_as_busy(clock):
++    manager = SessionManager()
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")
++    clock[0] += 30
++    assert _Era(manager)._attention_keep_open() is True
++
++
++def test_a_stuck_processing_state_stops_being_busy(clock):
++    manager = SessionManager()
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")
++    clock[0] += audio.BUSY_PROCESSING_MAX_S + 1  # never left PROCESSING
++    assert _Era(manager)._attention_keep_open() is False
++
++
++def test_every_tool_call_renews_the_busy_period(clock):
++    manager = SessionManager()
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")
++    clock[0] += 100
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")  # a second tool
++    clock[0] += 100
++    assert _Era(manager)._attention_keep_open() is True
++
++
++def test_an_unreadable_state_history_is_not_endless_busy(clock):
++    # dev-review: PROCESSING snapshot, but reading the history raises.
++    manager = SessionManager()
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")
++
++    def broken_history():
++        raise RuntimeError("history unavailable")
++
++    manager.get_state_history = broken_history
++    assert manager.get_state_snapshot()["current_state"] == EraState.PROCESSING
++    assert _Era(manager)._attention_keep_open() is False
++
++
++def test_an_unreadable_history_is_logged_once(clock, monkeypatch, capsys):
++    # dev-review: the protected rule says the error is logged once.
++    monkeypatch.setattr(audio, "_HISTORY_ERROR_LOGGED", [False])
++    manager = SessionManager()
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")
++
++    def broken_history():
++        raise RuntimeError("history unavailable")
++
++    manager.get_state_history = broken_history
++    era = _Era(manager)
++    for _ in range(5):
++        assert era._attention_keep_open() is False
++    out = capsys.readouterr().out
++    assert out.count("state history unreadable") == 1
++
++
++def test_a_failing_busy_check_lets_the_window_decide():
++    class _Broken(_Era):
++        @property
++        def session_manager(self):
++            raise RuntimeError("boom")
++
++        @session_manager.setter
++        def session_manager(self, value):
++            pass
++
++    assert _Broken(None)._attention_keep_open() is False
++
++
++def test_hud_reports_inactive_and_logs_why_when_processing_is_stuck(clock, monkeypatch):
++    from app.hud import status
++
++    manager = SessionManager()
++    manager.transition_to(EraState.PROCESSING, reason="tool_call")
++    era = _Era(manager)
++    era._standby_active = False
++    era._mic_muted = False
++    era.mic_effective_active = lambda: True
++    era._listening = ListeningState(clock=lambda: clock[0], window_s=60)
++    logged = []
++    import core.logger as logger
++
++    monkeypatch.setattr(
++        logger, "log_event", lambda _l, event, _lvl, **kw: logged.append((event, kw))
++    )
++    monkeypatch.setattr(status, "_last_mode", {"mode": None, "kind": None})
++    assert status.listening_mode(era) == "active"  # window just opened
++    clock[0] += 10
++    assert status.listening_mode(era) == "active"  # countdown only: not logged again
++    clock[0] += 51
++    assert status.listening_mode(era) == "active"  # busy: processing (recent)
++    clock[0] += audio.BUSY_PROCESSING_MAX_S
++    assert status.listening_mode(era) == "inactive"
++    reasons = [kw["reason"] for event, kw in logged if event == "listening.mode"]
++    # dev-review: the reason change is logged even though the mode stays active.
++    assert len(reasons) == 3
++    assert reasons[0].startswith("window open")
++    assert reasons[1] == "busy: processing"
++    assert reasons[2] == "window expired"
++
++
++def test_hud_logs_only_changes():
++    from app.hud import status
++
++    era = SimpleNamespace(_standby_active=True)
++    status._last_mode["mode"] = None
++    status.listening_mode(era)
++    status.listening_mode(era)
++    assert status._last_mode["mode"] == "standby"

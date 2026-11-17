@@ -101,6 +101,19 @@ improvement themes to revisit against evidence; #44 visual polish stays paused.
 
 ## 🔴 In progress
 
+**2026-11-16 · PF-040 built (Claude, to dev-review):** inactivity can no longer be
+blocked forever by a stuck "busy" state (max 120 s); HUD mode changes are logged
+with their reason. Owed live: 1-min window + silence -> HUD inactivity within 1 min, or up to 2 min after Era's last tool call (busy grace).
+
+**2026-11-16 · PF-039 built (Claude, to dev-review):** "stay silent" / "remain
+silent" puts Era straight into inactivity mode (no reply; "Era" reopens). PF-038
+now uses the speaker gate's per-utterance verdict. 440 guards pass. Owed live.
+
+**2026-11-16 · PF-038 built (Claude, to dev-review):** inactivity mode no longer
+switches on mid-conversation when music plays: Era's reply to a voice turn taken
+inside the open window extends it. 413 guards pass. Owed live: say "Era" once,
+play music, keep talking 3+ min without her name; then stay silent 2+ min.
+
 **2026-11-16 · PF-035/036/037 built and independently ACCEPTED:**
 the inactivity HUD uses theme tokens and an opaque panel plus a transition-only
 sound cue; requested restart acknowledgment is bound to an expiring one-shot

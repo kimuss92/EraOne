@@ -168,6 +168,56 @@ def _latency_mark(host, name: str, *args) -> None:
         pass
 
 
+def _emit_or_hold(era, emit) -> None:
+    """PF-039: deliver reply output now, or let the engine hold it while a bare
+    "stay silent" may still grow into a longer sentence. Test doubles without
+    the hook deliver immediately."""
+    hook = getattr(era, "_emit_or_hold", None)
+    if callable(hook):
+        hook(emit)
+    else:
+        emit()
+
+
+def _silence_turn_end(era, text: str) -> None:
+    """PF-039: resolve a pending silence hold at turn_complete (test doubles
+    without the hook have nothing held)."""
+    hook = getattr(era, "_silence_finished", None)
+    if callable(hook):
+        hook(text, at_turn_end=True)
+
+
+# PF-040: the longest Era may stay "busy" in PROCESSING before the normal
+# window rules apply again (every tool call re-enters PROCESSING and resets it).
+BUSY_PROCESSING_MAX_S = 120.0
+
+
+_HISTORY_ERROR_LOGGED = [False]  # PF-040: the history-read error is logged once
+
+
+def _processing_age_s(manager) -> float:
+    """Seconds since the session last entered PROCESSING.
+
+    0 when the manager keeps no history (test doubles): the old, unbounded
+    behaviour. The real SessionManager records every transition.
+    """
+    history = getattr(manager, "get_state_history", None)
+    if not callable(history):
+        return 0.0
+    try:
+        for t in reversed(history()):
+            if str(getattr(t.new, "name", t.new)).upper().endswith("PROCESSING"):
+                return max(0.0, time.time() - float(t.timestamp))
+    except Exception as e:
+        # dev-review: an unreadable history must not mean "fresh" on every
+        # check (endless busy). No proof of recent work = no exemption.
+        if not _HISTORY_ERROR_LOGGED[0]:
+            _HISTORY_ERROR_LOGGED[0] = True
+            print(f"[ATTENTION] state history unreadable ({type(e).__name__}: {e}); not busy")
+        return float("inf")
+    return float("inf")  # in PROCESSING with no record of entering it
+
+
 class AudioIOMixin:
     def _owned_speech_event(self, phrase, status: str) -> None:
         bridge = getattr(self, "_telegram_speech", None)
@@ -529,15 +579,29 @@ class AudioIOMixin:
         and while she is busy with his request: thinking, running a tool or
         replying locally. The window counts from when she is DONE (live
         2026-10-10: a slow reply let it expire before she even answered)."""
+        return AudioIOMixin._busy_reason(self) is not None
+
+    def _busy_reason(self) -> str | None:
+        """Which busy exemption keeps the window open, or None (PF-040).
+
+        Bounded: PROCESSING counts only for BUSY_PROCESSING_MAX_S after Era last
+        entered it (every tool call re-enters it). Live 2026-11-16 22:25-22:31
+        UTC: with a 60 s window and nobody talking, inactivity never came and
+        the HUD never showed it, while the gate kept sending room audio to
+        Gemini ("3 spoken episodes"); a state that never left PROCESSING (or a
+        check that raised and failed open) could hold the exemption forever.
+        An error now lets the window rules decide instead of "busy" forever.
+        """
         try:
             store = getattr(self, "_pending_store", None)
             if store is not None and store.peek() is not None:
-                return True
+                return "confirmation"
             from core.media_activity import media_playing
 
             if media_playing():
-                return False  # music/video: "busy" must not let lyrics through
-            snap = self.session_manager.get_state_snapshot()
+                return None  # music/video: "busy" must not let lyrics through
+            manager = self.session_manager
+            snap = manager.get_state_snapshot()
             if str(snap.get("current_state", "")).upper().endswith("PROCESSING"):
                 # PF-034: busy with HIS request only. A scheduled report or
                 # background result (an internal model request) held the gate
@@ -549,13 +613,19 @@ class AudioIOMixin:
                     and tracker.owner is None
                     and tracker.reason == "unowned_model_request"
                 )
-                return not internal
+                if not internal and _processing_age_s(manager) <= BUSY_PROCESSING_MAX_S:
+                    return "processing"
             task = getattr(self, "_local_turn_task", None)
             if task is not None and not task.done():
-                return True
-            return bool(getattr(self, "_local_speaking", False))
-        except Exception:
-            return True  # unsure: listen (fail-open, like the gate)
+                return "local_turn"
+            if getattr(self, "_local_speaking", False):
+                return "local_speaking"
+            return None
+        except Exception as e:
+            if not getattr(self, "_busy_error_logged", False):
+                self._busy_error_logged = True
+                print(f"[ATTENTION] busy check failed ({type(e).__name__}: {e}); window decides")
+            return None
 
     def _attention_event(self, kind: str, heard: str) -> None:
         print(f"[ATTENTION] {kind}: {heard!r}")
@@ -1060,7 +1130,9 @@ class AudioIOMixin:
                                 if native_turn
                                 else response.data
                             )
-                            self.audio_in_queue.put_nowait(chunk)
+                            # PF-039: held (not dropped) while "stay silent" may
+                            # still be the start of a longer sentence.
+                            _emit_or_hold(self, lambda c=chunk: self.audio_in_queue.put_nowait(c))
 
                     if response.server_content:
                         sc = response.server_content
@@ -1099,7 +1171,7 @@ class AudioIOMixin:
                                 _latency_mark(self, "note_model_output")  # first answer token
                                 if hasattr(self, "live_health"):
                                     self.live_health.note_reply()  # a spoken transcript is an answer
-                                hud.response_delta(txt)
+                                _emit_or_hold(self, lambda t=txt: hud.response_delta(t))
                                 if (
                                     native_turn is not None
                                     and not native_turn.failed
@@ -1107,10 +1179,11 @@ class AudioIOMixin:
                                     and not self._barge_in_requested
                                     and txt.endswith((".", "!", "?", "。", "！", "？"))
                                 ):
-                                    self.audio_in_queue.put_nowait(
-                                        NativeSpeechCheckpoint(
-                                            native_turn, " ".join(out_buf).strip()
-                                        )
+                                    checkpoint = NativeSpeechCheckpoint(
+                                        native_turn, " ".join(out_buf).strip()
+                                    )
+                                    _emit_or_hold(
+                                        self, lambda c=checkpoint: self.audio_in_queue.put_nowait(c)
                                     )
                                 # ── fish_audio: the TRANSCRIPT is the speech ──
                                 # Gemini's own audio was discarded above, so this
@@ -1145,16 +1218,21 @@ class AudioIOMixin:
                                     # the word breaks (see _clean_stream_chunk).
                                     delta = _clean_stream_chunk(sc.output_transcription.text)
                                     if speech_turn_owner is not None:
-                                        self.speech_out.feed(delta, owner=speech_turn_owner)
+                                        _emit_or_hold(
+                                            self,
+                                            lambda d=delta, o=speech_turn_owner: (
+                                                self.speech_out.feed(d, owner=o)
+                                            ),
+                                        )
                                     else:
-                                        self.speech_out.feed(delta)
+                                        _emit_or_hold(self, lambda d=delta: self.speech_out.feed(d))
                             elif (
                                 VOICE_CFG.synthesizes_from_transcript()
                                 and not self._cm_handoff_active()
                                 and not self._barge_in_requested
                             ):
                                 # A whitespace-only chunk is still a word break.
-                                self.speech_out.feed(" ")
+                                _emit_or_hold(self, lambda: self.speech_out.feed(" "))
 
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
@@ -1189,9 +1267,13 @@ class AudioIOMixin:
                                 in_buf.append(txt)
                                 self._last_user_text = txt
                                 self._inflight_user_text = " ".join(in_buf)
+                                # PF-039: a bare "stay silent" so far only HOLDS
+                                # her reply; the window closes at end of speech.
+                                # "Era, stay silent" must not re-open the window.
+                                silence = self._silence_partial(self._inflight_user_text)
                                 try:
                                     listening = getattr(self, "_listening_state", None)
-                                    if callable(listening):
+                                    if callable(listening) and not silence:
                                         listening().note_transcript(self._inflight_user_text)
                                 except Exception:
                                     pass
@@ -1232,6 +1314,9 @@ class AudioIOMixin:
                             from core.input_envelope import InputEnvelope
 
                             code_text = " ".join(in_buf)
+                            # PF-039: the owner finished speaking; a bare silence
+                            # order is now final (her held reply stays dropped).
+                            self._silence_finished(code_text)
                             # Act at the end of the user's speech, not after the
                             # model finishes an answer (which may never finish).
                             if self._is_reboot_order(code_text) and not self._shutdown_requested:
@@ -1256,6 +1341,12 @@ class AudioIOMixin:
                             self.live_turn.note_generation_complete()
 
                         if sc.turn_complete:
+                            # PF-039: resolve a pending "stay silent" hold FIRST,
+                            # before any end-of-reply marker (speech_out.end_turn,
+                            # NativeSpeechEnd) is queued, so held output for a
+                            # longer sentence is replayed inside this turn, and a
+                            # real order's output is discarded (dev-review 3rd).
+                            _silence_turn_end(self, " ".join(in_buf).strip())
                             if codemode_owns_reply():
                                 out_buf.clear()
                                 if not in_buf:

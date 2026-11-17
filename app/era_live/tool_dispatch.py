@@ -3402,6 +3402,13 @@ class ToolDispatchMixin:
             print(f"[era] [STATE-GATE] skipped ({type(_gate_err).__name__}: {_gate_err})")
 
         if tool_name == "enter_standby":
+            from core.attention import is_silence_order
+
+            if is_silence_order(_current_user_text(self)):
+                # PF-039: "stay silent" means inactivity mode, never the real
+                # STANDBY (standby_enabled may be on: wake word only).
+                self._enter_inactivity("voice")
+                return "Inactivity mode: say nothing at all."
             self.enter_standby()
             from core.session import standby_enabled
 

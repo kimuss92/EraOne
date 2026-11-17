@@ -221,6 +221,16 @@ class UtteranceGate:
         else:
             self._job = self._executor.submit(self._verifier.verify, pcm, purpose)
 
+    @property
+    def last_pass_fully_verified(self) -> bool:
+        """Was the latest utterance this gate let through SCORED as the owner?
+
+        False after a short follow-up (passed unscored or on the low follow-up
+        floor). Read-only; PF-038 uses it so an unscored lyric that slipped
+        through as a follow-up cannot extend the listening window.
+        """
+        return bool(self._owner_anchor_full)
+
     def _mark_owner(self, now: float, full: bool) -> None:
         if full:
             self._owner_until = now + self.followup_window_s

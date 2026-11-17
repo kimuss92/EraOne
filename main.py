@@ -298,6 +298,27 @@ def _build_live_health() -> LiveHealth:
         return LiveHealth()
 
 
+def _owner_voice_verified(era=None) -> bool:
+    """Was THIS voice turn verified as the owner's (PF-038)?
+
+    Needs the voice lock ON and ready (the speaker gate then drops other voices
+    before Gemini) AND the gate's verdict on the latest utterance it passed to
+    be a full scored match: a short follow-up passes unscored (or on a low
+    floor), so a brief lyric could ride on it (dev-review 2026-11-16). With the
+    lock off nothing can tell the owner from a song. Never raises.
+    """
+    try:
+        from core.speaker_recognition import get_verifier
+
+        verifier = get_verifier()
+        if not (verifier.enabled and verifier.readiness()[0]):
+            return False
+        gate = getattr(era, "_voice_gate", None)
+        return bool(gate is not None and gate.last_pass_fully_verified)
+    except Exception:
+        return False
+
+
 def _speaking_for_internal_turn(era) -> bool:
     """Is Era's current speech the reply to an internal request (a scheduled
     report, a background result) rather than to the owner? PF-034."""
@@ -863,6 +884,15 @@ class EraLive(
             _tg_notify("Your previous request was interrupted by a new command.")
         self._input_envelope = envelope
         self._tg_reply_pending = envelope.source == "telegram"
+        if envelope.source == "voice":
+            # PF-038: a voice turn inside an open window lets Era's reply to it
+            # extend the conversation (core/attention.py note_owner_turn).
+            try:
+                state = getattr(self, "_listening_state", None)
+                if callable(state):
+                    state().note_owner_turn(verified=_owner_voice_verified(self))
+            except Exception as e:
+                print(f"[ATTENTION] owner-turn hook skipped: {type(e).__name__}: {e}")
         log_event(
             main_logger,
             "input.accepted",
@@ -1124,6 +1154,13 @@ class EraLive(
         # It must be handled here, before the safety gate: the gate sees a two-word
         # message, classifies it SHORT_UNCLEAR, and asks "what should I do with it?" —
         # so the order was answered instead of executed. Same path as the F4 sentinel.
+        from core.attention import is_silence_order
+
+        if is_silence_order(text):
+            self.ui.write_log(f"You: {text.strip()}")
+            self._enter_inactivity("typed")
+            return
+
         if _STANDBY_INTENT.match(text.strip()):
             self.ui.write_log(f"SYS: Standby ordered by text: '{text.strip()}'")
             # enter_standby() speaks its own confirmation, which the turn mirror then
@@ -2072,6 +2109,103 @@ class EraLive(
 
         if task and not task.done() and task is not current:
             task.cancel()
+
+    def _enter_inactivity(self, source: str, drop_reply: bool = True) -> None:
+        """PF-039: "stay silent" -> inactivity mode at once, no spoken reply.
+
+        Closes the conversation window like a one-mode standby (mic and Live
+        session stay warm, never EraState.STANDBY), so only her name reopens it,
+        and drops Era's reply to this turn: the owner asked for silence. The HUD
+        inactivity badge and entry cue (PF-035) are the acknowledgement.
+        """
+        try:
+            already = self._barge_in_requested and not self._listening_state().window_open()
+        except Exception:
+            already = False
+        if already:
+            return  # the growing transcript of the same order: done once
+        _close_listening_session(self)
+        if drop_reply:
+            # Reset at the turn boundary. Never set it AFTER that boundary
+            # (drop_reply=False), or it would swallow her NEXT reply.
+            self._barge_in_requested = True
+            try:
+                self.trigger_barge_in("silence_order")
+            except Exception as e:
+                print(f"[SILENCE] barge-in skipped: {type(e).__name__}: {e}")
+        print(f"[SILENCE] Inactivity mode ordered ({source}).")
+        self.ui.write_log("SYS: Staying silent - say 'Era' to talk to me again.")
+
+    def _silence_partial(self, text: str) -> bool:
+        """PF-039, growing voice transcript. Returns True while it is a bare
+        silence order (the caller then skips note_transcript).
+
+        Nothing irreversible happens here (dev-review: "stay silent" may be the
+        start of "stay silent when I'm on a call"): Era's reply output is HELD,
+        in order (_emit_or_hold). If more words turn it into another sentence,
+        the held output is delivered and she answers in full. The window closes
+        and the held output is discarded only at the end of speech
+        (_silence_finished).
+        """
+        from core.attention import is_silence_order
+
+        if is_silence_order(text):
+            if getattr(self, "_silence_committed", None) == text:
+                return True  # already acted on this very order
+            if not getattr(self, "_silence_hold", False):
+                self._silence_hold = True
+                self._silence_deferred = []
+            return True
+        self._silence_committed = None
+        self._release_silence_hold()  # not an order after all: she answers in full
+        return False
+
+    def _emit_or_hold(self, emit) -> None:
+        """PF-039: reply output goes out now, or is KEPT in order while a bare
+        "stay silent" might still become a longer sentence (dev-review: dropping
+        it lost the start of her answer to "stay silent when I'm on a call")."""
+        if getattr(self, "_silence_hold", False):
+            self._silence_deferred.append(emit)
+        else:
+            emit()
+
+    def _release_silence_hold(self) -> None:
+        """Not an order: deliver the held reply output in its original order."""
+        if not getattr(self, "_silence_hold", False):
+            return
+        self._silence_hold = False
+        held, self._silence_deferred = getattr(self, "_silence_deferred", []), []
+        for emit in held:
+            try:
+                emit()
+            except Exception as e:
+                print(f"[SILENCE] held output skipped: {type(e).__name__}: {e}")
+
+    def _discard_silence_hold(self) -> None:
+        """A real order: the held reply output is never delivered."""
+        self._silence_hold = False
+        self._silence_deferred = []
+
+    def _silence_finished(self, text: str, at_turn_end: bool = False) -> bool:
+        """PF-039, end of the owner's speech: commit only a whole bare order.
+
+        at_turn_end=True is the turn_complete backstop (no end-of-speech mark
+        came): her reply is already over, so nothing more is dropped.
+        """
+        from core.attention import is_silence_order
+
+        if is_silence_order(text):
+            self._discard_silence_hold()
+            if getattr(self, "_silence_committed", None) != text:
+                self._silence_committed = text
+                self._enter_inactivity("voice", drop_reply=not at_turn_end)
+            acted = True
+        else:
+            self._release_silence_hold()
+            acted = False
+        if at_turn_end:
+            self._silence_committed = None  # the turn is over: judge the next one fresh
+        return acted
 
     def enter_standby(self, network_failure: bool = False):
         from core.session import standby_enabled
