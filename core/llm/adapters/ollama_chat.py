@@ -25,8 +25,11 @@ TOOL SCHEMAS ARE SLIMMED ON PURPOSE
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -59,6 +62,12 @@ def base_url() -> str:
         return resolve_ollama_base_url()
     except Exception:
         return "http://127.0.0.1:11434"
+
+
+def keep_alive() -> str:
+    """One lifecycle setting for every Era Ollama request."""
+    value = os.environ.get("OLLAMA_KEEP_ALIVE", "5m").strip()
+    return value if re.fullmatch(r"-?\d+(?:\.\d+)?(?:ms|s|m|h)?", value) else "5m"
 
 
 # ── tool schema slimming ────────────────────────────────────────────────────
@@ -115,7 +124,15 @@ def to_ollama_messages(request: LlmRequest) -> list[dict[str, Any]]:
         out.append({"role": "system", "content": system})
     for msg in request.messages:
         role = msg.role if msg.role in ("user", "assistant", "system", "tool") else "user"
-        out.append({"role": role, "content": msg.as_text})
+        translated: dict[str, Any] = {"role": role, "content": msg.as_text}
+        images = [
+            base64.b64encode(part.data).decode("ascii")
+            for part in msg.parts
+            if part.kind == "image" and part.data
+        ]
+        if images:
+            translated["images"] = images
+        out.append(translated)
     extra = (request.provider_options.get("ollama") or {}).get("extra_messages") or []
     out.extend(extra)
     return out
@@ -181,23 +198,29 @@ class OllamaChatProvider:
         return Capability(
             tools=True,
             json_schema=True,
+            vision=True,
             streaming=True,
+            long_context=True,
             cost_reporting=True,
             available=ok,
             unavailable_reason=why,
         )
 
     def _body(self, request: LlmRequest, *, stream: bool) -> dict[str, Any]:
+        ollama_options = request.provider_options.get("ollama") or {}
+        think = ollama_options.get("think")
+        if think is None:
+            think = request.effort_hint in ("medium", "high")
         body: dict[str, Any] = {
             "model": self._model_for(request.alias),
             "messages": to_ollama_messages(request),
             "stream": stream,
-            "keep_alive": "30m",
+            "keep_alive": keep_alive(),
             "options": {"num_ctx": self._num_ctx, "num_predict": request.max_output_tokens},
             # Reasoning models (gemma4, qwen3) otherwise write a hidden chain of
             # thought before every reply: measured 9-27 s a turn on gemma4:e4b.
             # A spoken assistant cannot afford it. Ignored by other models.
-            "think": False,
+            "think": bool(think),
         }
         if request.tools:
             body["tools"] = list(request.tools)
@@ -242,6 +265,21 @@ class OllamaChatProvider:
     def stream(self, request: LlmRequest) -> Iterator[StreamEvent]:
         started = time.perf_counter()
         first_ms: int | None = None
+        model = self._model_for(request.alias)
+        if "pytest" not in sys.modules and not os.environ.get("PYTEST_CURRENT_TEST"):
+            try:
+                from core.llm.resource_guard import admit_cold_load
+
+                admission = admit_cold_load(model, base_url())
+            except Exception as exc:  # noqa: BLE001 - resource telemetry is advisory
+                admission = None
+                print(f"[ollama] resource admission unavailable ({type(exc).__name__})")
+            if admission is not None and not admission.allowed:
+                yield StreamEvent(
+                    kind="error",
+                    error=LlmError("transient", admission.reason, provider="ollama"),
+                )
+                return
         try:
             resp = self._open(self._body(request, stream=True), request.timeout_s)
         except Exception as e:

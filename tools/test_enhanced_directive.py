@@ -49,6 +49,71 @@ def test_non_coding_controls_do_not_claim_conversation(text):
     assert not coding_intent(text)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Era, ask Cody to fix this bug and stage it for my approval: in core/tts_gemini.py ...",
+        "ask the crew to fix the bug in app/main.py",
+        "Have Cody write a function for the vault",
+        "Laura, plan the refactor of the module",
+        "tell nabar to review ui_src/src/App.tsx",
+        "Cody: debug app/main.py",
+    ],
+)
+def test_a_request_handed_to_the_crew_is_not_codemode(text):
+    """PF-050: live 2026-11-19 an explicit "ask Cody to fix this bug" went to CodeMode."""
+    assert not coding_intent(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "fix this bug in the crew module",  # "crew" as a topic, not an addressee
+        "debug crew/runtime.py",
+        "write a function that asks the user",
+    ],
+)
+def test_crew_as_a_topic_still_activates_codemode(text):
+    assert coding_intent(text)
+
+
+def test_codemode_is_off_unless_the_owner_turns_it_on(monkeypatch):
+    """PF-050: owner 2026-11-19 "disable codemode". Nothing enters it by default."""
+    from app import codemode_runtime as rt
+
+    monkeypatch.delenv("ERA_CODEMODE", raising=False)
+    assert rt.codemode_allowed() is False
+    era = SimpleNamespace(_loop=None, ui=SimpleNamespace(write_log=Mock()))
+    for text in ("start coding", "fix this bug in app/main.py", "Switch to Claude Sonnet"):
+        assert rt.route(era, text) is False  # Era handles it normally
+    era.ui.write_log.assert_not_called()
+    monkeypatch.setenv("ERA_CODEMODE", "on")
+    assert rt.codemode_allowed() is True
+
+
+@pytest.mark.parametrize("action", ["enter", "exit", "status"])
+def test_the_code_mode_tool_says_it_is_off(monkeypatch, action):
+    from app.era_live import tool_dispatch
+
+    monkeypatch.delenv("ERA_CODEMODE", raising=False)
+    cls = next(
+        v
+        for v in vars(tool_dispatch).values()
+        if isinstance(v, type) and "_execute_tool_raw" in vars(v)
+    )
+    era = SimpleNamespace(_input_envelope=SimpleNamespace(text="start coding", id="x"))
+    result = asyncio.run(cls._execute_tool_raw(era, "code_mode", {"action": action}))
+    assert result.success is False and result.error_type == "FeatureDisabled"
+    assert "crew" in result.message
+
+
+def test_crew_names_come_from_the_bot_registry():
+    from core.codemode_intent import _crew_names
+
+    names = _crew_names()
+    assert {"cody", "laura", "crew"} <= set(names)
+
+
 def test_model_commands_and_invalid_models(tmp_path, monkeypatch):
     from core import codemode_models as models
 
@@ -70,6 +135,8 @@ async def test_implicit_entry_claims_before_next_event_and_submits_original_once
     tmp_path, monkeypatch
 ):
     from app import codemode_runtime as runtime
+
+    monkeypatch.setenv("ERA_CODEMODE", "on")  # PF-050: tests CodeMode's behaviour when ON
     from core import codemode as cm
     from core import codemode_models as models
     from core.input_envelope import InputEnvelope

@@ -24,6 +24,13 @@ CANCEL = re.compile(
     r"^(?:cancel|stop) (?:this |the )?(?:coding (?:task|turn)|code\s*mode task)[.! ]*$", re.I
 )
 
+_LOGIN_FAILURE = re.compile(r"\bauth\b|subscription login|not logged in|log ?in required", re.I)
+
+
+def _needs_login(message: str) -> bool:
+    """A CodeMode failure that no retry fixes until the owner logs Claude in."""
+    return bool(_LOGIN_FAILURE.search(message or ""))
+
 
 def configured_profile() -> tuple[str, str]:
     from core.llm.registry import resolve
@@ -208,6 +215,19 @@ class CodeMode:
                     message = str(redact_secrets(str(exc)))[:400]
                     self._event("failed", message)
                     await emit("error", "CodeMode could not complete this turn: " + message, owner)
+                    # Live 2026-11-17: an implicit entry ("write me a Python function")
+                    # failed on a missing Claude login, CodeMode stayed on, and every
+                    # later order ("what are my offers?") hit the same auth error — Era
+                    # was deaf to anything else. A failure no retry can fix closes it.
+                    if _needs_login(message):
+                        self.enabled = False
+                        self._event("off")
+                        await emit(
+                            "notice",
+                            "CodeMode closed: it needs a Claude login first. "
+                            "Normal conversation is available.",
+                            owner,
+                        )
             finally:
                 REGISTRY.finish(token.cid)
 

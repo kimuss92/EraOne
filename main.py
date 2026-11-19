@@ -79,21 +79,39 @@ from core.memory_intent import (  # noqa: F401  (re-export: preserves public + i
 # anchors): "go offline" as a standalone order sleeps her, but the same words buried
 # in "tell me why the server went offline" must not.
 #
-# Standby-logic overhaul (2026-09-16): the accepted set is EXACTLY the four
-# sanctioned triggers — "standby", "take a break", "go offline",
-# "enter stand by mode" — and nothing else. The older, broader set (French
+# Standby-logic overhaul (2026-09-16, narrowed by PF-045 on 2026-11-18): the
+# accepted set is EXACTLY "standby" and "take a break" — nothing else. The older, broader set (French
 # veille/dors/bonne nuit, goodnight, go to sleep, ciao, bare "sleep") was
 # deliberately removed so conversational noise and phonetic near-misses can no
 # longer sleep her. The whole-message anchors are what enforce "no partial
 # matches"; "standby"/"stand by" are the same word spelled two ways.
-_STANDBY_INTENT = re.compile(
-    r"^\W*(?:era\s*[,;:]?\s*)?"
-    r"(?:enter\s+stand\s*by\s+mode|stand\s*by|take\s+a\s+break|go\s+offline)"
-    r"\W*$",
+_TYPED_WAKE_ORDER = re.compile(
+    r"^\W*(?:(?:hey\s+)?era(?:\s+one)?\s*[,;:]?\s*)?"
+    r"(?:wake\s+up|come\s+back(?:\s+online)?|back\s+online|resume|you\s+can\s+wake\s+up)"
+    r"(?:\s+(?:now|please|sir))*\W*$",
     re.IGNORECASE,
 )
 
+_TIME_QUESTION = re.compile(
+    r"^\W*(?:(?:hey\s+)?era\s*[,;:]?\s*)?(?:what(?:'s| is)\s+the\s+time|what\s+time\s+is\s+it"
+    r"|(?:do\s+you\s+)?(?:know\s+)?(?:have\s+)?the\s+time|quelle\s+heure\s+est[- ]il)"
+    r"(?:\s+(?:now|right\s+now|please|sir))*\W*$",
+    re.IGNORECASE,
+)
 
+# PF-045: how long the exit waits for the selected voice's first audio before it
+# stops waiting (Fish/Kokoro synthesis), and before Gemini's silence is covered by
+# the local voice (Gemini selected).
+_EXIT_LINE_SYNTH_WAIT_S = 6.0
+_EXIT_LINE_GEMINI_WAIT_S = 4.0
+
+
+def _clear_exit_pending(era) -> None:
+    era._exit_speech_pending = False
+
+
+# PF-045 (owner 2026-11-18): only "standby" and "take a break" — "go offline" is
+# no longer a standby order. One matcher, shared with the enter_standby tool gate.
 from app.era_constants import (  # noqa: F401
     _AWAITING_REPLY_WINDOW_S,
     _CM_HANDOFF_WINDOW_S,
@@ -120,6 +138,7 @@ from app.text_intents import (  # noqa: F401  (re-export: preserves public + int
     is_drop_request,
     is_resume_request,
 )
+from core.attention import STANDBY_ORDER as _STANDBY_INTENT  # noqa: E402
 
 
 def _wake_intent_matches(text: str) -> bool:
@@ -902,6 +921,24 @@ class EraLive(
             received_at=envelope.received_at,
         )
 
+    async def _run_typed_approval(self, call) -> None:
+        """Run a typed-"yes"-approved call and SAY what happened (never raises).
+
+        Live 2026-11-17: "forget my test colour" -> typed "yes" deleted the memory,
+        but the result was dropped — no reply, no trace line — so the owner could
+        not tell it had run.
+        """
+        try:
+            result = await self._execute_tool_result(call)
+            from app.era_live.speak_once import spoken_outcome
+
+            said = spoken_outcome(call.name, result)
+        except Exception as e:
+            print(f"[CONFIRM] approved {call.name} failed: {e}")
+            said = "That approved action hit an error, sir. Check the log."
+        print(f"[CONFIRM] approved {call.name} -> {said}")
+        self.speak(_say_exactly(said))
+
     def _handle_text_command(self, text: str):
         # HUD conversation record: the typed/Telegram order as the user sent it.
         # Sentinels ("__mute__" etc.) are skipped inside user_input. Never raises.
@@ -1100,7 +1137,11 @@ class EraLive(
             # Wake on the CONFIGURED wake word (currently "shazam"), not a hard-coded
             # list. The old pattern matched "era"/"active"/"wake up", so the wake word
             # the user actually set could not wake her from Telegram at all.
-            if _wake_intent_matches(clean_cmd):
+            # A TYPED whole-message wake order ("wake up", "Era, wake up") also wakes
+            # her: typed input is the owner's own (Telegram is locked to his chat, the
+            # LAN bridge needs his token), so the voice decoy list does not apply.
+            # Live 2026-11-17 "Era, wake up" over the bridge was silently dropped.
+            if _wake_intent_matches(clean_cmd) or _TYPED_WAKE_ORDER.match(clean_cmd):
                 print("[WAKE] Remote wake phrase detected via network shortcut!")
                 if self._loop and self._loop.is_running():
                     submit_coroutine(
@@ -1166,6 +1207,18 @@ class EraLive(
             # enter_standby() speaks its own confirmation, which the turn mirror then
             # relays to Telegram — so leave _tg_reply_pending armed here.
             self.enter_standby()
+            return
+
+        # A typed "what time is it?" is answered from the real local clock. Live
+        # 2026-11-17 the model said "2:45 AM UTC" at 03:45 local, twice.
+        if _TIME_QUESTION.match(text.strip()):
+            from actions.computer_control import computer_control
+
+            self._note_user_utterance(text)
+            clock = computer_control({"action": "clock"})  # "Local time: 03:45 (3:45 AM), ..."
+            spoken = "It's " + clock.split("(", 1)[1].split(")", 1)[0] + ", sir."
+            self.ui.write_log(f"Era: {spoken}")
+            self.speak(_say_exactly(spoken))
             return
 
         # A typed theme order ("go dark", "switch to light mode") is a UI toggle,
@@ -1298,7 +1351,7 @@ class EraLive(
         if self._pending_store.is_pending():
             pending = self._pending_store.peek()
             if pending is not None:
-                from app.era_live.tool_dispatch import _SCHED_APPROVE_COMMAND, _sched_refused
+                from app.era_live.tool_dispatch import _typed_cancel_reply
 
                 low = text.lower().strip()
                 # Check for affirmative confirmation reply
@@ -1306,28 +1359,30 @@ class EraLive(
                     print(
                         f"[CONFIRM] Typed confirmation reply detected: '{text}' -> consuming pending {pending.tool}"
                     )
-                    confirmed = self._pending_store.confirm(
-                        pending.confirmation_id,
-                        allow_sole=True,
-                        expected_created_at=pending.created_at,
+                    # Do NOT consume here. The dispatcher checks the user's approval
+                    # and consumes the confirmation itself; consuming it first made
+                    # that second confirm() return None, so a typed "yes" never ran
+                    # the armed action ("Invalid or expired confirmation", found
+                    # live 2026-11-17). Only check it is still the same one.
+                    current = self._pending_store.peek(pending.confirmation_id)
+                    confirmed = (
+                        current
+                        if current is not None and current.created_at == pending.created_at
+                        else None
                     )
                     if confirmed is not None:
                         if self._loop and self._loop.is_running():
                             from google.genai import types
 
-                            submit_coroutine(
-                                self._execute_tool_result(
-                                    types.FunctionCall(
-                                        name=pending.tool,
-                                        args={
-                                            **pending.parameters,
-                                            "confirmed": True,
-                                            "confirmation_id": pending.confirmation_id,
-                                        },
-                                    )
-                                ),
-                                self._loop,
+                            call = types.FunctionCall(
+                                name=pending.tool,
+                                args={
+                                    **pending.parameters,
+                                    "confirmed": True,
+                                    "confirmation_id": pending.confirmation_id,
+                                },
                             )
+                            submit_coroutine(self._run_typed_approval(call), self._loop)
                         else:
                             self.ui.write_log(
                                 "SYS: Cannot execute confirmation — session not ready."
@@ -1338,7 +1393,8 @@ class EraLive(
                             "[CONFIRM] Failed to consume pending confirmation (already consumed or expired)"
                         )
                 # Check for negative/cancel reply
-                elif _sched_refused(low) and not _SCHED_APPROVE_COMMAND.search(low):
+                # Only a refusal WORD cancels; a new question goes on to the model.
+                elif _typed_cancel_reply(low):
                     # Negative reply without affirmative words = cancel
                     print(
                         f"[CONFIRM] Typed cancel reply detected: '{text}' -> cancelling pending {pending.tool}"
@@ -1353,7 +1409,11 @@ class EraLive(
                         try:
                             speak = getattr(self, "speak", None)
                             if speak:
-                                speak("Action cancelled.")
+                                # Literal line: a bare "Action cancelled." reached
+                                # Gemini as input and it called
+                                # cancel_pending_confirmation again, then said
+                                # "there was no pending action" (live 2026-11-17).
+                                speak(_say_exactly("Cancelled, sir."))
                         except Exception:
                             pass
                         if self._tg_reply_pending:
@@ -1722,6 +1782,14 @@ class EraLive(
             spoken = _unwrap_say_exactly(text)
             owner = current_input.get()
             loop = self._loop
+            if getattr(self, "_shutdown_requested", False) and loop and loop.is_running():
+                # PF-045: the exit line is spoken by the SELECTED backend (Fish or
+                # Kokoro). Make the exit wait for its first audio; a timer clears
+                # the wait if synthesis never produces any.
+                self._exit_speech_pending = True
+                loop.call_soon_threadsafe(
+                    loop.call_later, _EXIT_LINE_SYNTH_WAIT_S, _clear_exit_pending, self
+                )
             import era_telegram
 
             owned = (
@@ -1757,6 +1825,46 @@ class EraLive(
             return
 
         if not self._loop or not self.session:
+            return
+        if getattr(self, "_shutdown_requested", False) and self._loop.is_running():
+            # PF-045: once a reboot/shutdown is under way, _receive_audio drops every
+            # Gemini audio chunk (PF-036: no late greeting from the old session), so
+            # a line sent through Gemini was never heard — "reboot Era One" restarted
+            # in silence (live 2026-11-18 17:50). Gemini is the SELECTED voice here
+            # (Fish/Kokoro never reach this point: uses_speech_out() above), so the
+            # line is said in GEMINI'S voice or not at all — never Fish/Kokoro:
+            #   1. open the audio gate for this one Live turn and let Gemini say it;
+            #   2. if the Live session makes no sound within _EXIT_LINE_GEMINI_WAIT_S
+            #      (lagging / dead / paraphrasing), synthesize the SAME sentence with
+            #      the SAME Gemini voice over the independent REST TTS and play it;
+            #   3. if that fails too, log it — silence beats a different voice.
+            spoken = _unwrap_say_exactly(text)
+            self._exit_speech_pending = True
+            self._exit_audio_seen = False
+            self._exit_line_audio_open = True
+            submit_coroutine(send_model_text(self, _say_exactly(spoken)), self._loop)
+
+            async def _exit_line_guard() -> None:
+                try:
+                    await asyncio.sleep(_EXIT_LINE_GEMINI_WAIT_S)
+                    if not self._exit_audio_seen and not self._is_speaking:
+                        self._exit_line_audio_open = False  # no double voice if Live wakes late
+                        from core import tts_gemini
+
+                        tts_gemini._retry_at = 0.0  # one-shot: a past failure must not mute it
+                        pcm = await tts_gemini.synthesize(spoken)
+                        if pcm:
+                            await self._local_play(pcm)
+                        else:
+                            print(
+                                "[era] [SHUTDOWN] Gemini voice unavailable; exit line not spoken."
+                            )
+                except Exception as e:  # noqa: BLE001 - never block the exit
+                    print(f"[era] [SHUTDOWN] could not speak the exit line: {e}")
+                finally:
+                    self._exit_speech_pending = False
+
+            asyncio.run_coroutine_threadsafe(_exit_line_guard(), self._loop)
             return
         submit_coroutine(send_model_text(self, text), self._loop)
 

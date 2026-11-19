@@ -17,6 +17,12 @@ from crew import source
 from tools.test_codemode import Advisory, empty_context, repository  # noqa: F401 — fixture
 
 
+@pytest.fixture(autouse=True)
+def codemode_switched_on(monkeypatch):
+    """PF-050: CodeMode is off by default; these cases test how it behaves when ON."""
+    monkeypatch.setenv("ERA_CODEMODE", "on")
+
+
 @pytest.mark.asyncio
 async def test_external_reply_produces_speaker_frames_when_gemini_selected(monkeypatch):
     from app.codemode_runtime import emit

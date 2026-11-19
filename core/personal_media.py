@@ -49,6 +49,25 @@ _MOOD_QUERY = re.compile(
 )
 
 
+# A query made ONLY of these words is a genre/mood, never a title. Live 2026-11-17
+# "lofi hip hop" started the right kind of track but was checked as a song title,
+# so a correct result was reported as "not verified".
+_GENRE_WORDS = frozenset(
+    """lofi lo-fi lo fi hip hop hiphop rap trap jazz blues rock pop classical piano
+    ambient edm house techno trance dubstep drum bass dnb r&b rnb soul funk disco
+    reggae afrobeat afrobeats latin salsa kpop k-pop metal punk indie folk country
+    acoustic instrumental orchestral cinematic synthwave chillhop chill chillout
+    relaxing calm study focus sleep sleepy workout gym party dance happy sad
+    romantic upbeat mellow smooth deep night morning arabic rai mezoued oriental
+    tarab quran nasheed french""".split()
+)
+
+
+def _all_genre_words(q: str) -> bool:
+    words = re.findall(r"[a-z&-]+", q.lower())
+    return bool(words) and all(w in _GENRE_WORDS for w in words)
+
+
 def is_mood_request(query: str) -> bool:
     """A mood or genre search ("chill music", "night music", "chill rap mix").
 
@@ -58,7 +77,7 @@ def is_mood_request(query: str) -> bool:
     q = re.sub(r"[.!?,\s]+$", "", (query or "").strip())
     if not q or re.search(r"\sby\s", q, re.I):
         return False
-    return bool(_MOOD_QUERY.search(q))
+    return bool(_MOOD_QUERY.search(q)) or _all_genre_words(q)
 
 
 def explicit_track(utterance: str) -> str | None:

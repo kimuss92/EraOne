@@ -22,7 +22,7 @@ FIELDS = {
     "gemini_vision_api_key": ("Gemini vision key", "secret", ""),
     "gemini_vision_model": ("Gemini vision model", "text", "gemini-3.8-flash"),
     "ollama_base_url": ("Ollama address", "url", "http://127.0.0.1:11434"),
-    "ollama_vision_model": ("Ollama vision model", "text", "qwen2.5vl:3b"),
+    "ollama_vision_model": ("Ollama vision model", "text", "qwen3.5:9b"),
     "empower_output_dir": ("Created documents folder", "path", str(ROOT / "runtime/deliverables")),
     "home_assistant_url": ("Home Assistant address", "url", ""),
     "home_assistant_token": ("Home Assistant access token", "secret", ""),

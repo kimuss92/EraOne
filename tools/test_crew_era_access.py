@@ -126,6 +126,58 @@ class TestEraRead:
         res = _cap("era.read", {"path": "logs/era.log", "start_line": 10, "limit": 2})
         assert res.data["content"].splitlines() == ["10: line 10 crew", "11: line 11 other"]
 
+    def test_null_arguments_mean_the_defaults(self, era):
+        """PF-049: Cody sent tail=50 with start_line/limit null and was refused."""
+        res = _cap(
+            "era.read", {"path": "logs/era.log", "tail": 2, "start_line": None, "limit": None}
+        )
+        assert res.success
+        assert res.data["content"].splitlines()[-1].endswith("line 500 crew")
+        assert (
+            len(
+                _cap("era.read", {"path": "logs/era.log", "limit": None})
+                .data["content"]
+                .splitlines()
+            )
+            == 200
+        )
+        bad = _cap("era.read", {"path": "logs/era.log", "limit": 0})  # a real bad value
+        assert not bad.success and "limit" in (bad.message or bad.error or "")
+
+    def test_epoch_stamped_records_are_found_by_their_local_time(self, era):
+        """PF-049: Fabric logs carry only epoch "ts"; a grep for "12:51" found nothing."""
+        from datetime import datetime
+
+        when = datetime(2026, 11, 19, 12, 51, 16)
+        (era / "logs" / "events.jsonl").write_text(
+            json.dumps({"topic": "crew.result", "outcome": "fault", "ts": when.timestamp()})
+            + "\n"
+            + json.dumps({"topic": "other", "ts": when.timestamp() + 3600})
+            + "\nnot json at 12:51\n",
+            encoding="utf-8",
+        )
+        res = _cap("era.read", {"path": "logs/events.jsonl", "grep": "12:51"})
+        lines = res.data["content"].splitlines()
+        assert res.data["matches"] == 2
+        assert lines[0].startswith('1: [2026-11-19 12:51:16 local] {"topic": "crew.result"')
+        assert lines[1] == "3: not json at 12:51"  # plain lines are left exactly as they are
+
+    def test_a_long_tail_keeps_its_newest_lines(self, era):
+        """PF-049: a tail over 12 000 chars returned its OLDEST part; the newest was lost."""
+        (era / "logs" / "wide.log").write_text(
+            "\n".join(f"row {i} " + "x" * 900 for i in range(1, 61)), encoding="utf-8"
+        )
+        res = _cap("era.read", {"path": "logs/wide.log", "tail": 40})
+        lines = res.data["content"].splitlines()
+        assert res.data["truncated"] is True
+        assert lines[-1].startswith("60: row 60 ")  # the newest line survives
+        assert all(": row " in line for line in lines)  # only whole lines
+        head = _cap("era.read", {"path": "logs/wide.log", "limit": 40})
+        assert head.data["content"].splitlines()[0].startswith("1: row 1 ")  # heads keep the start
+
+    def test_the_bots_are_told_about_local_times(self):
+        assert '"12:51"' in caps.CAPABILITIES["era.read"].description
+
     def test_lists_folders_without_credentials(self, era):
         names = [e["name"] for e in _cap("era.list", {"path": "config"}).data["entries"]]
         assert names == ["voice.json"]

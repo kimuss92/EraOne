@@ -427,3 +427,93 @@ async def test_cm_duplicate_and_independent_cancellation(monkeypatch):
     assert cancelled == [jobs["phase8 one"].cid]
     assert set(ended) == {token.cid for token in jobs.values()}
     assert all(cancel.REGISTRY.get(token.cid) is None for token in jobs.values())
+
+
+# ── PF-052: a crew candidate may be staged as exact edits ───────────────────
+
+
+def _edits_plan(edits, base=None):
+    plan = candidate()
+    plan["files"][0] = {
+        "path": "core/example.py",
+        "base_sha256": base or dev._hash(dev.ROOT / "core/example.py"),
+        "edits": edits,
+    }
+    return plan
+
+
+def _stage(plan):
+    work = coordination.TeamWork("edits-1", "cody", "Fix the value", {"cody"})
+    reset = coordination.CURRENT_WORK.set(work)
+    try:
+        return source.stage(None, plan)
+    finally:
+        coordination.CURRENT_WORK.reset(reset)
+
+
+def test_an_edit_stages_the_complete_new_file(repository, monkeypatch):
+    """Live 2026-11-19: Cody's whole-file JSON broke on escaping; edits are small."""
+    from core import pending_confirmation
+
+    monkeypatch.setattr(pending_confirmation, "_shared_store", None)  # a fresh yes-gate
+    queued(monkeypatch)
+    out = _stage(_edits_plan([{"old": "VALUE = 1", "new": "VALUE = 2"}]))
+    assert out.error_type == "ConfirmationRequired"  # held for the user's yes
+    job = dev._read(out.data["development_id"])
+    expected = dev._hash(dev.ROOT / "core/example.py")
+    assert job["expected_bases"]["core/example.py"] == expected
+    assert (repository / "core/example.py").read_text() == "VALUE = 1\n"  # live untouched
+    held = next(plan for _job, plan, _cid in submission._HELD.values() if _job["id"] == job["id"])
+    assert held["files"][0]["content"] == "VALUE = 2\n"  # the edit became the full file
+
+
+@pytest.mark.parametrize(
+    "edits, why",
+    [
+        ([{"old": "NOT THERE", "new": "x"}], "found 0 times"),
+        ([{"old": "", "new": "x"}], "non-empty old"),
+        ([], "1-20"),
+    ],
+)
+def test_a_bad_edit_is_refused_and_queues_nothing(repository, monkeypatch, edits, why):
+    calls = queued(monkeypatch)
+    with pytest.raises(ValueError, match=why):
+        _stage(_edits_plan(edits))
+    assert calls == [] and not (repository / "runtime/development").exists()
+
+
+def test_an_edit_to_a_file_that_changed_since_it_was_read_is_refused(repository, monkeypatch):
+    queued(monkeypatch)
+    old_base = dev._hash(dev.ROOT / "core/example.py")
+    (repository / "core/example.py").write_text("VALUE = 7\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="read core/example.py again"):
+        _stage(_edits_plan([{"old": "VALUE = 7", "new": "VALUE = 2"}], base=old_base))
+
+
+def test_an_ambiguous_edit_is_refused(repository, monkeypatch):
+    queued(monkeypatch)
+    (repository / "core/example.py").write_text("A = 1\nB = 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="found 2 times"):
+        _stage(_edits_plan([{"old": " = 1", "new": " = 2"}]))
+
+
+def test_the_expanded_content_is_what_development_receives(repository):
+    files = source._expand_edits(_edits_plan([{"old": "VALUE = 1", "new": "VALUE = 3"}])["files"])
+    assert files[0] == {
+        "path": "core/example.py",
+        "base_sha256": dev._hash(dev.ROOT / "core/example.py"),
+        "content": "VALUE = 3\n",
+    }
+    assert files[1]["content"].startswith("def test_value")  # content items pass through
+
+
+def test_a_bot_that_staged_nothing_cannot_sound_like_it_did():
+    from crew.runtime import NOTHING_STAGED, _done
+
+    cody = load_specs().specs["cody"]
+    said = _done(cody, "Here is the fix and the added test.", 3, [], [], {}, None)
+    assert said.message.endswith(NOTHING_STAGED)
+    staged = _done(cody, "Here is the fix.", 3, ["source.stage"], [], {}, None, staged=True)
+    assert NOTHING_STAGED not in staged.message
+    plain = _done(cody, "The log line is at core/tts_gemini.py:93.", 1, [], [], {}, None)
+    assert NOTHING_STAGED not in plain.message  # no claim of work, no note

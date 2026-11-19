@@ -1009,6 +1009,8 @@ def classify_action(
         "design_studio",
         # Read-only self-inspection; writes only a report under runtime/diagnosis.
         "self_diagnosis",
+        # Local model reasons and answers with NO tools; it cannot act (PF-044).
+        "deep_think",
         # Reversible performance-profile switch / memory cleanup via vendor apps.
         "system_performance",
     }

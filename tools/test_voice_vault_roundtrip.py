@@ -302,7 +302,8 @@ class TestRoutingCannotHijackTheTools:
     def test_the_guard_is_load_bearing_other_tools_do_get_rerouted_by_action_name(self):
         from core.action_registry import canonicalize_tool_call
 
-        moved_tool, _ = canonicalize_tool_call("some_unguarded_tool", {"action": "list"})
+        # "close" (not "list": PF-041 stopped "list" moving any named tool).
+        moved_tool, _ = canonicalize_tool_call("some_unguarded_tool", {"action": "close"})
         assert moved_tool != "some_unguarded_tool"  # the flat map WOULD hijack a generic word
         for tool in ("vault_bridge", "crew"):
             for action in (

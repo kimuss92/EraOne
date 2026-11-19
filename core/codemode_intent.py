@@ -1,6 +1,8 @@
 """Local intent detection; no provider request on the activation path."""
 
 import re
+from functools import lru_cache
+from pathlib import Path
 
 _ACTION = r"(?:fix|debug|implement|refactor|write|create|edit|update|optimi[sz]e|test|review|inspect|open|work on)"
 _CODE = r"(?:bug|code|coding|function|class|module|script|unit tests?|codebase|project|repository|repo|new file|pull request)"
@@ -12,11 +14,41 @@ _NEGATIVE = re.compile(
 )
 
 
+_CREW_DIR = Path(__file__).resolve().parents[1] / "config" / "crew"
+
+
+@lru_cache(maxsize=1)
+def _crew_names() -> tuple[str, ...]:
+    """The crew bots (one yaml each in config/crew) plus the word "crew" itself."""
+    try:
+        names = {p.stem.lower() for p in _CREW_DIR.glob("*.yaml") if p.stem.isalpha()}
+    except OSError:
+        names = set()
+    return tuple(sorted(names | {"crew"}))
+
+
+def addresses_crew(text: str) -> bool:
+    """PF-050: the owner handed this to the crew ("ask Cody to fix...", "Laura, plan...").
+
+    Live 2026-11-19: "Era, ask Cody to fix this bug and stage it for my approval" was
+    taken by implicit CodeMode (a coding request), which needs the logged-out Claude
+    login, so the crew never saw it. An explicit crew hand-off is the crew's job.
+    """
+    who = "|".join(re.escape(n) for n in _crew_names())
+    hand = r"(?:ask|tell|have|get|send|let|give|hand|assign|delegate)"
+    return bool(
+        re.search(rf"\b{hand}\b(?:\s+\w+){{0,3}}?\s+(?:the\s+)?(?:{who})\b", text, re.I)
+        or re.match(rf"^\s*(?:era[, ]+)?(?:hey\s+)?(?:{who})\s*[,:]", text, re.I)
+    )
+
+
 def coding_intent(text: str) -> bool:
     if not isinstance(text, str) or not text.strip() or len(text) > 16000:
         return False
     value = text.strip()
     if value.startswith(("__", '"', "'", "```")) or _NEGATIVE.search(value):
+        return False
+    if addresses_crew(value):
         return False
     if re.match(
         r"^(?:remember|forget|ignore|what do you remember|explain what|what is)\b", value, re.I

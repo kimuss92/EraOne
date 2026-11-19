@@ -124,6 +124,50 @@ def inspect(args: dict) -> ToolResult:
     return ToolResult.ok(message="Project source candidates and dependencies.", data=data)
 
 
+_MAX_EDITS = 20
+
+
+def _expand_edits(files) -> list:
+    """PF-052: a file may be staged as exact edits instead of its complete content.
+
+    {"path", "base_sha256", "edits": [{"old": "...", "new": "..."}]} is applied here to
+    the CURRENT file, which must still have the hash the bot read; each `old` must
+    occur exactly once. The result is the complete content Development always gets.
+    Live 2026-11-19 Cody's whole-file JSON for a 3.5 KB module broke on escaping and the
+    local model's 900-token reply cannot hold a whole file: the crew could not stage.
+    """
+    if not isinstance(files, list):
+        return files
+    out = []
+    for item in files:
+        if not isinstance(item, dict) or "edits" not in item or "content" in item:
+            out.append(item)
+            continue
+        path, base, edits = item.get("path"), item.get("base_sha256"), item.get("edits")
+        if not isinstance(edits, list) or not 1 <= len(edits) <= _MAX_EDITS:
+            raise ValueError(f"edits for {path} must be a list of 1-{_MAX_EDITS} {{old, new}}")
+        if not isinstance(base, str):
+            raise ValueError(f"edits need {path}'s base_sha256; send content for a new file")
+        target = development._path(path)
+        if development._hash(target) != base:
+            raise ValueError(f"Source changed; read {path} again before submitting")
+        text = target.read_text(encoding="utf-8")
+        for n, edit in enumerate(edits, 1):
+            old = edit.get("old") if isinstance(edit, dict) else None
+            new = edit.get("new") if isinstance(edit, dict) else None
+            if not isinstance(old, str) or not old or not isinstance(new, str):
+                raise ValueError(f"edit {n} for {path} needs a non-empty old and a new string")
+            found = text.count(old)
+            if found != 1:
+                raise ValueError(
+                    f"edit {n} for {path}: old text found {found} times; it must match "
+                    "exactly once (copy it from source.read, include more lines)"
+                )
+            text = text.replace(old, new, 1)
+        out.append({"path": path, "base_sha256": base, "content": text})
+    return out
+
+
 def stage(ctx, args: dict) -> ToolResult:
     from core.development_submission import submit
 
@@ -132,6 +176,7 @@ def stage(ctx, args: dict) -> ToolResult:
     if work is None:
         raise ValueError("A source candidate requires an owned crew turn")
     plan = {key: args.get(key) for key in ("files", "tests", "plan")}
+    plan["files"] = _expand_edits(plan["files"])
     digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     with work.lock:
         if work.tainted_by:

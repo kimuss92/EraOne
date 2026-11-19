@@ -176,7 +176,16 @@ def media_coordinator(parameters: dict = None, player=None) -> str:
                     time.sleep(0.5)
                 res = netflix_control({"action": "play"}, player=player)
         else:
-            res = computer_settings({"action": "spotify_play"}, player=player)
+            query = params.get("query", "").strip() or params.get("title", "").strip()
+            if query:
+                # Live 2026-11-17 "play some lofi hip hop on Spotify": the query was
+                # ignored, the paused track resumed and "Spotify is playing" came
+                # back as success. A query means search-and-play, like Netflix/YouTube.
+                from actions.spotify_control import spotify_control
+
+                res = spotify_control({"action": "search", "value": query}, player=player)
+            else:
+                res = computer_settings({"action": "spotify_play"}, player=player)
 
         enforce_single_playback(target, player=player)
         return res

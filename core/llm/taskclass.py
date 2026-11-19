@@ -104,9 +104,21 @@ _RESEARCH = re.compile(
     re.IGNORECASE,
 )
 
+# Work on the owner's OWN data needs Era's tools, which the routed text models do
+# not have. Live 2026-11-17 "summarize the file handoff.md in my EraOne folder" was
+# classed research_synthesis, sent to a tool-less model, and answered "I cannot
+# access files from here; say 'back to automatic'". It stays on the voice model.
+_LOCAL_DATA = re.compile(
+    r"\b\w[\w-]*\.(?:md|txt|pdf|docx?|xlsx?|csv|json|py|log|pptx?|png|jpe?g|mp4)\b"
+    r"|\b(?:file|files|folder|folders|document|documents|desktop|downloads|"
+    r"e-?mails?|inbox|gmail|screen|vault|notes?|calendar|schedule|my\s+pc|my\s+computer)\b",
+    re.IGNORECASE,
+)
+
 # Ordered: cheap/local classes first, so a mixed utterance stays on the voice
 # model. Each entry is (name, pattern, task).
 _CHEAP_RULES = (
+    ("local_data", _LOCAL_DATA, NAVIGATION_STATUS),
     ("device", _DEVICE, DEVICE_ADJUSTMENT),
     ("media", _MEDIA, MEDIA_PLAYBACK),
     ("status", _STATUS, NAVIGATION_STATUS),

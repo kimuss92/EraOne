@@ -187,6 +187,26 @@ def _silence_turn_end(era, text: str) -> None:
         hook(text, at_turn_end=True)
 
 
+def _exit_line_passes(era, response) -> bool:
+    """PF-045: while Era is leaving (reboot / shutdown) every Gemini chunk is
+    dropped (PF-036: no late greeting from the old session) EXCEPT the one turn that
+    speaks her exit line in the voice the owner selected. `main.speak()` opens
+    `_exit_line_audio_open` for it; audio and that turn's end pass, a tool call never
+    does, and the turn's end shuts the gate again."""
+    if not getattr(era, "_exit_line_audio_open", False):
+        return False
+    if getattr(response, "tool_call", None):
+        return False
+    if getattr(response, "data", None):
+        era._exit_audio_seen = True
+        return True
+    sc = getattr(response, "server_content", None)
+    if sc is not None and getattr(sc, "turn_complete", False):
+        era._exit_line_audio_open = False
+        return True
+    return False
+
+
 # PF-040: the longest Era may stay "busy" in PROCESSING before the normal
 # window rules apply again (every tool call re-enters PROCESSING and resets it).
 BUSY_PROCESSING_MAX_S = 120.0
@@ -1064,8 +1084,10 @@ class AudioIOMixin:
                     # ── Capture session resumption token ──
                     if self.session_manager.capture_token(response):
                         # Persist immediately so a crash/restart can resume from
-                        # the freshest handle we have.
-                        self.session_manager.save_to_disk()
+                        # the freshest handle we have — except during a plain
+                        # shutdown, whose session must not be resumed (PF-042).
+                        if not getattr(self, "_discard_session_on_exit", False):
+                            self.session_manager.save_to_disk()
                         now = time.time()
                         if (now - self._last_token_log_ts) >= self._token_log_interval:
                             print("[RECV] Session resumption token updated.")
@@ -1073,7 +1095,9 @@ class AudioIOMixin:
 
                     # A local restart acknowledgement owns speech until exit.
                     # Drop late model promises/greetings from the old session.
-                    if getattr(self, "_shutdown_requested", False):
+                    if getattr(self, "_shutdown_requested", False) and not _exit_line_passes(
+                        self, response
+                    ):
                         continue
                     if response.data and self._barge_in_requested:
                         # The user cut in: this is the tail of the aborted turn,

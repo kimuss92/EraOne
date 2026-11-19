@@ -81,9 +81,26 @@ def _once(call, args, deadline, bot, attempt):
         raise value
 
 
-def call(model, args, *, bot, deadline=0.0, backup=None):
-    timeout = _setting("ERA_CREW_MODEL_TIMEOUT_S", 30.0, 0.01, 240.0)
-    retries = int(_setting("ERA_CREW_MODEL_RETRIES", 3, 0, 3))
+def call(
+    model,
+    args,
+    *,
+    bot,
+    deadline=0.0,
+    backup=None,
+    attempt_timeout_s=None,
+    retries=None,
+):
+    timeout = (
+        _setting("ERA_CREW_MODEL_TIMEOUT_S", 30.0, 0.01, 240.0)
+        if attempt_timeout_s is None
+        else min(240.0, max(0.01, float(attempt_timeout_s)))
+    )
+    retries = (
+        int(_setting("ERA_CREW_MODEL_RETRIES", 3, 0, 3))
+        if retries is None
+        else min(3, max(0, int(retries)))
+    )
     deadline = deadline or time.monotonic() + 240.0
     last = "model unavailable"
     try:

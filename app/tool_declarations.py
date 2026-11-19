@@ -1026,7 +1026,7 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | random_data | user_data | running_apps | active_window | system_snapshot",
+                    "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | screen_find | screen_click | random_data | user_data | running_apps | active_window | system_snapshot | clock",
                 },
                 "text": {"type": "STRING", "description": "Text to type or paste"},
                 "x": {"type": "INTEGER", "description": "X coordinate"},
@@ -1124,8 +1124,8 @@ TOOL_DECLARATIONS = [
         "name": "enter_standby",
         "description": (
             "Mutes the microphone and puts era into standby mode. "
-            "Call this ONLY on one of these four exact commands: 'standby', "
-            "'take a break', 'go offline', 'enter stand by mode'. Do NOT call it on "
+            "Call this ONLY when the user's whole message is 'standby' or "
+            "'take a break' (the code refuses anything else). Do NOT call it on "
             "partial matches, phonetically similar noise, or any other phrasing. "
             "While in standby, era listens only for her configured wake word."
         ),
@@ -2004,6 +2004,36 @@ TOOL_DECLARATIONS = [
                 },
             },
             "required": [],
+        },
+    },
+    {
+        "name": "deep_think",
+        "description": (
+            "Hands ONE hard question to Era's local reasoning model (Qwen, on this PC) "
+            "to think it through slowly. Call it ONLY when (a) the user explicitly asks "
+            "for it — 'think deeply', 'think hard', 'take your time', 'think it through', "
+            "'ask Qwen', 'use the local model' — or (b) the question genuinely needs long "
+            "multi-step reasoning: a detailed plan, a design or architecture decision, a "
+            "hard comparison or trade-off, tricky maths or logic, or reviewing a piece of "
+            "code the user dictated. NEVER call it for quick facts, chit-chat, the weather, "
+            "media, devices, files, apps or any ACTION — answer or use the right tool "
+            "yourself. It only reasons and answers; it cannot act on the computer. It runs "
+            "in the background: acknowledge in one short phrase, do NOT answer the question "
+            "yourself, and do not call it again — the full answer is spoken when ready."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "question": {
+                    "type": "STRING",
+                    "description": "The user's question, complete and self-contained, in their words.",
+                },
+                "context": {
+                    "type": "STRING",
+                    "description": "Optional facts from this conversation the answer depends on.",
+                },
+            },
+            "required": ["question"],
         },
     },
     {

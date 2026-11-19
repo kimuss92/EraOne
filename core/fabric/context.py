@@ -59,6 +59,12 @@ _RECENT_S = 6 * 3600
 _MAX_ARTIFACTS = 6
 _LABEL_MAX = 160
 _lock = threading.Lock()
+_sequence_lock = threading.Lock()
+_sequences: dict[str, int] = {}
+_SECRET_KEY = re.compile(r"(?:api.?key|authorization|password|secret|access.?token)", re.I)
+_SECRET_VALUE = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|password|secret|access[_-]?token)\b\s*[:=]\s*\S+"
+)
 
 
 @dataclass(frozen=True)
@@ -79,11 +85,15 @@ class TaskContext:
     artifacts: list[ArtifactRef] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)
     parent: str | None = None
+    checkpoint: dict | None = None
     created: float = field(default_factory=time.time)
 
     def for_turn(self) -> dict:
         """The slice a crew Turn carries: the id and the artifact list."""
-        return {"ctx_id": self.ctx_id, "artifacts": [asdict(a) for a in self.artifacts]}
+        turn = {"ctx_id": self.ctx_id, "artifacts": [asdict(a) for a in self.artifacts]}
+        if self.checkpoint:
+            turn["checkpoint"] = self.checkpoint
+        return turn
 
 
 # --------------------------------------------------------------------- persistence
@@ -159,11 +169,88 @@ def add_step(ctx_id: str | None, component: str, outcome: str, summary: str = ""
     )
 
 
+def _safe_checkpoint(value, *, limit: int = 500):
+    if isinstance(value, str):
+        cleaned = _SECRET_VALUE.sub(r"\1=[redacted]", value.replace("\x00", ""))
+        return cleaned[:limit]
+    if isinstance(value, dict):
+        return {
+            str(key)[:60]: "[redacted]"
+            if _SECRET_KEY.search(str(key))
+            else _safe_checkpoint(item, limit=limit)
+            for key, item in list(value.items())[:20]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_checkpoint(item, limit=limit) for item in list(value)[:20]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:limit]
+
+
+def _next_sequence(ctx_id: str) -> int:
+    with _sequence_lock:
+        current = _sequences.get(ctx_id)
+        if current is None:
+            try:
+                existing = load(ctx_id)
+                current = int(((existing or {}).get("checkpoint") or {}).get("sequence") or 0)
+            except Exception:  # noqa: BLE001 - continuity logging never breaks work
+                current = 0
+        value = current + 1
+        _sequences[ctx_id] = value
+        return value
+
+
+def add_checkpoint(
+    ctx_id: str | None,
+    *,
+    status: str,
+    note: str = "",
+    alias: str = "",
+    provider: str = "",
+    model: str = "",
+    reason: str = "",
+    next_action: str = "",
+    observation_ids: list[str] | tuple[str, ...] | None = None,
+    decisions: list[str] | tuple[str, ...] | None = None,
+    pending_confirmation: str = "",
+) -> dict | None:
+    """Append one small continuation checkpoint and return its safe turn slice.
+
+    The model's note is context, never evidence. Artifact payloads and tool
+    results stay in their existing by-reference/evidence stores.
+    """
+    if not ctx_id:
+        return None
+    record = {
+        "kind": "checkpoint",
+        "ctx_id": str(ctx_id)[:80],
+        "sequence": _next_sequence(str(ctx_id)),
+        "status": str(status or "unknown")[:30],
+        "route": {
+            "alias": str(alias or "")[:80],
+            "provider": str(provider or "")[:80],
+            "model": str(model or "")[:120],
+            "reason": str(reason or "")[:240],
+        },
+        "note": str(note or "")[:500],
+        "next_action": str(next_action or "")[:300],
+        "observation_ids": list(observation_ids or ())[:20],
+        "decisions": list(decisions or ())[:12],
+        "pending_confirmation": str(pending_confirmation or "")[:100],
+        "ts": time.time(),
+    }
+    safe = _safe_checkpoint(record)
+    _append(safe)
+    return {key: value for key, value in safe.items() if key not in ("kind", "ctx_id")}
+
+
 def load(ctx_id: str, days: int = 2, root: Path | None = None) -> dict | None:
     """Rebuild a context and its steps from the jsonl (today and the day before).
     `root` is a log directory (default: core.task_trace.log_dir())."""
     found: dict | None = None
     steps: list[dict] = []
+    latest_checkpoint: dict | None = None
     now = time.time()
     for back in range(days - 1, -1, -1):
         path = _path(now - back * 86400)
@@ -186,8 +273,15 @@ def load(ctx_id: str, days: int = 2, root: Path | None = None) -> dict | None:
                 found = rec
             elif rec.get("kind") == "step":
                 steps.append(rec)
+            elif rec.get("kind") == "checkpoint":
+                if latest_checkpoint is None or int(rec.get("sequence") or 0) >= int(
+                    latest_checkpoint.get("sequence") or 0
+                ):
+                    latest_checkpoint = rec
     if found is not None:
         found["steps"] = steps
+        if latest_checkpoint is not None:
+            found["checkpoint"] = latest_checkpoint
     return found
 
 

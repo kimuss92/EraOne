@@ -30,6 +30,7 @@ it. See _sanitize_spoken in app/text_intents.py for the payload it defuses.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any
@@ -46,7 +47,7 @@ from core.llm.shadow import Observation, ShadowLog, fingerprint
 from core.llm.spend import SpendLedger
 from core.llm.spend import from_registry as spend_from_registry
 from core.llm.taskclass import classify
-from core.llm.types import LlmMessage, LlmRequest, PromptBlock
+from core.llm.types import LlmError, LlmMessage, LlmRequest, PromptBlock
 from core.logger import log_event, main_logger
 
 
@@ -269,35 +270,124 @@ class DispatchMixin:
         if not affordable:
             return "", why_not
 
-        if provider is None:
-            try:
+        def provider_for(name: str):
+            if name == "ollama":
+                from core.llm.adapters.ollama_chat import OllamaChatProvider
+
+                return OllamaChatProvider()
+            if name == "omniroute":
+                from core.llm.adapters import omniroute
+
+                return omniroute
+            if name == "claude_cli":
                 from core.llm.adapters.claude_cli import ClaudeCliProvider
 
-                provider = ClaudeCliProvider()
+                return ClaudeCliProvider()
+            raise RuntimeError(f"no dispatch adapter for {name}")
+
+        if provider is not None:
+            candidates = [(decision.alias, decision.provider, provider)]
+        elif decision.provider == "ollama":
+            candidates = []
+            for alias, provider_name in (
+                (decision.alias, "ollama"),
+                ("era.local", "ollama"),
+                ("era.overflow", "omniroute"),
+            ):
+                if alias not in {row[0] for row in candidates}:
+                    try:
+                        candidates.append((alias, provider_name, provider_for(provider_name)))
+                    except Exception:
+                        continue
+        else:
+            try:
+                candidates = [(decision.alias, decision.provider, provider_for(decision.provider))]
             except Exception as e:
                 return "", f"the reasoning model is not reachable ({e})"
 
-        request = LlmRequest(
-            alias=decision.alias,
-            messages=(LlmMessage.text("user", text),),
-            system=self._dispatch_system_blocks(),
-            timeout_s=float(dispatch_policy().get("timeout_s") or 45.0),
-            request_id=f"dispatch-{int(time.time() * 1000)}",
-        )
+        ctx = None
         try:
-            response = provider.generate(request)
-        except Exception as e:
-            return "", f"{type(e).__name__}: {e}"
+            from core.fabric.context import new_context
+
+            ctx = new_context(
+                origin="dispatch",
+                utterance=text,
+                task=text,
+                intent=f"llm.dispatch:{decision.alias}",
+                discover=False,
+            )
+        except Exception:
+            pass
+
+        failures = []
+        response = None
+        used_alias = decision.alias
+        for alias, provider_name, candidate in candidates:
+            request = LlmRequest(
+                alias=alias,
+                messages=(LlmMessage.text("user", text),),
+                system=self._dispatch_system_blocks(),
+                max_output_tokens=1200,
+                effort_hint="high" if alias == "era.primary" else "low",
+                timeout_s=float(dispatch_policy().get("timeout_s") or 45.0),
+                request_id=f"dispatch-{int(time.time() * 1000)}",
+            )
+            try:
+                attempt = candidate.generate(request)
+                if not str(attempt.text or "").strip():
+                    raise LlmError(
+                        "invalid_response", "the reasoning model returned nothing", alias=alias
+                    )
+                response = attempt
+                used_alias = alias
+                break
+            except Exception as e:  # noqa: BLE001 - normalized below for failover
+                kind = str(getattr(e, "kind", "transient"))
+                failures.append({"alias": alias, "provider": provider_name, "kind": kind})
+                if ctx is not None:
+                    try:
+                        from core.fabric.context import add_checkpoint
+
+                        add_checkpoint(
+                            ctx.ctx_id,
+                            status="provider_handoff",
+                            note=f"{alias} did not produce a usable answer.",
+                            alias=alias,
+                            provider=provider_name,
+                            reason=f"{kind}: {e}"[:240],
+                            next_action="Ask the next healthy model; no tool or side effect ran.",
+                        )
+                    except Exception:
+                        pass
+                if kind in ("refusal", "cancelled") or provider is not None:
+                    return "", f"{type(e).__name__}: {e}"
+        if response is None:
+            tried = ", ".join(row["alias"] for row in failures) or decision.alias
+            return "", f"no healthy reasoning model answered ({tried})"
 
         # Record the REAL cost, not the estimate, so the ceiling tracks reality.
         try:
-            self.spend_ledger.record(response.usage.est_cost_usd, alias=decision.alias)
+            self.spend_ledger.record(response.usage.est_cost_usd, alias=used_alias)
         except Exception:
             pass
 
         answer = (response.text or "").strip()
-        if not answer:
-            return "", "the reasoning model returned nothing"
+        if ctx is not None:
+            try:
+                from core.fabric.context import add_checkpoint
+
+                add_checkpoint(
+                    ctx.ctx_id,
+                    status="complete",
+                    note=answer,
+                    alias=used_alias,
+                    provider=str(response.provider or ""),
+                    model=str(response.model_id or ""),
+                    reason=(json.dumps(failures)[:240] if failures else ""),
+                    next_action="Use this answer; do not ask another model to repeat it.",
+                )
+            except Exception:
+                pass
         return answer, ""
 
     def start_dispatch(self, text: str, decision: RouteDecision) -> None:

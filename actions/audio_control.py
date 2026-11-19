@@ -313,6 +313,14 @@ def audio_control(
                 "app_preference, or clear_app_preference."
             )
 
+        # "Which microphone are you on?" -> status with flow=input and no device.
+        # Live 2026-11-17 that fell into the system branch below and answered with
+        # the SPEAKER volume. No device + input means the default microphone.
+        if action == "status" and not (device or "").strip() and flow == "input":
+            default_mic = ae.default_ids("input").get("console")
+            if default_mic:
+                return ae.device_status(default_mic, "input").message
+
         # ── Baseline Routing Rule ───────────────────────────────────────────
         if _is_system(device):
             return _system(action, params)

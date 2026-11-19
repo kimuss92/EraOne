@@ -21,6 +21,12 @@ from core.input_envelope import InputEnvelope
 from core.llm.types import LlmError
 
 
+@pytest.fixture(autouse=True)
+def codemode_switched_on(monkeypatch):
+    """PF-050: CodeMode is off by default; these cases test how it behaves when ON."""
+    monkeypatch.setenv("ERA_CODEMODE", "on")
+
+
 @pytest.fixture
 def repository(tmp_path, monkeypatch):
     monkeypatch.setattr(dev, "ROOT", tmp_path)
@@ -581,3 +587,44 @@ async def test_code_stream_preserves_words_and_commits_agent_conversation(reposi
     assert not state["transcript"]["responding"]
     assert state["conversation"][-1]["role"] == "agent"
     assert state["conversation"][-1]["text"] == "[Claude / CodeMode] CodeMode ready"
+
+
+@pytest.mark.asyncio
+async def test_login_failure_closes_codemode_so_era_is_not_trapped(repository, monkeypatch):
+    """PF-041 (live 2026-11-17): a missing Claude login left CodeMode on, and every
+    later order hit the same auth error. A login failure now closes CodeMode."""
+
+    class NoLogin(Advisory):
+        async def generate(self, prompt, emit):
+            raise ValueError("Selected Claude profile needs a Claude subscription login")
+
+    manager = cm.CodeMode(cli_factory=NoLogin, context_builder=empty_context)
+    monkeypatch.setattr(cm, "_instance", manager)
+    events = []
+
+    async def emit(kind, text, envelope):
+        events.append((kind, text))
+
+    manager.enter()
+    assert manager.start(InputEnvelope.create("Write a Python function", "typed"), emit)
+    await manager._task
+    assert not manager.enabled
+    assert any(kind == "notice" and "CodeMode closed" in text for kind, text in events)
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_failure_keeps_codemode_open(repository, monkeypatch):
+    class Broken(Advisory):
+        async def generate(self, prompt, emit):
+            raise ValueError("the model returned an empty patch")
+
+    manager = cm.CodeMode(cli_factory=Broken, context_builder=empty_context)
+    monkeypatch.setattr(cm, "_instance", manager)
+
+    async def emit(kind, text, envelope):
+        return None
+
+    manager.enter()
+    assert manager.start(InputEnvelope.create("Fix the bug", "typed"), emit)
+    await manager._task
+    assert manager.enabled

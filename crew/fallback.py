@@ -9,10 +9,12 @@ When the in-process loop is used instead:
 * Hermes refused BEFORE the turn started (TransportDown / MissingCredential from its
   gateway check: unreachable, 401/404, tools enabled, no key) -> the same turn runs
   in-process.
+* Hermes returned BadModelOutput AND the failed result proves that no side-effecting
+  capability ran -> the task runs in-process (idempotent reads may be repeated).
 
 Never instead:
-* any other Hermes failure (a model error mid-turn, a bad reply): steps may already
-  have run, so the turn is not re-run; the fault still counts against the breaker;
+* any other Hermes failure, or BadModelOutput after a capability ran: work may already
+  have happened, so the turn is not re-run; the fault still counts against the breaker;
 * a terminal fault (Denied / NeedsConfirmation / Cancelled): faults.may_try_alternative
   is False for those, so a gate is never routed around.
 
@@ -36,7 +38,17 @@ HERMES = "hermes_agent"
 COMPONENT = "crew.hermes"
 # Refusals raised by HermesAgentTransport._gateway_check before any turn runs.
 PREFLIGHT = frozenset({"TransportDown", "MissingCredential"})
+EMPTY_BAD_OUTPUT = "BadModelOutput"
+UNAVAILABLE = "LLMUnavailable"
 NOTE = "(The Hermes gateway was unreachable, so the crew answered on the local loop.)"
+EMPTY_NOTE = (
+    "(Hermes returned no usable answer before any side effect ran, so the crew "
+    "continued on the local loop.)"
+)
+STALLED_NOTE = (
+    "(Hermes stopped answering before any side effect ran, so the crew continued "
+    "on the local loop.)"
+)
 _lock = threading.Lock()
 _inproc: tuple[int, Transport] | None = None  # (id of the primary it mirrors, transport)
 
@@ -93,11 +105,39 @@ def _disclose(result, reason: str):
     try:
         result.data = {**(result.data or {}), "provenance": prov}
         if result.success:
-            result.message = f"{result.message or ''}\n{NOTE}".strip()
+            note = (
+                EMPTY_NOTE
+                if reason == "empty:BadModelOutput"
+                else STALLED_NOTE
+                if reason == "unavailable:LLMUnavailable"
+                else NOTE
+            )
+            result.message = f"{result.message or ''}\n{note}".strip()
     except Exception:  # noqa: BLE001
         pass
     log_event(_logger(), "crew.fallback.inproc", "WARNING", reason=reason)
     return result
+
+
+def _checkpoint_handoff(turn: Turn, reason: str) -> None:
+    try:
+        from core.fabric.context import add_checkpoint
+
+        checkpoint = add_checkpoint(
+            (turn.context or {}).get("ctx_id"),
+            status="provider_handoff",
+            note="Hermes completed no side-effecting capability; ownership is moving to local Qwen.",
+            provider=HERMES,
+            reason=reason,
+            next_action=(
+                "Resume the task on era.primary; read-only capabilities may repeat, "
+                "but do not repeat any side effect."
+            ),
+        )
+        if checkpoint is not None:
+            turn.context["checkpoint"] = checkpoint
+    except Exception:  # noqa: BLE001 - continuation logging never blocks fallback
+        pass
 
 
 def dispatch(transport: Transport, bot: str, turn: Turn):
@@ -114,14 +154,31 @@ def dispatch(transport: Transport, bot: str, turn: Turn):
     health.install()
     if not health.allow(COMPONENT):
         _hop("info", "skipped: breaker open")
+        _checkpoint_handoff(turn, "breaker_open")
         fallback = inproc_for(transport)
         return _disclose(fallback.dispatch(bot, turn), "breaker_open"), fallback
     result = transport.dispatch(bot, turn)
-    if result.success or str(result.error_type or "") not in PREFLIGHT:
+    error_type = str(result.error_type or "")
+    # PF-046 (bad output) and PF-051 (Hermes stalled/unreachable mid-turn): the same
+    # proof decides, every capability that ran was an idempotent read.
+    safe_proof = bool((result.data or {}).get("safe_local_handoff"))
+    safe_empty_reply = error_type == EMPTY_BAD_OUTPUT and safe_proof
+    safe_unavailable = error_type == UNAVAILABLE and safe_proof
+    if result.success or (
+        error_type not in PREFLIGHT and not safe_empty_reply and not safe_unavailable
+    ):
         return result, transport  # run_tool's crew.result event feeds the breaker
     fault = faults.classify(result, COMPONENT)
     _hop("fault", result.error or result.message or "", fault)
     if not faults.may_try_alternative(fault):
         return result, transport
+    reason = (
+        "empty:BadModelOutput"
+        if safe_empty_reply
+        else "unavailable:LLMUnavailable"
+        if safe_unavailable
+        else f"refused:{result.error_type}"
+    )
+    _checkpoint_handoff(turn, reason)
     fallback = inproc_for(transport)
-    return _disclose(fallback.dispatch(bot, turn), f"refused:{result.error_type}"), fallback
+    return _disclose(fallback.dispatch(bot, turn), reason), fallback

@@ -249,12 +249,12 @@ _STATE_TOOL_ORDERS: dict[str, re.Pattern] = {
         r"|أغلق|اغلق|اطفئ|أطفئ|وداع|مع السلامة|إلى اللقاء|الى اللقاء|اقفل|أقفل",
         re.IGNORECASE,
     ),
+    # PF-045: only the owner's standby words ("standby", "take a break") and the
+    # silence orders this tool turns into inactivity. The old ~40 loose words
+    # ("thank you", "done", "merci") grounded a standby call on "mes amis" (live
+    # 2026-11-18 23:28). The enter_standby branch then checks the WHOLE utterance.
     "standby": re.compile(
-        r"stand\s*-?\s*by|\b(?:break|sleep|rest|quiet|silent|silence|hush|shh+|wait|pause|mute"
-        r"|dismiss|later|bye|goodbye|good\s*night|thanks?|thank\s+you|enough|done|nothing"
-        r"|alone|idle|go\s+away|stop\s+listening|that'?s\s+(?:all|it|enough)|see\s+you"
-        r"|dors|repos\w*|attends|tais|merci|plus\s+tard|c'?est\s+tout|rien|veille)\b"
-        r"|اسكت|نم\b|استراحة|كفى|شكرا|شكراً|وداع|مع السلامة|انتظر",
+        r"stand\s*-?\s*by|\btake\s+a\s+break\b|\b(?:silent|quiet)\b|silencieu",
         re.IGNORECASE,
     ),
     "microphone": re.compile(
@@ -495,6 +495,31 @@ def _ungrounded_state_change(era, tool_name: str, relaunch: bool = False) -> str
     )
 
 
+def _not_a_standby_order(era) -> str | None:
+    """PF-045: a refusal unless the owner's WHOLE utterance is "standby" or "take a
+    break" — the one in progress, or the last one said within 15 s (the transcript
+    can land just before the call). Live 2026-11-18 23:28 the model slept Era on
+    "mes amis"; the loose grounding words let it through."""
+    from core.attention import is_standby_order
+
+    heard = [_current_user_text(era)] + [t for _, t in _user_utterances(era, 15.0)[-1:]]
+    if any(is_standby_order(t) for t in heard):
+        return None
+    log_event(
+        main_logger,
+        "tool.grounding.refused",
+        "WARNING",
+        tool="enter_standby",
+        heard=(heard[0] or "")[:80],
+        reason="not a standby order",
+    )
+    print(f"[era] [GROUNDING] refused enter_standby: not a standby order ({heard[0]!r})")
+    return (
+        "Not done: standby happens only when the user says 'standby' or 'take a break'. "
+        "Do not mention standby; carry on the conversation."
+    )
+
+
 def _sched_clean(text: str) -> str:
     return _SCHED_CORRECTION_PREFACE.sub(" ", (text or "").lower()).strip()
 
@@ -504,6 +529,87 @@ def _sched_refused(low: str) -> bool:
     ask again" / "no need to ask" MEAN yes."""
     return bool(_SCHED_REFUSAL.search(_SCHED_WAIVE_COMMAND.sub(" ", low))) or bool(
         _SCHED_QUESTION.search(low)
+    )
+
+
+_CM_STATUS_QUESTION = re.compile(
+    r"^\W*(?:what(?:'s| is)\s+)?(?:the\s+)?(?:(?:cm|community[- ]manag\w*)\s+)?"
+    r"(?:job\s+|jobs\s+|task\s+|tasks\s+)?(?:status|progress|running|what'?s\s+running)"
+    r"(?:\s+of\s+(?:the\s+)?(?:cm|community[- ]manag\w*)?\s*(?:jobs?|tasks?)?)?\W*$",
+    re.IGNORECASE,
+)
+
+_BRIDGE_QUESTION = re.compile(r"\b(?:spotify\s+)?bridge\b|spicetify", re.IGNORECASE)
+
+
+def _note_bridge_is_off(era, tool_name: str, result):
+    """Append the bridge's real state to a Spotify reading when the owner asked about
+    the bridge. Live 2026-11-17 "is the Spotify bridge connected?" -> spotify_control
+    status -> "Yes, sir, it is", three times, though the bridge is switched off: a
+    context note lost to the fresh tool result, so the fact rides in the result."""
+    try:
+        if not tool_name.startswith("spotify"):
+            return result
+        asked = getattr(era, "_inflight_user_text", "") or getattr(era, "_last_user_text", "")
+        if not _BRIDGE_QUESTION.search(asked or ""):
+            return result
+        from app.tool_declarations import _withheld
+
+        if "spotify_bridge" not in _withheld:
+            return result
+        note = (
+            " NOTE: the Spotify bridge (Spicetify era-bridge) is SWITCHED OFF and not"
+            " connected; this reading came from the Spotify desktop app."
+        )
+        if isinstance(result, ToolResult):
+            from dataclasses import replace
+
+            return replace(result, message=(result.message or "") + note)
+        return f"{result}{note}"
+    except Exception:
+        return result
+
+
+_MEDIA_DEDUPE_S = 10.0
+
+
+def _media_start_key(tool: str, params: dict) -> tuple[str, str] | None:
+    """(platform, normalized query) for a call that STARTS named media, else None."""
+    action = str(params.get("action") or "").lower()
+    query = params.get("query") or params.get("value") or ""
+    if tool == "spotify_control" and action in ("search", "play_uri"):
+        platform = "Spotify"
+    elif tool == "youtube_video" and action in ("play", "search"):
+        platform = "YouTube"
+    elif tool == "netflix_control" and action == "search" and params.get("_auto_play"):
+        platform = "Netflix"
+    else:
+        return None
+    q = re.sub(r"^(?:some|a\s+bit\s+of|any)\s+", "", str(query).strip().lower())
+    q = re.sub(r"\s+", " ", q)
+    return (platform, q) if q else None
+
+
+def _forget_session_on_exit(era) -> None:
+    """Drop the saved Gemini resumption handle on a plain shutdown (never raises)."""
+    try:
+        manager = getattr(era, "session_manager", None)
+        if manager is not None:
+            manager.clear_token()
+            manager.save_to_disk()
+            print("[era] [SHUTDOWN] session handle discarded (plain shutdown).")
+    except Exception as e:
+        print(f"[era] [SHUTDOWN] could not discard the session handle: {e}")
+
+
+def _typed_cancel_reply(low: str) -> bool:
+    """A typed reply that cancels a pending confirmation: a refusal WORD, never a bare
+    question. Unlike _sched_refused, a question is NOT a cancel here — live 2026-11-17
+    "what scheduled tasks do I have running?" was swallowed as a cancel and never
+    answered. "Yes"-type approvals are checked by the caller first."""
+    low = (low or "").lower()
+    return bool(_SCHED_REFUSAL.search(_SCHED_WAIVE_COMMAND.sub(" ", low))) and not bool(
+        _SCHED_APPROVE_COMMAND.search(low)
     )
 
 
@@ -892,7 +998,13 @@ class ToolDispatchMixin:
         sys_prompt = _load_system_prompt()
 
         now = datetime.now()
-        time_str = now.strftime("%A, %B %d, %Y â€” %I:%M %p")
+        local_now = now.astimezone()
+        _off = local_now.strftime("%z")
+        time_str = (
+            local_now.strftime("%A, %B %d, %Y - %I:%M %p")
+            + f" LOCAL time (UTC{_off[:3]}:{_off[3:]}) at session start; the owner lives in this"
+            " time zone, so never answer in UTC. For the time NOW call computer_control clock."
+        )
 
         # â”€â”€ UPGRADED REAL-TIME OS VISION LAYER (ANTI-POLLUTION FILTER) â”€â”€â”€â”€â”€â”€â”€
         foreground_window = "Desktop"
@@ -1014,8 +1126,48 @@ class ToolDispatchMixin:
             pass
         # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+        # A gated-off tool is invisible to the model, which then invents its state:
+        # live 2026-11-17 "is the Spotify bridge connected?" -> "Yes, sir, it is",
+        # while the bridge was switched off. Name what is off so she can say so.
+        try:
+            from app.tool_declarations import _withheld as _off_tools
+        except Exception:
+            _off_tools = set()
+        _off_labels = {
+            "spotify_bridge": (
+                'The Spotify bridge (the Spicetify "era-bridge") is SWITCHED OFF and not '
+                'connected. If asked "is the Spotify bridge connected?", answer no, it is off; '
+                "Spotify itself still works through the desktop app."
+            ),
+        }
+        off_note = (
+            "[SWITCHED-OFF FEATURES]\n"
+            + "".join(
+                "- "
+                + _off_labels.get(name, f"{name} is switched off; if asked, say it is off.")
+                + "\n"
+                for name in sorted(_off_tools)
+            )
+            + "\n"
+            if _off_tools
+            else ""
+        )
+
+        # Live 2026-11-17 "what's your wake word?" was answered "Era" (no tool) while
+        # the configured word was "shazam". State it.
+        try:
+            from app.wake import WAKE_CFG as _wake
+
+            wake_note = (
+                f'[WAKE WORD]\nYour standby wake word is "{_wake.word}"'
+                + (f" (aliases: {', '.join(_wake.aliases)})" if _wake.aliases else "")
+                + '. "Era" is your name; it opens the listening window but does not wake standby.\n\n'
+            )
+        except Exception:
+            wake_note = ""
+
         os_vision_ctx = (
-            f"[CURRENT DATE & TIME]\n"
+            off_note + wake_note + f"[CURRENT DATE & TIME]\n"
             f"Right now it is: {time_str}\n\n"
             f"[REAL-TIME SYSTEM EYE (OS AWARENESS)]\n"
             f'User Foreground Focus: "{foreground_window}"\n'
@@ -1479,6 +1631,9 @@ class ToolDispatchMixin:
         elif result.success:
             self._note_tool_success(name, fc_args_to_dict(fc))
 
+        # Every result passes here (the Spotify branches return before the generic
+        # refresh), so this is where the bridge's real state is attached.
+        result = _note_bridge_is_off(self, name, result)
         print(f"[era] [OUT] {name} -> {result.short_message(80)}")
         # Task trace (core/task_trace.py, 25/09/2026): the whole procedure of
         # this call on one line -- words, requested vs routed tool, safety,
@@ -2269,9 +2424,21 @@ class ToolDispatchMixin:
             import os
 
             deadline = time.time() + 20
+
+            def _talking() -> bool:
+                # PF-045: the exit line is spoken by the voice the owner SELECTED
+                # (main.speak while _shutdown_requested). _exit_speech_pending covers
+                # the gap before its first audio (synthesis / Gemini latency); once
+                # sound is actually playing (_is_speaking, or _local_speaking for the
+                # local fallback) the wait is the playback itself.
+                if self._is_speaking or getattr(self, "_local_speaking", False):
+                    self._exit_speech_pending = False
+                    return True
+                return bool(getattr(self, "_exit_speech_pending", False))
+
             # She may not have started talking yet.
             for _ in range(30):
-                if self._is_speaking:
+                if _talking():
                     break
                 time.sleep(0.1)
             # Wait for speech to finish AND stay finished. The reload path
@@ -2280,7 +2447,7 @@ class ToolDispatchMixin:
             # — exiting in it truncates the sentence that explains the restart.
             quiet = 0
             while quiet < 15 and time.time() < deadline:
-                quiet = 0 if self._is_speaking else quiet + 1
+                quiet = 0 if _talking() else quiet + 1
                 time.sleep(0.1)
             if close_hud:
                 try:
@@ -2289,6 +2456,11 @@ class ToolDispatchMixin:
                     close_hud_windows()
                 except Exception as e:
                     print(f"[era] [SHUTDOWN] could not close the HUD window: {e}")
+                # A plain shutdown ends the conversation. Live 2026-11-17 the next
+                # boot resumed the saved Gemini session — whose last turn was the
+                # shutdown — and the model called shutdown_era again 2 s after the
+                # greeting. A relaunch (close_hud=False) keeps it (PF-026).
+                _forget_session_on_exit(self)
             try:
                 from core import era_relaunch
 
@@ -2504,6 +2676,9 @@ class ToolDispatchMixin:
                     f"[era] [SHUTDOWN] WARNING: could not write era.stop ({e}); watchdog MAY relaunch Era."
                 )
 
+            # Stop persisting fresh resumption handles from the goodbye turn on.
+            self._discard_session_on_exit = True
+            _forget_session_on_exit(self)
             self.ui.write_log("SYS: Shutdown confirmed; era.stop written.")
             self.speak("Goodbye, sir. When you want me back, double-click ERA ONE on your desktop.")
 
@@ -2924,6 +3099,32 @@ class ToolDispatchMixin:
         print(f"[era] [ARGS] {tool_name}  {parameters}")
         self._trace_routed = (tool_name, dict(parameters))  # for the task trace
 
+        # Live 2026-11-17: the model sent media_coordinator AND the platform tool for
+        # one "play X" (1-2 s apart, separate turns). After routing both were the same
+        # start; the second hit the still-loading player and was reported as a FAILED
+        # playback although the first one was playing. Start it once.
+        media_key = _media_start_key(tool_name, parameters)
+        if media_key is not None:
+            last = getattr(self, "_recent_media_start", None)
+            now_ts = time.monotonic()
+            asked = (getattr(self, "_last_user_text", "") or "").strip().lower()
+            if (
+                last is not None
+                and last[0] == media_key
+                and now_ts - last[1] < _MEDIA_DEDUPE_S
+                and last[2] == asked  # a new utterance ("try again") always runs
+            ):
+                print(f"[era] [DUP] {tool_name} {media_key[1]!r} already started; not repeated.")
+                log_event(main_logger, "tool.media.duplicate", "INFO", tool=tool_name)
+                return ToolResult.ok(
+                    f"Already started '{media_key[1]}' on {media_key[0]} a moment ago; not"
+                    " repeated. Report the first call's result only.",
+                    tool_name=tool_name,
+                    action_name=parameters.get("action"),
+                    data={"executed": False, "duplicate_media_start": True},
+                )
+            self._recent_media_start = (media_key, now_ts, asked)
+
         from core.file_arguments import file_argument_error
 
         argument_error = file_argument_error(tool_name, parameters)
@@ -3277,10 +3478,17 @@ class ToolDispatchMixin:
 
     async def _execute_tool_raw(self, tool_name: str, args: dict, fc=None) -> str:
         if tool_name == "code_mode":
-            from app.codemode_runtime import route
+            from app.codemode_runtime import codemode_allowed, route
             from core.codemode import ENTRY, EXIT, get_codemode
 
             action = args.get("action", "status")
+            if not codemode_allowed():
+                # PF-050: switched off by the owner; say so instead of "accepted".
+                return ToolResult.fail(
+                    "CodeMode is turned off. For code work, hand it to the crew: "
+                    "call the crew tool with bot='cody'.",
+                    error_type="FeatureDisabled",
+                )
             if action == "status":
                 return ToolResult.ok(
                     message="Current CodeMode state", data=get_codemode().snapshot()
@@ -3409,6 +3617,9 @@ class ToolDispatchMixin:
                 # STANDBY (standby_enabled may be on: wake word only).
                 self._enter_inactivity("voice")
                 return "Inactivity mode: say nothing at all."
+            _no = None if scheduled_run else _not_a_standby_order(self)  # PF-045
+            if _no:
+                return _no
             self.enter_standby()
             from core.session import standby_enabled
 
@@ -3474,6 +3685,21 @@ class ToolDispatchMixin:
             # here: Gemini IS the router in this path (it decided to call the tool),
             # so there is no parallel utterance to mute — muting would gag the ack.
             order = (args.get("order") or "").strip()
+            # Live 2026-11-17 "what's the status of the CM jobs?" reached here as
+            # order="status" and was treated as a NEW job needing a brand — one
+            # "Delta Cuisine" reply away from launching a job named "status". A
+            # status question is a read: answer it from the status file, start nothing.
+            if _CM_STATUS_QUESTION.match(order):
+                import era_dispatch
+
+                job = era_dispatch.current_job()
+                if not job:
+                    return "No community-management job is running right now. Nothing was started."
+                return (
+                    f"Running now: {job.get('brand', 'a brand')} {job.get('task_type') or 'job'}"
+                    f" (started {job.get('started', 'recently')}): "
+                    f"{(job.get('order') or '').strip()[:120]}. Nothing new was started."
+                )
             if not order:
                 return (
                     "Ask the user what community-management task they want — e.g. "
@@ -3626,7 +3852,9 @@ class ToolDispatchMixin:
                 self._blocked_memory_save = None
                 masked = value[:60] + "..." if len(value) > 60 else value
                 print(f"[Memory] [SAVE] save_memory: {category}/{key} = {masked}")
-            return "ok"
+                # A bare "ok" was read back to the owner as "ok" (live 2026-11-17).
+                return f"Saved to memory: {key.replace('_', ' ')} = {masked}."
+            return "Nothing saved: a memory needs both a key and a value."
 
         if tool_name == "retrieve_memory_context":
             query = args.get("query", "")
@@ -4217,7 +4445,47 @@ class ToolDispatchMixin:
                     self.speak("The self-diagnosis hit an error — check the log.")
 
             self._spawn_background_task(_run_self_diagnosis(), "self_diagnosis")
-            result = "Deep self-diagnosis started in the background — I'll report when it's done."
+            # run_self_diagnosis skips the deep analysis on deep=false; say which ran
+            # (live 2026-11-17 a quick check was announced as "Deep").
+            depth = "Quick" if diag_args.get("deep") is False else "Deep"
+            result = (
+                f"{depth} self-diagnosis started in the background — I'll report when it's done."
+            )
+
+        elif tool_name == "deep_think":
+            # Owner 2026-11-18 (PF-044): only on request or for genuinely deep
+            # questions. Local Qwen (then Gemma) reasons WITHOUT tools; the full
+            # answer is delivered through the reconnect-surviving report path, not
+            # the one-sentence background outcome, so it is not cut short.
+            from core.deep_think import think as _deep_think
+
+            question = str(args.get("question") or "").strip()
+            context = str(args.get("context") or "")
+            if not question:
+                result = "deep_think needs the question to think about; nothing started."
+            else:
+
+                async def _run_deep_think():
+                    try:
+                        ok, text, _route = await asyncio.to_thread(_deep_think, question, context)
+                    except Exception as e:  # noqa: BLE001 - think() never raises; belt and braces
+                        ok, text = False, type(e).__name__
+                    try:
+                        self.ui.write_log(f"DEEP THINK: {text[:2000]}")
+                    except Exception:
+                        pass
+                    spoken = (
+                        text if ok else f"I couldn't finish thinking that through, sir — {text}."
+                    )
+                    self._deliver_or_queue_cm_report(spoken, verbatim=True)
+
+                self._spawn_background_task(_run_deep_think(), "deep_think")
+                result = (
+                    "Deep thinking started on the local model. It is STILL RUNNING. Tell the "
+                    "user in one short phrase that you are thinking it over. Do NOT answer the "
+                    "question yourself, do NOT guess, and do NOT call deep_think again — the "
+                    "full answer is spoken automatically when it is ready."
+                )
 
         elif tool_name == "protocol_one":
             from actions.protocol_one import (

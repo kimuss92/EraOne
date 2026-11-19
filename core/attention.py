@@ -69,8 +69,38 @@ _SILENCE_ORDER = re.compile(
 )
 
 
+# PF-045: the ONLY standby orders (owner 2026-11-18): "standby" and "take a break",
+# as the whole utterance ("Era," / "please" before, "now" / "please" / "sir" after;
+# "stand by", "standby mode", "enter / go to standby" are the same word). Live
+# 2026-11-18 23:28 Era went offline on "mes amis" because the model's tool call was
+# trusted whenever any of ~40 loose words ("thank you", "done") was said in the last
+# minute. Every standby path (typed, tool call) now checks this one matcher.
+STANDBY_ORDER = re.compile(
+    r"^\W*(?:(?:hey|ok|okay)\s+)?(?:era(?:\s+one)?\s*[,;:]?\s*)?(?:please\s+)?"
+    r"(?:(?:(?:go\s+(?:to|into)|enter)\s+)?stand\s*-?\s*by(?:\s+mode)?|take\s+a\s+break)"
+    r"(?:[\s,]+(?:now|please|sir|era))*\W*$",
+    re.IGNORECASE,
+)
+
+
+def is_standby_order(text: str) -> bool:
+    return bool(text) and STANDBY_ORDER.match(text.strip()) is not None
+
+
+# PF-045: "Era silent" (owner 2026-11-18). A bare "silent" is an order only right
+# after her name, so "silent night" or "silent mode on my phone" never match.
+_NAMED_SILENT_ORDER = re.compile(
+    r"^\W*(?:(?:hey|ok|okay)\s+)?era(?:\s+one)?\s*[,;:]?\s*(?:please\s+)?(?:be\s+)?silent"
+    r"(?:[\s,]+(?:now|please|for\s+now|sir))*\W*$",
+    re.IGNORECASE,
+)
+
+
 def is_silence_order(text: str) -> bool:
-    return bool(text) and _SILENCE_ORDER.match(text.strip()) is not None
+    if not text:
+        return False
+    t = text.strip()
+    return _SILENCE_ORDER.match(t) is not None or _NAMED_SILENT_ORDER.match(t) is not None
 
 
 # PF-038: Era's reply must finish within this long of the owner's in-window turn

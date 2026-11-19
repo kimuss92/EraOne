@@ -1,5 +1,6 @@
 """One deterministic input/speech boundary for CodeMode across Era channels."""
 
+import os
 import re
 
 from app.hud.events import hud
@@ -77,7 +78,18 @@ async def emit(era, kind, text, owner):
             era._tg_ack(text)
 
 
+def codemode_allowed() -> bool:
+    """PF-050: CodeMode is OFF unless ERA_CODEMODE=on (owner, 2026-11-19: "disable codemode").
+
+    It runs Claude Code, whose subscription login is gone (PF-043), and its implicit
+    activation took coding requests meant for the crew. Code work goes to the crew.
+    """
+    return os.environ.get("ERA_CODEMODE", "off").strip().lower() in {"on", "1", "true", "yes"}
+
+
 def route(era, text, owner=None):
+    if not codemode_allowed():
+        return False  # nothing enters CodeMode: not "start coding", implicit, or the tool
     manager = get_codemode()
     entry, exit_mode = ENTRY.fullmatch(text.strip()), EXIT.fullmatch(text.strip())
     selection = model_order(text)

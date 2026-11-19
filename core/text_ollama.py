@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -11,13 +13,30 @@ import urllib.request
 SHARED_NUM_CTX = 12288
 
 
+def _keep_alive(value: str | None) -> str:
+    return value or os.environ.get("OLLAMA_KEEP_ALIVE", "5m")
+
+
+def _admit(model: str, base_url: str) -> None:
+    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    try:
+        from core.llm.resource_guard import admit_cold_load
+
+        admission = admit_cold_load(model, base_url)
+    except Exception:  # noqa: BLE001 - Ollama remains the hard memory boundary
+        return
+    if not admission.allowed:
+        raise RuntimeError(admission.reason)
+
+
 def classify_json_with_ollama(
     prompt: str,
     system: str,
     model: str,
     base_url: str,
     timeout_s: int,
-    keep_alive: str = "30m",
+    keep_alive: str | None = None,
 ) -> dict:
     """One-shot JSON classification via a local Ollama model.
 
@@ -27,6 +46,7 @@ def classify_json_with_ollama(
     Raises RuntimeError on transport/parse failure so the caller can fall through
     to another provider — it NEVER silently returns an empty/партial result.
     """
+    _admit(model, base_url)
     payload = json.dumps(
         {
             "model": model,
@@ -36,7 +56,7 @@ def classify_json_with_ollama(
             "stream": False,
             # Keep the model resident after use so only the FIRST call per idle window
             # pays the cold-load cost — warm calls are ~1s. See lane_router.warm_up().
-            "keep_alive": keep_alive,
+            "keep_alive": _keep_alive(keep_alive),
             # temperature 0: deterministic classification.
             "options": {"temperature": 0, "num_ctx": SHARED_NUM_CTX},
         }
@@ -72,7 +92,7 @@ def generate_text_with_ollama(
     base_url: str,
     timeout_s: int = 180,
     system: str | None = None,
-    keep_alive: str = "30m",
+    keep_alive: str | None = None,
 ) -> str:
     """One-shot free-form text generation via a local Ollama model.
 
@@ -80,11 +100,12 @@ def generate_text_with_ollama(
     Raises RuntimeError on transport failure or empty output so callers can
     surface the original error instead of a blank answer.
     """
+    _admit(model, base_url)
     body = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "keep_alive": keep_alive,
+        "keep_alive": _keep_alive(keep_alive),
         "options": {"num_ctx": SHARED_NUM_CTX},
     }
     if system:

@@ -135,6 +135,42 @@ def _in_source_scope(rel: str) -> bool:
         return False
 
 
+# A JSONL record stamped with epoch seconds ("ts": 1795089076.95), as Fabric logs are.
+_EPOCH_TS = re.compile(r'^\s*\{.*?"ts":\s*(1[5-9]\d{8}(?:\.\d+)?)\b')
+
+
+def _with_local_time(line: str) -> str:
+    """PF-049: show an epoch-stamped record with its local wall time in front.
+
+    A bot asked about "12:51" greps for 12:51; Fabric's events/ctx logs only carry
+    epoch seconds, so every search found nothing (live 2026-11-19). The file is
+    untouched; only the text the bot reads gains a "[YYYY-MM-DD HH:MM:SS local]" prefix.
+    """
+    match = _EPOCH_TS.match(line)
+    if not match:
+        return line
+    from datetime import datetime
+
+    try:
+        when = datetime.fromtimestamp(float(match.group(1))).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return line
+    return f"[{when} local] {line}"
+
+
+def _bounded(text: str, *, keep_end: bool) -> str:
+    """At most _MAX_RETURN chars. A tail read keeps the END (whole lines), because the
+    end is what was asked for. PF-049: a long-line tail used to return its first 12 000
+    chars, so the newest records, the ones the bot needed, were cut off."""
+    if len(text) <= _MAX_RETURN:
+        return text
+    if not keep_end:
+        return text[:_MAX_RETURN]
+    cut = text[-_MAX_RETURN:]
+    newline = cut.find("\n")
+    return cut[newline + 1 :] if 0 <= newline < len(cut) - 1 else cut
+
+
 def read(args: dict) -> ToolResult:
     raise_if_cancelled()
     rel = (args.get("path") or "").strip().strip("/")
@@ -148,8 +184,11 @@ def read(args: dict) -> ToolResult:
     size = target.stat().st_size
     if size > _MAX_FILE_BYTES:
         raise ValueError("File is too large to read")
-    start, limit, tail = args.get("start_line", 1), args.get("limit", 200), args.get("tail")
-    grep = args.get("grep")
+    # PF-049: a model sends "limit": null / "start_line": null meaning "the default";
+    # refusing that as a limit violation made a valid tail read fail (live 2026-11-19).
+    start = 1 if args.get("start_line") is None else args.get("start_line")
+    limit = 200 if args.get("limit") is None else args.get("limit")
+    tail, grep = args.get("tail"), args.get("grep")
     if type(limit) is not int or not 1 <= limit <= 400:
         raise ValueError("Use limit between 1 and 400")
     if tail is not None and (type(tail) is not int or not 1 <= tail <= 400):
@@ -166,7 +205,7 @@ def read(args: dict) -> ToolResult:
             raw = stream.read(_HEAD_READ)
     if b"\x00" in raw[:8192]:
         return ToolResult.fail("Binary file; not readable as text.", error_type="BinaryFile")
-    lines = raw.decode("utf-8-sig", errors="replace").splitlines()
+    lines = [_with_local_time(x) for x in raw.decode("utf-8-sig", errors="replace").splitlines()]
     numbered = list(enumerate(lines, 1))
     if grep:
         needle = grep.casefold()
@@ -186,7 +225,7 @@ def read(args: dict) -> ToolResult:
             "path": rel,
             "sha256": None if partial else hashlib.sha256(raw).hexdigest(),
             "line_numbers": "relative to the tail window" if tail is not None else "file",
-            "content": clean[:_MAX_RETURN],
+            "content": _bounded(clean, keep_end=tail is not None),
             "matches": len(numbered) if grep else None,
             "redacted": clean != snippet,
             "truncated": len(clean) > _MAX_RETURN,

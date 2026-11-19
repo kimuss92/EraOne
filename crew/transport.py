@@ -82,6 +82,8 @@ class BotSpec:
     # A SOFT default for turns that carry no signal about their own shape (never a hard
     # tier: the shape of the TASK decides — see crew/router.choose_tier). "" = none.
     tier_preference: str = ""
+    # PF-054: this bot's step budget (0 = the crew default, crew.runtime.MAX_STEPS).
+    max_steps: int = 0
 
 
 @dataclass(frozen=True)

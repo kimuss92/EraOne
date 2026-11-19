@@ -284,9 +284,20 @@ def format_live_state(state: dict) -> str:
     return text
 
 
+def _plain_action(params: dict) -> str:
+    """The action without its platform prefix ("youtube_pause" -> "pause").
+
+    PF-047: the spoken verdict used to strip only "spotify_", so a failed
+    YouTube/Netflix command was said aloud as "I sent youtube_pause to YouTube".
+    """
+    action = str(params.get("action") or "").lower()
+    for prefix in ("spotify_", "youtube_", "netflix_"):
+        action = action.removeprefix(prefix)
+    return action
+
+
 def _expected(tool: str, params: dict) -> tuple[str, object] | None:
-    action = str(params.get("action") or "").lower().removeprefix("spotify_")
-    action = action.removeprefix("youtube_").removeprefix("netflix_")
+    action = _plain_action(params)
     if tool == "open_app":
         mode = params.get("mode", "open")
         if mode == "close":
@@ -380,7 +391,7 @@ def outcome_sentence(
     if expected is None:
         return status_sentence(state)
     field, value = expected
-    action = str(params.get("action") or "").lower().removeprefix("spotify_") or "the command"
+    action = _plain_action(params) or "the command"
     running, windows = state.get("process_running"), state.get("windows")
     if field == "window" and value is True:
         if verified:
@@ -552,6 +563,12 @@ async def refresh_after_command(tool: str, params: dict, raw):
                 timeout=max(0.01, deadline - time.monotonic()),
             )
         except Exception:
+            if state is not None:
+                # PF-047: a later read timed out. Keep what the earlier read SAW
+                # (it did not match, or the loop would have stopped) instead of
+                # replacing it with "unknown"; the failed read stays named.
+                state = {**state, "errors": [*state.get("errors", []), "probe_unavailable"]}
+                break
             state = {
                 "app": target,
                 "observed_at": time.time(),

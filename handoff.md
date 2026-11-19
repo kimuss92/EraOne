@@ -9,6 +9,315 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 > **EVERY AGENT, BEFORE ANY EDIT:** read `docs/PROTECTED_FIXES.md` and follow
 > `AGENTS.md` §0. The gate re-runs every protected fix's guard tests.
 
+### 2026-11-19 · Claude · PF-050..053: CodeMode off; the crew can stage a real fix end to end
+
+**Owner:** "test every new fix and make the crew fix an issue on Era end to end with my
+approval", then "disable codemode", then "find the best solution to make the crew work".
+**Live sweep (typed commands over the LAN bridge, real Era):** PF-047 "pause YouTube" -> "YouTube is
+paused." (verified) and "pause Netflix" -> "I sent pause to Netflix, but I couldn't read its
+playback, so it is not confirmed"; PF-045 "Thank you… mes amis" no standby, "Era silent" ->
+inactivity, "Standby" -> standby, "Era, wake up" -> resumed; PF-043 "think deeply…" -> routed
+to local Qwen as complex_planning, correct answer in 33 s, $0. NOT reached by typed text:
+PF-044 deep_think (a Gemini voice tool). Oddity: the standby line was spoken "Systemizing offline".
+**End-to-end crew fix: each live attempt failed on a different wall, fixed in turn:**
+1. CodeMode took "ask Cody to fix this bug" (implicit coding intent) and failed on the missing
+   Claude login -> **PF-050**: CodeMode off unless `ERA_CODEMODE=on`; explicit crew hand-offs are
+   never coding intent; prompt sends code work to `crew` bot=cody. Live: "Start coding" ->
+   "CodeMode is turned off, sir. Would you like me to ask Cody…".
+2. Hermes's free model hung 90 s, retried, hung again; the turn died "Hermes gateway failed
+   (TimeoutError)" -> **PF-051**: a mid-turn LLMUnavailable after reads only hands off to local
+   Qwen (PF-046's proof; `source.read/inspect` now count as reads); a stalled call is not retried.
+   Live later: Hermes "repetition loop" -> handed to Qwen as designed.
+3. Cody's first step `code.propose` called Gemini 3.8 Flash during Google's overload and spent the
+   240 s deadline; whole-file JSON broke on escaping; Cody said "Here is the fix… added a test"
+   with nothing staged -> **PF-052**: Cody drops `code.propose`, stages exact `edits`
+   ({old,new} on the verified current file), and `_done` appends "No candidate was staged…"
+   (seen live).
+4. Hermes's valid calls carried a stray `]}`, and code inside JSON strings was over-escaped ->
+   **PF-053**: parse the first complete object; code travels in `=====BEGIN name=====` blocks
+   after the JSON (Hermes only).
+**Update 17:50 (PF-054):** the owner's yes ran 9edfcda055664f0c; isolated verification FAILED on Cody's
+test (caplog vs print; live untouched; the fix itself printed "HTTP 503"). Asked to correct it, Cody
+spent all 6 steps re-reading and answered with a plan -> **PF-054**: per-bot `max_steps` (Cody 10,
+bounded 2-12) and budget warnings that tell a stage-capable bot to stage, not give up. After a restart
+Cody staged `fe849a8dd47f4035` first try; owner said "Yes, proceed."; verification PASSED (273);
+state awaiting_approval. Review: fix correct, test discriminates, unused fakes/imports only.
+Full suite (Windows, 19 min): 9422 passed, 1 failed = pre-existing test_file_controller diagnosis report.
+**Approved and applied (17:49:40)** by the owner on the HUD: job `fe849a8dd47f4035` `activated`; live
+core/tts_gemini.py and tools/test_tts_gemini_error_log.py are byte-identical to the verified candidate;
+its test passes live; protected guards 676 passed; Era restarted 17:54:57 (PID 28560) onto it.
+**Owed:** the next real Gemini TTS failure must log "unavailable: HTTP 503 (RuntimeError)." (none since
+the restart); commit.
+**Result (14:38):** "ask Cody to fix core/tts_gemini.py's hidden HTTP error" -> Cody, through
+Hermes with no fallback, staged Development job `9edfcda055664f0c`
+(core/tts_gemini.py + tools/test_tts_gemini_error_log.py), state `held_for_verification`; Era asked
+the owner "Should I proceed?". **Waiting on the owner's yes**, then isolated verification, then
+the HUD Development approval. Candidate code not inspected before the yes (held in Era's memory).
+**Verified:** crew/coordination/parser suites 546 passed; every new guard mutation-checked;
+`protected_fixes.py run` 672 passed; registry OK; ruff clean. Era restarted 6 times this round
+by "Reboot Era One", one process each time. Diagnostics: `scripts/probe_crew_turn.py`
+(PROBE_DRY_STAGE=1 validates a stage and queues nothing). Not committed.
+
+### 2026-11-19 · Claude · PF-048 + PF-049: Hermes crew answers in JSON; the crew can read Era's logs
+
+**Owner:** "verify and test Era live with real commands on the last fixes (the crew), check
+the last crew logs, and if the crew cannot fix Era make them able to."
+**Logs found (after the 12:46 restart onto PF-046):** 12:51 "each say hello" -> `BadModelOutput`
+in 12 s, no fallback (a capability had run, so PF-046 correctly refused to replay); 12:51:38
+"investigate why" -> Hermes timeout, then fallback to Qwen, answered after 2.5 min, inventing a
+cause ("empty provider alias") and other bots' hellos.
+**Root cause (probe `scripts/probe_hermes_reply.py`, raw reply printed, key never shown):**
+the era_one profile's model (`free/deepseek-v4.1-flash`) answered in prose ("DeepSeek here…",
+"Hello from Laura… check in"). Hermes ranks its own persona above a caller's system message, so
+the crew's JSON protocol was ignored; `response_format: json_object` is ignored too.
+**PF-048 (`crew/hermes_transport.py`):** one `user` message = instructions + request +
+`REPLY_REMINDER`. Laura's real prompt: 0/3 JSON before, 6/6 after.
+**PF-049 (crew could not diagnose Era; replay `scripts/probe_crew_turn.py` logs each call):**
+Cody grepped Fabric's events log for "12:51" six times, 0 matches (epoch-only `ts`); `tail` with
+`limit: null` refused; a 40-line tail returned its OLDEST 12 000 chars; and "gave no usable reply"
+never said what came back. Fixed in `crew/era_access.py` (null = default; epoch JSONL lines
+shown with `[… local]` time; a tail keeps its end), `crew/capabilities.py` (description),
+`crew/runtime.py` (BadModelOutput carries a 120-char sample; PF-046 proof unchanged).
+**Verified:** Windows crew suites 265 passed; every new guard mutation-checked; registry OK; ruff
+clean; `protected_fixes.py run` 636 passed. **Live (real typed commands over the LAN bridge,
+Era restarted twice by "Reboot Era One": PID 13528 -> 8012 -> 31436, one Era process each time):**
+(1) "ask the crew to each say hello" -> answered through Hermes, no fallback, Laura speaks only
+for herself (35 s, 8 Hermes calls incl. Nabar's review); (2) Cody "read the events log, why no
+usable reply at 12:51" -> through Hermes in 24 s, correct 12:51:04 / 12:51:16 facts. It still
+quotes Laura's invented cause, because that sentence is IN the log; new failures log the real reply.
+**Also seen live:** the reboot line was not spoken at 13:03: Gemini Live gave no audio in 4 s and
+the Gemini REST TTS answered HTTP 503 "high demand" (probed directly); with Gemini selected,
+PF-045 stays silent by the owner's rule. Not a code bug. 12:49 "Play a Plane effect" ->
+PlaybackNotVerified (not investigated). **Not tested:** Cody staging a fix (needs the owner's
+approval gate); a voice-spoken (microphone) crew call. PF-047 is now live (restart) but its
+YouTube/Netflix failure wording was not exercised. Not committed.
+
+### 2026-11-19 · Claude · PF-047: plain action words in the verdict; a timed-out re-read keeps what was seen
+
+**Source:** the owner asked dev-build to review its own PF-027 change (review 3) because
+dev-review is out of Codex usage until 11-22. Not an independent review. Questions 1-5 of the
+review request were OK (polling only reads; nothing auto-retries an unverified open_app; the
+60 s window is process-local; the 1 s host read runs in a worker thread's own loop; unrequested
+play is now PF-028). Two low findings, both fixed with the owner's yes.
+**F1 wrong:** `outcome_sentence` stripped only `spotify_`, so a failed YouTube/Netflix
+command was spoken "I sent youtube_pause to YouTube, but it is playing…" (reproduced).
+**F2 wrong:** in `refresh_after_command`, a later probe read that timed out replaced an
+earlier real observation (e.g. "paused") with all-unknown, so Era said "I couldn't read its
+playback" instead of what she saw. Never a false "done", only a less exact answer.
+**Changed (`core/live_app_state.py` only):** new `_plain_action` (strips spotify_/youtube_/
+netflix_) used by `_expected` and `outcome_sentence`; on a failed read after the first, the
+loop keeps the prior state with `probe_unavailable` added and stops. A first failed read is
+unchanged (unknown).
+**Verified (Windows):** 3 new guards in `tools/test_tool_outcome_sentences.py` (5 cases);
+outcome/live-state/evidence suites 107 passed; mutation check: putting the old code back fails
+3 of the 4 new cases (the Spotify case passes either way, as it should); `protected_fixes.py
+check` OK; ruff format/lint clean; `protected_fixes.py run` 629 passed. Full `pytest tools/`
+not run. **Owed live after an Era restart:** a YouTube/Netflix command that fails must be
+spoken in plain words. Not committed.
+
+### 2026-11-19 · Codex · PF-046: Hermes empty-answer handoff + cold local crew budget
+
+**Wrong:** the owner's Cody crew test failed twice. Hermes returned `BadModelOutput`
+after a read and stopped instead of handing the unfinished task to local models. Forced
+in-process mode gave the whole Qwen -> Gemma chain 30 s, retried that chain four times,
+and exhausted itself after 122 s while timed-out workers recovered in the background.
+**Root causes:** `crew/fallback.py` treated every started Hermes turn as unsafe to replay,
+without distinguishing idempotent reads from side effects. `crew/reliability.py` timed the
+whole chain like one model and retried it, while `crew/runtime.py` also capped each model
+at 30-45 s. Once that was enlarged, Cody's smart tier spent the 900-token structured
+budget on Ollama thinking and returned non-JSON.
+**Changed:** Hermes `BadModelOutput` falls through only when runtime proves every executed
+capability is in `_READ_CAPS`; any write, handoff, check or gate still stops. Local Qwen
+and Gemma each get 90 s by default (120 s ceiling), the outer chain gets one attempt with
+room for both under the existing 240 s call deadline, and structured crew steps disable
+thinking so their budget yields a JSON `call` or `final`.
+**Verified:** Windows focused suites: 174 passed. Registry OK and ruff clean. Live,
+read-only: with only the embedding model resident, cold Qwen answered a full Cody prompt
+in 26.29 s. Through the configured Hermes-first public crew path, Hermes read `era.read`,
+then returned unusable output; the task handed to local Qwen, repeated only reads, and
+answered successfully in 28.0 s with `fallback_from=hermes_agent` /
+`reason=empty:BadModelOutput`. **Not yet proven:** the running Era process has not been
+restarted onto these bytes; no voice-origin crew call was made. Not committed.
+**Independent check (Claude, 2026-11-19 ~11:55Z, after Codex hit its usage limit):** read the
+`crew/fallback.py`, `crew/reliability.py`, `crew/runtime.py` hunks. Hermes runs Era's own
+in-process loop (`HermesAgentTransport(InProcessTransport)`), so `used` is a true record of
+capabilities that executed; `safe_local_handoff` is only set on the `BadModelOutput` path and
+only when every one is in `_READ_CAPS`; terminal faults still return before fallback. No
+findings. Windows: `protected_fixes.py run` 624 passed; `ruff check` crew + tests clean;
+registry OK. Full `pytest tools/` not re-run.
+
+### 2026-11-18 · Claude · PF-045: standby only on "standby"/"take a break"; "Era silent"; reboot line heard
+
+**Owner:** standby only on "standby" / "take a break"; inactivity at once on "remain silent",
+"stay silent", "Era silent"; Era must say something before "reboot Era One".
+**Crew test first (owner asked):** Cody was given the three bugs with file pointers.
+Hermes transport: `BadModelOutput` "cody gave no usable reply" in 21 s, no fallback to the
+in-process loop. In-process (`ERA_CREW_TRANSPORT=inprocess`): Qwen and Gemma each hit the
+30 s per-attempt timeout x4 -> "local model chain is exhausted" after 122 s (Ollama up,
+no model resident: cold load + Cody's big prompt does not fit 30 s). Crew produced nothing;
+fixed by Claude. Crew timeout/fallback is an open item.
+**Causes (from logs):** (1) 23:28 local, "mes amis" -> Gemini called enter_standby; the
+grounding passed because `_STATE_TOOL_ORDERS["standby"]` accepted ~40 loose words and
+"Thank you" had been said 23 s earlier. (2) "Era silent" never matched `_SILENCE_ORDER`.
+(3) 17:50 reboot: `speak("I'm restarting now, sir.")` goes through Gemini in gemini_audio
+mode, and `audio.py` drops every Gemini chunk once `_shutdown_requested` (PF-036);
+`_exit_after_speaking` waited 3 s for `_is_speaking` and exited 6 s after the order.
+**Changed:** `core/attention.py` `STANDBY_ORDER`/`is_standby_order` (shared; "go offline"
+removed) + `_NAMED_SILENT_ORDER`; `main._STANDBY_INTENT` = it; `tool_dispatch`
+`_not_a_standby_order` refuses enter_standby unless the whole recent utterance is a standby
+order, grounding words narrowed; `main.speak()` during shutdown speaks locally (Fish/Kokoro)
+with `_exit_speech_pending`, and the exit waits on it / `_local_speaking`. Declaration +
+prompt.txt updated, golden regenerated. Fish synthesized the line in 1.6 s.
+**Follow-up 2026-11-19 (owner: "speak it with the selected voice, not always Fish"):** my first
+reboot fix forced the local voice (Fish first) even with Gemini selected. Now the exit line
+("reboot Era"/"reboot Era One" restart line, plain-shutdown "Goodbye") uses the SELECTED voice:
+Fish/Kokoro through the normal SpeechOut branch; Gemini through its own Live voice —
+`speak()` opens `_exit_line_audio_open` and `audio._exit_line_passes` lets only that turn's
+audio/turn_complete past the PF-036 shutdown drop (tool calls never pass). If Gemini makes no
+audio within 4 s the same sentence is synthesized with the same Gemini voice over the REST TTS
+(`core.tts_gemini`, independent of the Live session) and played; if that fails the line is
+skipped and logged. **Follow-up 2 2026-11-19 (owner: "with Gemini active, say it with Gemini
+voice, not any other"):** removed the Fish/`_local_say` fallback for the Gemini case entirely -
+silence beats a different voice. Untested live: Gemini's Live reply latency vs the exit
+thread's wait (20 s cap) is the thing to watch.
+**Verified:** tools/test_standby_silence_reboot.py + silence/grounding/relaunch suites 152
+passed; era_gate (Windows, 215 s): format, manifest, era_doctor, protected fixes (incl. PF-045)
+PASS; full suite 3265 passed / 2 failed = the 2 pre-existing PF-042 test_memory_guard mismatches;
+ruff lint failed on import order in main.py -> fixed, re-linted clean, 176 tests re-passed. **Owed live after a
+restart:** "reboot Era One" (line spoken), "thank you" then chatter (no standby), "standby"
+(standby), "Era silent" (inactivity). Branch `fix/standby-silence-reboot-voice`, not committed.
+
+### 2026-11-18 · Claude · PF-044: `deep_think` — Gemini hands hard questions to local Qwen
+
+**Owner choice:** the light version of spec §4 — NOT automatic delegation. Gemini Live
+keeps answering normal requests itself (no speed change); it calls `deep_think` only
+when the owner asks ("think deeply", "take your time", "ask Qwen") or a question really
+needs long reasoning (plan, design decision, trade-off, maths, dictated code review).
+**Built:** `core/deep_think.py` (local chain era.primary -> era.local, NO tools, speakable
+prose, one checkpoint); declaration (+ prompt.txt routing row), dispatcher branch (background
+task, STILL RUNNING ack, full answer via `_deliver_or_queue_cm_report(verbatim=True)` — the
+generic background outcome would cut it to one sentence), LOW risk, informational, HUD label.
+Tool count 60 -> 61 (golden + MANIFEST regenerated).
+**Found live and fixed:** unbounded, qwen3.5:9b thought 4096 tokens (17.5k chars, 129 s at
+34 tok/s) and returned NO answer; first deep_think run fell back to Gemma after 142 s with
+wrong advice. Now phase 1 thinks for at most 45 s / 1500 tokens (closing the stream aborts
+Ollama's generation), phase 2 answers from those notes with thinking off. Same question
+after the fix: Qwen, 51 s, correct answer (one 9B model), GPU 7.7 GB / 69 C, one model resident.
+**Verified:** tools/test_deep_think.py 12 passed; toolspec 24 passed; registry OK. Era gate
+(Windows, 882 s): ruff format/lint, manifest, era_doctor, protected fixes (577) PASS; full suite
+6256 passed / 3 failed — the same 3 pre-existing PF-042 test mismatches listed under PF-043
+(test_memory_guard x2, test_file_controller diagnosis report), nothing from PF-043/044.
+**Owed live after an Era restart:** say "Era, think deeply: <hard question>" -> short ack,
+Era keeps listening, full answer spoken ~30-60 s later; and a normal question ("what's the
+weather?") must NOT call deep_think.
+
+### 2026-11-18 · Codex + Claude · PF-043: local Qwen primary, Gemma fallback, checkpoints
+
+**Spec:** `docs/superpowers/specs/2026-11-18-era-local-model-router-design.md` (owner-approved).
+**Codex built (uncommitted at handoff):** `era.primary` = `qwen3.5:9b`, `era.local` =
+`gemma4:e4b` (emergency only), `era.overflow` = OmniRoute; heavy task classes,
+local/quota/availability fallbacks -> `era.primary`; dispatch chain primary -> local
+-> overflow (no fall-through on refusal/cancel); crew in-process chain Qwen -> Gemma
+(Hermes stays crew-first); `core/llm/resource_guard.py` (cold load refused at GPU >=
+82 C or < 4 GiB free RAM); Ollama keep-alive from env (was hard-coded 30m), thinking
+only for medium/high effort, images passed to Ollama; `add_checkpoint` continuation
+notes in the Fabric log, carried into the crew prompt; vision/file/classifier
+defaults moved off the old tags. User env set: OLLAMA_NUM_PARALLEL=1,
+MAX_LOADED_MODELS=1, FLASH_ATTENTION=1, KV_CACHE_TYPE=q8_0, KEEP_ALIVE=5m,
+ERA_CREW_TRANSPORT=hermes_agent, ERA_LOCAL_MAX_GPU_TEMP_C=82, ERA_LOCAL_MIN_AVAILABLE_RAM_GB=4.
+**Claude (this session):** pulled `qwen3.5:9b` (9.0B, Q4_K_M, vision+tools+thinking);
+added PF-043 + `tools/test_local_model_router.py` (16 guards); ruff fix in resource_guard.
+**Live probes through Era's OllamaChatProvider (era.primary):** cold load 10.0 s;
+warm text 0.4 s; strict JSON valid 0.7 s; native tool call `get_weather(Paris)` 1.8 s;
+thinking (high effort) correct, 12.3 s, ~35 tok/s; vision answered 4.7 s but described
+the Era logo wrongly (called it an "M" logo) — vision quality is weaker than hoped.
+VRAM 7.4/8.2 GB with Qwen loaded (5.2 of 6.1 GiB on GPU, rest CPU); GPU 52 -> 60 C.
+Loading Gemma evicted Qwen (one resident model confirmed); expiry = 5 min.
+**Gotcha found:** if `config/llm.yaml` cannot load (e.g. `yaml` import fails),
+`OllamaChatProvider._model_for` silently falls back to `gemma4:e4b`. Not a bug in
+normal runs, but a config failure downgrades silently.
+**Verified:** routing/crew/fabric/vision/codemode suites 742 passed; all protected
+guards passed before PF-043 (549); PF-043 16 passed; registry OK. Era gate (Windows, 918 s): manifest, era_doctor, ruff lint, protected
+fixes (565 incl. PF-043) PASS; ruff format failed on 3 migration files -> formatted, re-tested
+(152 passed); full suite 6182 passed / 3 failed. The 3 failures are NOT from this migration:
+`test_memory_guard.py::test_explicit_request_is_allowed` and
+`::test_cm_pipeline_authorized_flag_is_allowed` expect "ok" but save_memory now says what it
+saved (PF-042), and `tools/test_file_controller.py::TestDiagnosisReportRead::test_a_report_id_reads_the_real_report`
+reads the real report instead of the fixture — owner of PF-042 should update/fix them.
+**Not done:** (a) the spec's bounded "delegate heavy spoken work to Qwen" tool for
+Gemini Live was NOT built — heavy spoken requests still stay on Gemini; (b) no live
+Era restart/test yet (simple voice on Gemini, crew read-only request, Hermes
+preflight-fail -> Qwen); (c) nothing committed.
+**Cleanup (owner confirmed 2026-11-18):** `ollama rm` qwen2.5vl:3b, qwen25-coder-64k:latest,
+gemma4-64k:latest, gemma4:latest, qwen2.5-coder:7b, kimi-k2.7-code:cloud (no runtime
+reference left; only comments/test fixtures). Store D:\ollama models 35 G -> 28 G; no
+unreferenced blobs remain. Kept: qwen3.5:9b, gemma4:e4b, all-minilm:latest. Recovery:
+`ollama pull <tag>`.
+
+### 2026-11-17 · Claude · PF-042: round 2 — every open item fixed, re-tested live
+
+**How tested:** fixes rebuilt Era 6 times via "Reboot Era One" over the LAN bridge
+(clean readiness each time, no post-boot shutdown echo); each fix re-tested live.
+**Fixed and confirmed LIVE:** desktop/offer lists (real data, not windows); CPU/RAM
+numbers; headset mic status; unnamed reminder created AND fired on time; question
+during a pending confirm answered; typed cancel -> "Cancelled, sir."; typed "yes"
+now RUNS the armed action and says the result (PF-011 was green but broken: main.py
+consumed the confirmation, the dispatcher's confirm() then found nothing — its guard
+only covered the dispatcher half); "close Notepad without saving" closed it; screen
+description without false "couldn't confirm"; unread mail spoken as a list; genre
+search ("some jazz" -> Melody Gardot, verified); YouTube double-start de-duplicated;
+"read TODO.md in my EraOne folder" read it; local time ("3:54 AM", not UTC); wake
+word answered "shazam"; typed "Era, wake up" wakes standby; "is the Spotify bridge
+connected?" -> "No, it's off"; CM "status" reports and starts nothing; file
+summaries stay on the tool model; Netflix status in plain words; quick self-check
+announced Quick; standing rule (Celsius) saved via manage_preference.
+**Other tools exercised live this round:** voice_lock, crew, desktop_control stats,
+browser_control (Example Domain), capability_check, self_heal status, protocol_zero,
+scheduled_task list, manage_preference, audio_control, netflix status, autonomous_
+development status (read-only).
+**Verified:** Windows: test_live_sweep_round2 + affected suites green; all 549
+protected guards pass; registry OK; ruff clean; golden tool file + MANIFEST
+regenerated (diff = the new `clock` action only). Full-suite result: see TODO.
+**Not done / needs the owner:** (a) CodeMode: neither Windows Claude profile is
+logged in — run `claude auth login` with CLAUDE_CONFIG_DIR=C:\Users\nesri\.claude-freelance;
+(b) agent_browser chat mode needs AI_GATEWAY_API_KEY (Vercel) — its failure is now
+spoken without URLs; (c) out of scope by owner choice (no sends/calls/spend/code
+rewrites): send_message, telegram_call, gmail send, CM jobs, self_improve,
+dev_agent, code_mode runs, plain shutdown (covered by tests), voice/wake changes.
+(d) After a REBOOT the session is still resumed (continuity); an echo there is
+refused by grounding.
+
+### 2026-11-17 · Claude · PF-041: live tool sweep over the LAN bridge (9 fixes)
+
+**How tested:** ~40 natural prompts sent to the running Era through
+`/remote_voice` (token read from the user env, never printed); tool traces from
+`logs/eraone.log` + `logs/task_trace-20261117.jsonl`, replies from
+`memory/conversation_log.json`. Owner chose "safe-real" scope: no sends, calls,
+credit spend or code-rewriting runs.
+**Passed live:** weather, web_search (Gemini 429 -> DDG fallback), list/retrieve/
+save/forget memory (forget asks first), open_app, computer_control type, window
+minimize, get_volume, Spotify play/pause/current_track, open URL, gmail list,
+self_diagnosis, protocol_one status, audio list_devices, vault search,
+game_updater, flight_finder (wrong URL, see below), CodeMode exit phrase.
+**Wrong -> fixed (PF-041):** file/offer "list" became a window listing; a code
+request trapped every later order in CodeMode on a Claude-login failure (~5 min
+deaf); unnamed reminder refused; a new typed question swallowed as a cancel; screen
+description spoken "couldn't confirm it took effect"; unread mail spoken
+"...'is:unread': 1."; "how is my PC doing?" had no CPU/RAM; "which microphone?"
+gave the speaker volume; flight URL carried a stale IST->LHR 2025-03-15 `tfs=` blob.
+**Verified:** Windows: test_live_sweep_20261117 + CodeMode/scheduler/completion/
+routing suites green, all 492 protected guards pass, registry OK, ruff clean; mic
+fix read the real headset on Windows. **Not live-verified:** Era still runs the
+pre-fix code — the "reboot Era One" restart was blocked by a permission gate.
+**Open, not fixed:** (a) on boot the restored Gemini session re-called
+`shutdown_era` right after the greeting (grounding refused it) — dropping the
+session handle on a plain shutdown conflicts with PF-026, owner decision;
+(b) Spotify "lofi hip hop" played an unrelated Arabic track and first said
+"Spotify is playing"; (c) "close Notepad without saving" -> title "Notepad
+without saving"; (d) typed cancel speaks "Action cancelled" and the model then
+calls cancel_pending_confirmation -> "no pending action"; (e) self_diagnosis
+deep=false still runs the deep check; (f) CodeMode Claude profile is not logged in.
+
 ### 2026-11-16 · Claude · PF-040: a busy exemption can never keep Era listening forever
 
 **Wrong (live, UTC):** 22:24:51 window set to 60 s; nobody spoke until 22:29:45,

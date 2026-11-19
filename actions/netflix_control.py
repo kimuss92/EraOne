@@ -4827,7 +4827,15 @@ def _handle_status(state_info: dict) -> str:
     signals = state_info.get("signals", {})
     title = signals.get("page_title", "")
     signals.get("current_url", "")
-    parts = [f"Netflix state: {state}"]
+    # A plain sentence first, telemetry after (PF-027). Live 2026-11-17 "is anything
+    # playing on Netflix?" was spoken as "Netflix state: browse | title: Netflix".
+    sentence = {
+        _STATE_PLAYER: "Netflix has a video open in the player.",
+        _STATE_BROWSE: "Nothing is playing on Netflix; it is on the browse page.",
+        _STATE_SEARCH_RESULTS: "Nothing is playing on Netflix; it is showing search results.",
+        _STATE_DETAILS: "Nothing is playing on Netflix; a title's details page is open.",
+    }.get(state, "I can't tell what Netflix is showing right now.")
+    parts = [f"{sentence} Netflix state: {state}"]
     if signals["has_video"]:
         parts.append("video present")
     if signals["url_contains_watch"]:

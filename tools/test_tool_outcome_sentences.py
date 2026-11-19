@@ -286,3 +286,54 @@ def test_a_window_move_keeps_its_own_result_and_never_claims_not_running(monkeyp
     said = spoken_outcome("window_control", r)
     assert said.startswith("Moved 'ERA ONE' to screen 1")
     assert "is not running" not in r.message
+
+
+# ── PF-047: plain action words; a timed-out re-read keeps what was seen ──────
+
+
+@pytest.mark.parametrize(
+    "tool, action, app",
+    [
+        ("youtube_video", "youtube_pause", "youtube"),
+        ("netflix_control", "netflix_pause", "netflix"),
+        ("spotify_control", "spotify_pause", "spotify"),
+    ],
+)
+def test_a_failed_media_command_is_spoken_without_its_internal_name(monkeypatch, tool, action, app):
+    r = refresh(monkeypatch, tool, {"action": action}, state(app=app, playback="playing"))
+    assert not r.verified
+    said = spoken_outcome(tool, attach(r, tool))
+    assert said.startswith(f"I sent pause to {live._display(app)}, but it is playing")
+    assert action not in said
+
+
+def test_a_timed_out_reread_keeps_the_earlier_observation(monkeypatch):
+    """Read 1 saw "paused"; read 2 times out. Era says paused, not "couldn't read"."""
+    reads = iter([state(playback="paused")])
+
+    def collect(target):
+        try:
+            return next(reads)
+        except StopIteration:
+            raise TimeoutError("probe too slow") from None
+
+    monkeypatch.setattr(live, "collect_live_state", collect)
+    monkeypatch.setattr(live.asyncio, "sleep", AsyncMock())
+    r = asyncio.run(live.refresh_after_command("spotify_control", {"action": "play"}, "ok"))
+    assert not r.verified and r.verification_status == "NOT_VERIFIED"
+    assert r.data["live_app_state"]["playback"] == "paused"
+    assert "probe_unavailable" in r.data["live_app_state"]["errors"]
+    assert r.data["outcome_sentence"] == (
+        "I sent play to Spotify, but it is paused, so it did not take effect."
+    )
+
+
+def test_a_first_read_that_times_out_is_still_unknown(monkeypatch):
+    def collect(target):
+        raise TimeoutError("probe too slow")
+
+    monkeypatch.setattr(live, "collect_live_state", collect)
+    r = asyncio.run(live.refresh_after_command("spotify_control", {"action": "play"}, "ok"))
+    assert not r.verified
+    assert r.data["live_app_state"]["errors"] == ["probe_unavailable"]
+    assert "not confirmed" in r.data["outcome_sentence"]

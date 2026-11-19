@@ -1242,9 +1242,23 @@ def _diagnosis_report(path: str, name: str) -> Path | None:
     return candidate if candidate.is_file() and not candidate.is_symlink() else None
 
 
-def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
+def _known_folder(parent: str):
+    """The one folder a spoken parent name ("my EraOne folder") resolves to, or None."""
     try:
-        base = _resolve_path(path)
+        from actions.path_anchors import resolve_known
+
+        hits = [h for h in resolve_known(parent, item_type="folder") if h.is_dir()]
+    except Exception:
+        return None
+    return hits[0] if hits else None
+
+
+def read_file(path: str, name: str = "", max_chars: int = 4000, parent: str = "") -> str:
+    try:
+        # Live 2026-11-17 "read TODO.md in my EraOne folder" -> parent="EraOne" was
+        # ignored and the file was looked for on the Desktop ("File not found").
+        folder = _known_folder(parent) if parent and not path else None
+        base = folder if folder is not None else _resolve_path(path)
         target = (base / name) if name else base
         if not target.exists():
             report = _diagnosis_report(path, name)
@@ -2028,7 +2042,11 @@ def file_controller(
         elif action == "rename":
             return rename_file(path, name=name, new_name=params.get("new_name", ""))
         elif action == "read":
-            return read_file(path, name=name)
+            return (
+                read_file(params.get("path", ""), name=name, parent=params.get("parent", ""))
+                if params.get("parent") and not params.get("path")
+                else read_file(path, name=name)
+            )
         elif action == "write":
             return write_file(
                 path,

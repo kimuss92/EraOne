@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -62,6 +63,11 @@ _READ_CAPS = frozenset(
         "era.read",
         "development.list",
         "development.read",
+        # PF-051: Cody's code work starts with these. Both only read files (no
+        # write, no recorded state), so a Hermes stall after them may move the
+        # unfinished task to the local loop like any other read.
+        "source.inspect",
+        "source.read",
     }
 )
 # Capabilities whose structured data the bot needs to see, not just the message.
@@ -69,23 +75,101 @@ _DATA_CAPS = ("source.", "diagnosis.", "era.", "development.")
 
 LLM = Callable[[str, str, str], dict]  # (system, user, tier) -> reply dict; {} = unavailable
 
+_CREW_REPLY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "call": {
+            "type": "object",
+            "properties": {
+                "capability": {"type": "string"},
+                "args": {"type": "object"},
+            },
+            "required": ["capability", "args"],
+            "additionalProperties": False,
+        },
+        "final": {},
+    },
+    "additionalProperties": False,
+}
+
+_LOCAL_MODEL_TIMEOUT_DEFAULT_S = 90.0
+_LOCAL_MODEL_TIMEOUT_MAX_S = 120.0
+
+
+def _local_model_timeout_s() -> float:
+    """Per-model crew allowance, long enough for a cold Ollama load.
+
+    The reliability layer waits for the whole Qwen -> Gemma chain separately. Keeping
+    these two ceilings distinct prevents the old 30-second outer retry from abandoning
+    a still-starting model and launching the same request again in another thread.
+    """
+    try:
+        value = float(
+            os.environ.get("ERA_CREW_MODEL_TIMEOUT_S", str(_LOCAL_MODEL_TIMEOUT_DEFAULT_S))
+        )
+    except (TypeError, ValueError):
+        value = _LOCAL_MODEL_TIMEOUT_DEFAULT_S
+    return min(_LOCAL_MODEL_TIMEOUT_MAX_S, max(0.01, value))
+
+
+def _local_crew_call(alias: str, system: str, user: str, tier: str) -> dict:
+    from core.llm.adapters.ollama_chat import OllamaChatProvider
+    from core.llm.types import LlmMessage, LlmRequest, PromptBlock
+
+    response = OllamaChatProvider().generate(
+        LlmRequest(
+            alias=alias,
+            messages=(LlmMessage.text("user", user),),
+            system=(PromptBlock(text=system, cache_hint=True, label="crew"),),
+            json_schema=_CREW_REPLY_SCHEMA,
+            max_output_tokens=900,
+            # Crew reasoning is an explicit multi-step loop. Ollama thinking would
+            # spend this small structured-output budget on hidden notes and often
+            # return no JSON at all; each step therefore asks for the call/final
+            # directly, even for a smart-role bot such as Cody.
+            effort_hint="low",
+            timeout_s=_local_model_timeout_s(),
+            request_id=f"crew-{int(time.time() * 1000)}",
+        )
+    )
+    text = str(response.text or "").strip()
+    if text.startswith("```"):
+        text = text.removeprefix("```json").removeprefix("```").rstrip("`").strip()
+    reply = json.loads(text)
+    if not isinstance(reply, dict) or not ({"call", "final"} & reply.keys()):
+        raise ValueError("model returned no crew call or final")
+    reply["_era_route"] = {
+        "alias": alias,
+        "provider": response.provider,
+        "model": response.model_id,
+    }
+    return reply
+
 
 def default_llm(system: str, user: str, tier: str) -> dict:
-    """Era's existing text model path (Gemini, with the quota failover already installed)."""
-    from core.ai_provider import DEFAULT_FAST_MODEL, DEFAULT_SMART_MODEL, generate_json
-
-    model = DEFAULT_SMART_MODEL if tier == "smart" else DEFAULT_FAST_MODEL
-    return generate_json(user, model=model, system_instruction=system, fallback={})
+    """Local crew fallback: Qwen primary, then Gemma, never a paid provider."""
+    failures = []
+    for alias in ("era.primary", "era.local"):
+        try:
+            reply = _local_crew_call(alias, system, user, tier)
+            if failures:
+                reply["_era_route"]["fell_back_from"] = failures
+            return reply
+        except Exception as exc:  # noqa: BLE001 - one local model must not stop the chain
+            failures.append({"alias": alias, "reason": f"{type(exc).__name__}: {exc}"[:180]})
+            log_event(
+                runtime_logger,
+                "crew.model.fallback",
+                "WARNING",
+                alias=alias,
+                error_type=type(exc).__name__,
+            )
+    return {"__unavailable__": "local Qwen and Gemma are unavailable", "_era_route": failures}
 
 
 def default_backup_llm(system: str, user: str, tier: str) -> dict:
-    """A distinct model tier; the interpreter retains the original bot's grants."""
-    return default_llm(
-        "You are backup_agent covering the original crew role. Preserve its task, "
-        "observations and capability restrictions.\n" + system,
-        user,
-        "fast" if tier == "smart" else "smart",
-    )
+    """Reliability fallback is already handled inside ``default_llm``."""
+    return {"__unavailable__": "the local model chain is exhausted"}
 
 
 _FORMAT = (
@@ -157,10 +241,26 @@ def _user(
     return "\n\n".join(parts)
 
 
-def _done(spec, text, step, used, effects, executed, final_json) -> ToolResult:
+_CLAIMS_WORK = re.compile(
+    r"\b(?:fix(?:ed)?|stag(?:e|ed|ing)|candidate|added\s+a\s+test|patch(?:ed)?|changed?|modified)\b",
+    re.I,
+)
+NOTHING_STAGED = (
+    "(No candidate was staged: nothing is waiting for your approval and no file changed.)"
+)
+
+
+def _done(
+    spec, text, step, used, effects, executed, final_json, model_routes=None, *, staged=False
+) -> ToolResult:
     """A finished turn. Only observations of capabilities that actually RAN are
     evidence: a DENIED or format-error observation proves nothing, and Nabar may
-    cite only evidence (his check's text must appear in it)."""
+    cite only evidence (his check's text must appear in it).
+
+    PF-052: a bot that may stage but staged nothing must not sound as if it did. Live
+    2026-11-19 Cody answered "Here is the fix ... added a test" with no candidate."""
+    if "source.stage" in spec.capabilities and not staged and _CLAIMS_WORK.search(text or ""):
+        text = f"{text}\n{NOTHING_STAGED}"
     return ToolResult.ok(
         message=text,
         data={
@@ -171,6 +271,7 @@ def _done(spec, text, step, used, effects, executed, final_json) -> ToolResult:
             "final_json": final_json,
             "observation_ids": list(executed),
             "observation_texts": executed,
+            "model_routes": list(model_routes or []),
         },
     )
 
@@ -196,8 +297,8 @@ class InProcessTransport(Transport):
         backup_llm: LLM | None = None,
     ):
         # The crew has no provider chain of its own. Without an injected `llm` the model is
-        # Era's existing text path (default_llm: Gemini, with the quota failover already
-        # installed); the Hermes transport injects its own call. Caches are opt-in.
+        # The default is the local Qwen -> Gemma chain; the Hermes transport injects
+        # its own call. Caches are opt-in.
         self._llm: LLM = llm or default_llm
         self._backup_llm = backup_llm or (default_backup_llm if llm is None else None)
         self._caches: CrewCaches | None = caches
@@ -280,18 +381,59 @@ class InProcessTransport(Transport):
         raise_if_cancelled()
         from crew.reliability import call
 
+        local_chain = self._llm is default_llm
+        per_model_timeout = _local_model_timeout_s()
         reply = call(
             self._llm,
             (system, user, spec.model_tier),
             bot=spec.id,
             deadline=turn.deadline,
             backup=self._backup_llm,
+            # default_llm already owns the Qwen -> Gemma fallback. Give that one
+            # chain enough room for two cold models and never launch duplicate
+            # background chains after a timeout.
+            attempt_timeout_s=(
+                min(MAX_CALL_S, per_model_timeout * 2 + 5.0) if local_chain else None
+            ),
+            retries=0 if local_chain else None,
         )
         raise_if_cancelled()
+        route = reply.get("_era_route") if isinstance(reply, dict) else None
+        if isinstance(route, dict):
+            try:
+                from core.fabric.context import add_checkpoint
+
+                call = reply.get("call") if isinstance(reply.get("call"), dict) else {}
+                capability = str(call.get("capability") or "")
+                note = (
+                    f"{spec.id} requested capability {capability}."
+                    if capability
+                    else f"{spec.id} produced its final response."
+                )
+                checkpoint = add_checkpoint(
+                    (turn.context or {}).get("ctx_id"),
+                    status="model_step",
+                    note=note,
+                    alias=str(route.get("alias") or ""),
+                    provider=str(route.get("provider") or ""),
+                    model=str(route.get("model") or ""),
+                    reason=json.dumps(route.get("fell_back_from") or [], default=str)[:240],
+                    next_action=(
+                        f"Execute {capability} through the existing crew capability gate."
+                        if capability
+                        else "Return the final answer without repeating completed observations."
+                    ),
+                )
+                if checkpoint is not None:
+                    turn.context["checkpoint"] = checkpoint
+            except Exception:  # noqa: BLE001 - a note cannot break the crew
+                pass
         crew_router.log_turn(
             spec.id,
             tier,
-            "gemini" if self._llm is default_llm else "injected",
+            str(route.get("provider") or "ollama")
+            if isinstance(route, dict)
+            else ("ollama" if self._llm is default_llm else "injected"),
             crew_router.estimate_tokens(system + user),
             crew_router.estimate_tokens(json.dumps(reply, default=str)) if reply else 0,
             False,
@@ -305,8 +447,12 @@ class InProcessTransport(Transport):
         effects: list[dict] = []
         used: list[str] = []
         bad_format = 0
+        staged_ok = False  # PF-052: a successful source.stage in this turn
+        model_routes: list[dict] = []
         seen_reads: dict[str, str] = {}  # read key -> obs id that already answered it
-        for step in range(1, MAX_STEPS + 1):
+        budget = spec.max_steps or MAX_STEPS  # PF-054: a bot may carry its own budget
+        can_stage = "source.stage" in spec.capabilities
+        for step in range(1, budget + 1):
             raise_if_cancelled()
             if turn.deadline and time.monotonic() > turn.deadline:
                 return fail("StepLimit", f"{spec.id} ran out of time for this request.")
@@ -314,7 +460,12 @@ class InProcessTransport(Transport):
                 spec,
                 turn,
                 _system(spec, self._bots),
-                _user(turn, observations, step_budget.note(step, MAX_STEPS), spec.capabilities),
+                _user(
+                    turn,
+                    observations,
+                    step_budget.note(step, budget, can_stage=can_stage and not staged_ok),
+                    spec.capabilities,
+                ),
             )
             raise_if_cancelled()
             # A bounded model wait can consume the shared call budget. Check
@@ -322,15 +473,36 @@ class InProcessTransport(Transport):
             # as an unavailable model; no capability may run after expiry.
             if turn.deadline and time.monotonic() >= turn.deadline:
                 return fail("StepLimit", f"{spec.id} ran out of time for this request.")
+            # PF-051: an unreachable model carries the same proof as PF-046's bad
+            # output, so read-only unfinished work can move to the local loop.
+            proof = {
+                "safe_local_handoff": all(name in _READ_CAPS for name in used),
+                "capabilities_used": list(used),
+                "effects": list(effects),
+                "observation_ids": list(executed),
+            }
             if not isinstance(reply, dict) or not reply:
-                return fail("LLMUnavailable", f"{spec.id} could not reach a model.")
+                return fail("LLMUnavailable", f"{spec.id} could not reach a model.", **proof)
+            route = reply.get("_era_route")
+            if isinstance(route, dict):
+                model_routes.append(route)
             if "__unavailable__" in reply:  # the transport found no model that may answer
-                return fail("LLMUnavailable", f"{spec.id}: {reply['__unavailable__']}")
+                return fail("LLMUnavailable", f"{spec.id}: {reply['__unavailable__']}", **proof)
             if "final" in reply:
                 final = reply["final"]
                 text = step_budget.final_text(reply) or "Done."
                 json_final = final if isinstance(final, dict) else None
-                return _done(spec, text, step, used, effects, executed, json_final)
+                return _done(
+                    spec,
+                    text,
+                    step,
+                    used,
+                    effects,
+                    executed,
+                    json_final,
+                    model_routes,
+                    staged=staged_ok,
+                )
             call = reply.get("call")
             if not isinstance(call, dict) or not isinstance(call.get("capability"), str):
                 bad_format += 1
@@ -338,7 +510,20 @@ class InProcessTransport(Transport):
                     (f"obs{len(observations) + 1}", "format", "Reply with a JSON call or final.")
                 )
                 if bad_format >= 2:
-                    return fail("BadModelOutput", f"{spec.id} gave no usable reply.")
+                    # PF-049: say WHAT came back. "gave no usable reply" alone left the
+                    # crew (and the owner) guessing; the logs never held the real cause
+                    # (Hermes answering prose, not JSON), so a bot invented one.
+                    sample = " ".join(str(reply.get("__bad_output__") or "").split())[:120]
+                    why = f" It answered in prose, not JSON: {sample!r}" if sample else ""
+                    return fail(
+                        "BadModelOutput",
+                        f"{spec.id} gave no usable reply.{why}",
+                        bad_output_sample=sample,
+                        safe_local_handoff=all(name in _READ_CAPS for name in used),
+                        capabilities_used=list(used),
+                        effects=list(effects),
+                        observation_ids=list(executed),
+                    )
                 continue
             name = call["capability"].strip()
             args = call.get("args") if isinstance(call.get("args"), dict) else {}
@@ -366,6 +551,8 @@ class InProcessTransport(Transport):
                     continue
             result = self._execute(spec, turn, name, args)
             used.append(name)
+            if name == "source.stage" and result.success:
+                staged_ok = True
             if not result.success and result.error_type in _TERMINAL:
                 if result.error_type == "ConfirmationRequired":
                     result.data.setdefault(PREVIEW_KEY, f"{result.message} Should I proceed?")
@@ -389,10 +576,10 @@ class InProcessTransport(Transport):
             user = _user(turn, observations, step_budget.WRAP_UP_NOTE, spec.capabilities)
             text = step_budget.final_text(self._ask(spec, turn, _system(spec, self._bots), user))
             if text is not None:
-                result = _done(spec, text, MAX_STEPS, used, effects, executed, None)
+                result = _done(spec, text, budget, used, effects, executed, None, staged=staged_ok)
                 result.data["wrapped_up"] = True
                 return result
-        return fail("StepLimit", f"{spec.id} used all {MAX_STEPS} steps without finishing.")
+        return fail("StepLimit", f"{spec.id} used all {budget} steps without finishing.")
 
     def _execute(self, spec: BotSpec, turn: Turn, name: str, args: dict) -> ToolResult:
         raise_if_cancelled()
@@ -648,7 +835,7 @@ def run_tool(
             turn = Turn(task=task, context=ctx.for_turn() if ctx else {})
             result, transport = review_pathway.dispatch(transport, bot, turn)
             if ctx:
-                from core.fabric.context import add_step
+                from core.fabric.context import add_checkpoint, add_step
 
                 add_step(
                     ctx.ctx_id,
@@ -657,6 +844,45 @@ def run_tool(
                     result.message or result.error or "",
                     error_type=result.error_type,
                 )
+                route = {}
+                routes = result.data.get("model_routes") if isinstance(result.data, dict) else []
+                if isinstance(routes, list) and routes and isinstance(routes[-1], dict):
+                    route = routes[-1]
+                provenance = result.data.get("provenance") if isinstance(result.data, dict) else {}
+                if not isinstance(provenance, dict):
+                    provenance = {}
+                error_type = str(result.error_type or "")
+                paused = error_type in _TERMINAL
+                checkpoint = add_checkpoint(
+                    ctx.ctx_id,
+                    status="paused" if paused else ("complete" if result.success else "fault"),
+                    note=result.message or result.error or "",
+                    alias=str(route.get("alias") or ""),
+                    provider=str(
+                        route.get("provider")
+                        or provenance.get("transport")
+                        or getattr(transport, "name", "")
+                    ),
+                    model=str(route.get("model") or ""),
+                    reason=error_type or str(provenance.get("reason") or ""),
+                    next_action=(
+                        "Wait for the owner's confirmation; do not replay the action."
+                        if paused
+                        else (
+                            "Use this result and its observation references; do not reread completed work."
+                            if result.success
+                            else "Retry only the unfinished work through the next healthy route."
+                        )
+                    ),
+                    observation_ids=(result.data or {}).get("observation_ids") or [],
+                    pending_confirmation=str(
+                        (result.data or {}).get("confirmation_id")
+                        or (result.data or {}).get("pending_confirmation")
+                        or ""
+                    ),
+                )
+                if checkpoint is not None:
+                    result.data["checkpoint"] = checkpoint
                 result.data.setdefault("ctx_id", ctx.ctx_id)
             _crew_event("crew.result", bot, transport, ctx, result)
             return result

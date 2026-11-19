@@ -315,8 +315,11 @@ def test_shipped_policy_keeps_fast_commands_on_the_voice_model(real_registry):
         assert d.alias == "era.voice", f"{task} routed to {d.alias}"
 
 
-def test_shipped_policy_sends_reasoning_to_claude(real_registry):
-    assert router.route("complex_planning").provider == "claude_cli"
+def test_shipped_policy_sends_reasoning_to_local_qwen(real_registry):
+    decision = router.route("complex_planning")
+    assert decision.alias == "era.primary"
+    assert decision.provider == "ollama"
+    assert decision.model == "qwen3.5:9b"
 
 
 def test_shipped_default_route_is_usable(real_registry):

@@ -231,9 +231,14 @@ def create_task(
 ) -> dict:
     """`voice_authorized`: True/False, or the list of Protocol tools the user named."""
     name = (name or "").strip()[:80]
+    args, kind = strip_args(args), (kind or "tool").strip().lower()
+    # Live 2026-11-17: "remind me in 3 minutes to stretch" failed with "Give the task
+    # a name" — nobody names a reminder. Its message is its name.
+    derived_name = not name and kind == "reminder" and bool((message or "").strip())
+    if derived_name:
+        name = " ".join(message.split())[:60]
     if not name:
         raise TaskError("Give the task a name.")
-    args, kind = strip_args(args), (kind or "tool").strip().lower()
     steps = normalize_steps(steps)
     condition = normalize_condition(condition)
     if steps and kind != "reminder":
@@ -252,7 +257,15 @@ def create_task(
 
     with _lock:
         data = _load()
-        if any(t["name"].lower() == name.lower() and not t.get("finished") for t in data.values()):
+
+        def _taken(n: str) -> bool:
+            return any(
+                t["name"].lower() == n.lower() and not t.get("finished") for t in data.values()
+            )
+
+        if derived_name and _taken(name):
+            name = f"{name} ({datetime.now().strftime('%H:%M:%S')})"
+        if _taken(name):
             raise TaskError(f"There is already a task named '{name}'.")
         task = {
             "id": secrets.token_hex(3),

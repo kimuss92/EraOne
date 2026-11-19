@@ -53,6 +53,34 @@ _MEMORY_PATH = get_memory_dir() / "long_term.json"
 _SAFE_SCREENSHOT_ROOTS = (Path.home(),)
 
 
+def _system_load_line() -> str:
+    """Live CPU / RAM / battery numbers for system_snapshot.
+
+    Live 2026-11-17: "how is my PC doing, CPU and RAM?" got a window + process list
+    with no figures, so Era deflected to the HUD instead of answering. Never raises:
+    a missing psutil just drops the line.
+    """
+    try:
+        import psutil
+
+        cpu = psutil.cpu_percent(interval=0.3)
+        mem = psutil.virtual_memory()
+        parts = [
+            f"CPU {cpu:.0f}%",
+            f"RAM {mem.percent:.0f}% ({mem.used / 1024**3:.1f} of {mem.total / 1024**3:.1f} GB)",
+        ]
+        try:
+            bat = psutil.sensors_battery()
+        except Exception:
+            bat = None
+        if bat is not None:
+            plug = "plugged in" if bat.power_plugged else "on battery"
+            parts.append(f"battery {bat.percent:.0f}% {plug}")
+        return "Load: " + ", ".join(parts) + "\n"
+    except Exception:
+        return ""
+
+
 def safe_screenshot_path(requested: str | None) -> Path:
     fallback = Path.home() / "Desktop" / "era_screenshot.png"
     if not requested:
@@ -454,7 +482,8 @@ def computer_control(
       user_data     — pull real data from memory
       running_apps  — list running processes via psutil
       active_window — return current active window/app
-      system_snapshot — return window + process awareness snapshot
+      system_snapshot — live CPU/RAM/battery load + window + process snapshot
+      clock         — the real local time, date and time zone right now
     """
     params = parameters or {}
     action = params.get("action", "").lower().strip()
@@ -697,6 +726,18 @@ def computer_control(
             list_processes(refresh=True)
             return "Running apps:\n" + format_running_apps(limit=int(params.get("limit", 60)))
 
+        if action == "clock":
+            # Live 2026-11-17 "what time is it?" was answered "2:38 AM UTC" at 03:38
+            # local: the context time is frozen at session start. Read the clock.
+            from datetime import datetime
+
+            now = datetime.now().astimezone()
+            return (
+                f"Local time: {now.strftime('%H:%M')} ({now.strftime('%I:%M %p').lstrip('0')}), "
+                f"{now.strftime('%A %d %B %Y')}, time zone {now.strftime('%Z')} "
+                f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})."
+            )
+
         if action == "active_window":
             info = get_active_window()
             return f"Active window: {info.get('title') or 'Desktop'} | App: {info.get('app') or 'unknown'}"
@@ -709,6 +750,7 @@ def computer_control(
             win = window_context()
             return (
                 "System awareness:\n"
+                + _system_load_line()
                 + win
                 + "\n\nProcesses:\n"
                 + "\n".join(f"- {name}" for name in proc.get("running_apps", [])[:60])

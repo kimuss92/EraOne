@@ -99,13 +99,20 @@ class TestShippedCrew:
             "development.read",
         }
 
+    def test_cody_writes_his_own_change_without_a_second_model(self, report):
+        """PF-052: live 2026-11-19 Cody's first step, code.propose, called Gemini 3.8
+        Flash during a Google overload and spent the whole 240 s crew deadline."""
+        cody = report.specs["cody"]
+        assert "code.propose" not in cody.capabilities
+        assert "code.propose" not in cody.prompt
+        assert "source.stage in the same turn" in cody.prompt
+
     def test_cody_cannot_write_the_vault_or_the_repo(self, report):
         cody = set(report.specs["cody"].capabilities)
         assert cody == {
             "source.inspect",
             "source.read",
             "source.stage",
-            "code.propose",
             "code.check",
             "vault.read",
             "vault.search",
@@ -148,6 +155,8 @@ BAD_FILES = {
     "missing_prompt_file": {"prompt": "prompts/nope.md"},
     "prompt_traversal": {"prompt": "../../outside.md"},
     "capabilities_not_a_list": {"capabilities": "vault.read"},
+    "max_steps_too_high": {"max_steps": "50"},  # PF-054: bounded 2-12
+    "max_steps_not_int": {"max_steps": '"many"'},
 }
 
 

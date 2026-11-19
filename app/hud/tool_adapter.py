@@ -71,6 +71,7 @@ _TOOLS: dict[str, tuple[str, str, str]] = {
     "game_updater": ("system", "GAMES", "Updating games"),
     "premiere_control": ("apps", "PREMIERE", "Controlling Premiere Pro"),
     "self_diagnosis": ("system", "DIAGNOSIS", "Running self-diagnosis"),
+    "deep_think": ("agent", "DEEP THINK", "Thinking it through"),
     "self_improve": ("system", "SELF-IMPROVE", "Running self-improvement"),
     "self_heal": ("system", "SELF-HEAL", "Checking self-healing"),
     "protocol_one": ("system", "PROTOCOL ONE", "Running Protocol One"),

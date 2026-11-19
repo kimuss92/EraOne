@@ -2196,6 +2196,11 @@ def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> 
         if platform_target == "youtube":
             log("Router", f"query_routing: youtube_video play → {media_query}")
             return "youtube_video", {"action": "play", "query": media_query}
+        if platform_target == "spotify":
+            # Live 2026-11-17: a Spotify query fell through to a bare resume of the
+            # paused track ("Spotify is playing" — the wrong song). Search instead.
+            log("Router", f"query_routing: spotify_control search → {media_query}")
+            return "spotify_control", {"action": "search", "value": media_query}
 
     # ── ORCHESTRATOR INTERCEPT: ONLY Generic Transport Commands ──
     # Specific commands (liked_songs, next, etc) bypass this and go to their app.

@@ -48,12 +48,16 @@ INFORMATIONAL_TOOLS = frozenset(
         "code_mode",
         "file_processor",
         "self_diagnosis",
+        "deep_think",
         "capability_check",
         "retrieve_memory_context",
         "save_memory",
         "forget_memory",
         "enter_standby",
         "manage_preference",
+        # Live 2026-11-17: a screen description was spoken as "…, though I
+        # couldn't confirm it took effect". Looking at the screen changes nothing.
+        "screen_process",
     }
 )
 
@@ -108,6 +112,8 @@ TOOL_READ_ACTIONS = {
     "vault_bridge": frozenset({"search"}),
     "claude_bridge": frozenset({"read_reply"}),
     "system_performance": frozenset({"msi_scenario_status"}),
+    "computer_control": frozenset({"running_apps", "active_window", "system_snapshot", "clock"}),
+    "computer_settings": frozenset({"get_volume"}),
 }
 
 

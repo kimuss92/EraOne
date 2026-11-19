@@ -16,6 +16,7 @@ import pytest
 from core.fabric import events as ev
 from core.fabric import faults as ff
 from core.fabric import health as hl
+from core.tool_result import ToolResult
 from crew import fallback as fb
 from crew.transport import BotSpec, Turn, fail
 
@@ -377,6 +378,73 @@ class TestNeverAroundAGate:
         built = []
         monkeypatch.setattr(fb, "_build_inproc", lambda p: built.append(p))
         primary = FakeHermes(fail("LLMUnavailable", "provider login expired"))
+        result, used = fb.dispatch(primary, "tester", Turn(task="t"))
+        assert used is primary and result.error_type == "LLMUnavailable" and built == []
+
+    def test_empty_bad_output_hands_the_untouched_task_to_the_local_loop(self, monkeypatch):
+        local = FakeHermes(ToolResult.ok(message="local answer"))
+        local.name = "in_process"
+        fb.reset()
+        monkeypatch.setattr(fb, "_build_inproc", lambda _primary: local)
+        primary = FakeHermes(
+            fail(
+                "BadModelOutput",
+                "cody gave no usable reply",
+                safe_local_handoff=True,
+                capabilities_used=[],
+            )
+        )
+
+        result, used = fb.dispatch(primary, "tester", Turn(task="three bugs"))
+
+        assert used is local and result.success
+        assert "local answer" in result.message and fb.EMPTY_NOTE in result.message
+        assert result.data["provenance"]["reason"] == "empty:BadModelOutput"
+
+    def test_bad_output_after_a_side_effect_is_never_replayed(self, monkeypatch):
+        built = []
+        monkeypatch.setattr(fb, "_build_inproc", lambda p: built.append(p))
+        primary = FakeHermes(
+            fail(
+                "BadModelOutput",
+                "cody stopped after writing",
+                safe_local_handoff=False,
+                capabilities_used=["vault.append"],
+            )
+        )
+        result, used = fb.dispatch(primary, "tester", Turn(task="t"))
+        assert used is primary and result.error_type == "BadModelOutput" and built == []
+
+    def test_a_hermes_stall_after_reads_hands_the_task_to_the_local_loop(self, monkeypatch):
+        """PF-051: live 2026-11-19 Cody's 3rd Hermes call hung 90 s twice; the turn died."""
+        local = FakeHermes(ToolResult.ok(message="local answer"))
+        local.name = "in_process"
+        fb.reset()
+        monkeypatch.setattr(fb, "_build_inproc", lambda _primary: local)
+        primary = FakeHermes(
+            fail(
+                "LLMUnavailable",
+                "cody: the Hermes gateway failed (TimeoutError)",
+                safe_local_handoff=True,
+                capabilities_used=["source.read", "era.read"],
+            )
+        )
+        result, used = fb.dispatch(primary, "tester", Turn(task="fix the log line"))
+        assert used is local and result.success
+        assert result.data["provenance"]["reason"] == "unavailable:LLMUnavailable"
+        assert "stopped answering before any side effect" in result.message
+
+    def test_a_hermes_stall_after_a_side_effect_is_never_replayed(self, monkeypatch):
+        built = []
+        monkeypatch.setattr(fb, "_build_inproc", lambda p: built.append(p))
+        primary = FakeHermes(
+            fail(
+                "LLMUnavailable",
+                "cody: the Hermes gateway failed (TimeoutError)",
+                safe_local_handoff=False,
+                capabilities_used=["source.stage"],
+            )
+        )
         result, used = fb.dispatch(primary, "tester", Turn(task="t"))
         assert used is primary and result.error_type == "LLMUnavailable" and built == []
 

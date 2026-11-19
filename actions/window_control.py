@@ -610,6 +610,19 @@ ACTION_MAP = {
 }
 
 
+_CLOSE_MODE = re.compile(
+    r"\s*(?:,|and)?\s*(?:without\s+saving|(?:and\s+)?(?:do\s+not|don'?t)\s+save(?:\s+it)?"
+    r"|(?:and\s+)?discard(?:\s+(?:the\s+)?changes)?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_close_mode(title) -> str:
+    """'Notepad without saving' -> 'Notepad'. Live 2026-11-17 the model passed the
+    user's whole phrase as the title, so no window matched."""
+    return _CLOSE_MODE.sub("", str(title or "")).strip()
+
+
 def window_control(parameters: dict, player=None, speak=None) -> str:
     params = parameters or {}
     action = params.get("action", "").lower().strip()
@@ -620,7 +633,7 @@ def window_control(parameters: dict, player=None, speak=None) -> str:
         if action == "list":
             return list_windows(params.get("title"))
         elif action in ("focus", "close", "minimize", "maximize", "restore", "show"):
-            title = params.get("title", "")
+            title = _strip_close_mode(params.get("title", ""))
             if not title:
                 return "Title parameter required."
             func = ACTION_MAP.get(action)

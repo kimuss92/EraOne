@@ -107,8 +107,52 @@ def _first_sentence(text: str) -> str:
     return _SENTENCE.split(text.strip(), maxsplit=1)[0].strip()
 
 
+_LIST_ITEM = re.compile(r"^\s*(?:\d+[.)]|[-•*])\s+(.+?)\s*$")
+
+
+def _spoken_list(text: str, limit: int = 3) -> str:
+    """'Header:' + numbered/bulleted lines -> 'Header: a, b and c.' ('' if not a list).
+
+    Live 2026-11-17 "do I have unread emails?" was spoken as "5 message(s) in the
+    inbox matching 'is:unread': 1." — the first-sentence cut landed on "1.".
+    """
+    lines = [ln for ln in text.strip().splitlines() if ln.strip()]
+    if len(lines) < 2 or not lines[0].rstrip().endswith(":"):
+        return ""
+    items = [m.group(1) for ln in lines[1:] if (m := _LIST_ITEM.match(ln))]
+    if not items:
+        return ""
+    head = lines[0].rstrip().rstrip(":").replace("(s)", "s")
+    shown = [i.rstrip(".") for i in items[:limit]]
+    joined = shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1]
+    more = f", and {len(items) - limit} more" if len(items) > limit else ""
+    return f"{head}: {joined}{more}."
+
+
+_URL = re.compile(r"\(?\s*(?:https?://|www\.)\S+\s*\)?", re.IGNORECASE)
+
+
+def _speakable(text: str) -> str:
+    """Never read a URL or a long technical aside aloud. Live 2026-11-17 an agent-
+    browser failure was spoken with a 150-character Yahoo URL and an API-key note."""
+    out = _URL.sub("the site ", text or "")
+    out = re.sub(r"\s*>\s*", ": ", out)
+    cut = out.find(" (")
+    if cut > 0 and len(out) - cut > 40:  # a long aside, closed or truncated
+        out = out[:cut]
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out if out.endswith((".", "!", "?")) else out + "."
+
+
 def spoken_outcome(tool: str, result: Any) -> str:
     """One natural sentence for a background tool's real outcome (never raises)."""
+    try:
+        return _speakable(_spoken_outcome(tool, result))
+    except Exception:
+        return "I couldn't finish that, sir."
+
+
+def _spoken_outcome(tool: str, result: Any) -> str:
     try:
         raw = str(getattr(result, "message", "") or getattr(result, "error", "") or "").strip()
         # A detached website answer: this path speaks verbatim, so never read out a
@@ -125,7 +169,7 @@ def spoken_outcome(tool: str, result: Any) -> str:
         if getattr(result, "success", False) and isinstance(verdict, str) and verdict.strip():
             return verdict.strip().rstrip(".") + ", sir."
         if getattr(result, "success", False):
-            spoken = _first_sentence(text) or "Done, sir."
+            spoken = _spoken_list(text) or _first_sentence(text) or "Done, sir."
             # Evidence-gated completion (core/completion_contract.py): a tool
             # that returned is not a state that changed. When dispatch could not
             # prove the effect, the background report says so in the same

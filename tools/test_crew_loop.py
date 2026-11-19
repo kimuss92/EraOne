@@ -212,6 +212,32 @@ class TestTurnLoop:
         assert "2 steps left" in prompts[runtime.MAX_STEPS - 2]
         assert "LAST step" in prompts[runtime.MAX_STEPS - 1]
 
+    def test_a_bot_may_carry_its_own_step_budget(self, vault):
+        """PF-054: live 2026-11-19 Cody spent the default 6 steps re-reading and never staged."""
+        from dataclasses import replace
+
+        searches = [call("vault.search", query=f"q{i}") for i in range(9)]
+        t, llm = crew({"drew": [*searches, final("ok")]})
+        t.register("drew", replace(t._bots["drew"], max_steps=9))
+        res = ask(t, "drew")
+        assert len(res.data["capabilities_used"]) == 9
+        prompts = [user for _, user in llm.calls]
+        assert "STEP BUDGET" not in prompts[5]  # the default budget no longer applies
+        assert "LAST step" in prompts[8]
+
+    def test_a_bot_that_can_stage_is_told_to_stage_not_to_give_up(self):
+        from crew import step_budget
+
+        stage_note = step_budget.note(5, 6, can_stage=True)
+        assert "call source.stage NOW" in stage_note
+        assert "source.stage" not in step_budget.note(5, 6)  # others keep the plain warning
+        assert step_budget.note(1, 6, can_stage=True) == ""
+
+    def test_cody_has_room_for_a_fix_and_a_retry(self):
+        cody = load_specs().specs["cody"]
+        assert cody.max_steps == 10
+        assert "FAILED verification" in cody.prompt
+
     def test_a_wrap_up_that_still_calls_a_capability_runs_nothing(self, vault):
         before = note(vault)
         searches = [call("vault.search", query=f"q{i}") for i in range(runtime.MAX_STEPS)]

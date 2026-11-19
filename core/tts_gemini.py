@@ -90,5 +90,6 @@ async def synthesize(text: str) -> bytes:
             return decode_audio(await _post(payload, key))
     except Exception as exc:
         _retry_at = time.monotonic() + 30.0
-        print(f"[TTS] Gemini sentence recovery unavailable ({type(exc).__name__}).")
+        detail = exc.args[0] if exc.args else type(exc).__name__
+        print(f"[TTS] Gemini sentence recovery unavailable: {detail} ({type(exc).__name__}).")
         return b""

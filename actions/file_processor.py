@@ -100,7 +100,7 @@ class _GeminiModel:
         return _LocalResponse(text)
 
 
-_LOCAL_TEXT_MODEL = "gemma4:latest"
+_LOCAL_TEXT_MODEL = "qwen3.5:9b"
 _LOCAL_NOTE = (
     "\n\n(Completed locally with an Ollama model because the Gemini API quota is exhausted.)"
 )

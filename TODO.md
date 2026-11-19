@@ -101,6 +101,54 @@ improvement themes to revisit against evidence; #44 visual polish stays paused.
 
 ## 🔴 In progress
 
+**2026-11-19 · Crew end-to-end fix (Claude):** CodeMode is OFF (PF-050). The crew now survives
+Hermes stalls (PF-051), stages exact edits without a second model and never claims an unstaged
+fix (PF-052), and Hermes replies parse (PF-053). Live: Cody staged Development job
+`9edfcda055664f0c` (tts_gemini log line + test) and Era asked "Should I proceed?".
+Corrected candidate `fe849a8dd47f4035` approved by Karim and applied 17:49 (first crew fix end to
+end). Owed: the next real TTS failure logs the HTTP error text; commit.
+
+**2026-11-19 · PF-048 + PF-049 crew live-fixed (Claude):** Hermes crew turns answered in
+prose and all ended "no usable reply"; the protocol now rides in the user message (6/6 JSON).
+The crew could not read Era's logs by time, `null` args were refused, long tails lost their end,
+and failures hid what came back; all fixed. Live: crew hello and Cody's log diagnosis both answered
+through Hermes after an Era restart. 636 protected guards pass. Owed: a microphone crew call;
+Cody staging a fix through your approval; commit. Reboot line unspoken at 13:03 = Gemini TTS 503.
+
+**2026-11-19 · PF-047 spoken verdict wording (Claude):** from the PF-027 self-review. A
+failed YouTube/Netflix command is now said as "I sent pause to YouTube…" (was
+"youtube_pause"), and a timed-out re-read keeps what the earlier read saw instead of
+"couldn't read". 629 protected guards pass on Windows. Owed: after an Era restart, pause
+YouTube while it can't be paused (or check a failed pause) and hear plain words; commit.
+
+**2026-11-19 · PF-046 crew fallback fixed (Codex):** an unusable Hermes reply now
+hands read-only unfinished work to local Qwen but never replays a side effect. Cold local
+models get one bounded Qwen -> Gemma attempt (90 s each by default), and structured crew
+steps do not burn their JSON budget on thinking. Live read-only Hermes -> Qwen handoff
+succeeded in 28.0 s; 174 focused Windows tests pass. Exact-diff review done by Claude
+(no findings; 624 protected guards pass on Windows). Owed: normal Era restart +
+voice-origin crew check, commit. Details: handoff.md.
+
+**2026-11-18 · PF-043 local Qwen router (Codex + Claude):** qwen3.5:9b installed and
+probed live (JSON, tools, thinking OK; vision weak); routing, crew chain, resource
+guard and checkpoints built and guarded (16 tests). Old Ollama tags removed (35 -> 28 GB).
+PF-044 `deep_think` built (only on request / real need; bounded thinking, Qwen 51 s live).
+Owed: live voice check after an Era restart ("think deeply: …" and that normal questions
+don't use it); commit. Details: handoff.md.
+
+**2026-11-17 · PF-042 built + live-verified (Claude):** every open item from the
+PF-041 sweep fixed and re-tested live on Windows (details: handoff.md). Owner
+actions left: log CodeMode's Claude profile in; add AI_GATEWAY_API_KEY if the
+agent browser's chat mode is wanted. Needs dev-review of the PF-041/042 diff.
+
+**2026-11-17 · PF-041 built (Claude):** live tool sweep fixed 9 tool/behavior
+bugs (window-list hijack, CodeMode login trap, unnamed reminders, typed question
+eaten as cancel, false "couldn't confirm", list speech, CPU/RAM, mic status,
+stale flight URL). 492 guards pass on Windows. Owed live after an Era restart:
+"what files are on my Desktop?", "what are my offers?", "write a Python
+function" then "what's the weather?", "remind me in 2 minutes to stretch",
+"how is my PC doing?", "which microphone?". Open items (a)-(f) in handoff.md.
+
 **2026-11-16 · PF-040 built (Claude, to dev-review):** inactivity can no longer be
 blocked forever by a stuck "busy" state (max 120 s); HUD mode changes are logged
 with their reason. Owed live: 1-min window + silence -> HUD inactivity within 1 min, or up to 2 min after Era's last tool call (busy grace).
