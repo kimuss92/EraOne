@@ -1227,7 +1227,13 @@ def _ads_account_lock(ads, brand, restate=True):
             f"=== AD ACCOUNT LOCK — the ONLY account you may touch ===\n"
             f"    meta_ad_account_id: {account_id}\n"
             f"    page_id: {ads.get('page_id', '')}\n"
-            f"    notify: {brand.get('notify_email', '')}\n"
+            + (
+                f"    whatsapp_number_id: {ads['whatsapp_number_id']}  "
+                "(promoted_object.page_whatsapp_number_id for a WHATSAPP ad set)\n"
+                if ads.get("whatsapp_number_id")
+                else ""
+            )
+            + f"    notify: {brand.get('notify_email', '')}\n"
             + (
                 f"NEVER use any of these EXCLUDED accounts, even if a lookup surfaces "
                 f"one as a plausible match:\n{excluded_lines}\n\n"
@@ -1449,7 +1455,7 @@ def _build_ads_ops_brief(mode, brand_key, brand, instruction, vault_note, lesson
     )
 
 
-def _build_ads_brief(brand_key, brand, instruction, vault_note, lessons_note):
+def _build_ads_brief(brand_key, brand, instruction, vault_note, lessons_note, crew_note=""):
     """The Meta Ads brief — deliberately a SEPARATE brief, not a section bolted
     onto build_brief's organic-content one. Two reasons:
 
@@ -1525,6 +1531,7 @@ def _build_ads_brief(brand_key, brand, instruction, vault_note, lessons_note):
         )
         + f"{vault_note}"
         + f"{lessons_note}"
+        + f"{crew_note}"
         + f"TASK TYPE: ads\n"
         f"ORDER FROM USER: {instruction}\n\n"
         "Build the campaign per the rules above — ask for end date + budget only if "
@@ -1535,7 +1542,58 @@ def _build_ads_brief(brand_key, brand, instruction, vault_note, lessons_note):
     )
 
 
-def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_brands=None):
+def _meta_currency_note_for(task_type, instruction):
+    """Brief blocks that tell an ads BUILD how current its Meta rules are: the skill's
+    verification date (30 days) and the weekly Meta-changes watch (core/meta_spec_watch.py).
+    Independent of the crew toggle. Never raises."""
+    if task_type != "ads":
+        return ""
+    try:
+        from app.cm_intents import ads_mode
+
+        if ads_mode(instruction) != "build":
+            return ""
+        from core import meta_spec_watch
+        from crew import cm_stage
+
+        return meta_spec_watch.watch_note() + cm_stage.specs_age_note()
+    except Exception:  # noqa: BLE001 - a currency note never blocks a job
+        return ""
+
+
+def _crew_note_for(brand_key, brand, task_type, instruction):
+    """The Crew's creative package for an ads BUILD (Laura -> Tom, Maya, Nabar), as a
+    brief block. Reports and manage-mode runs, other lanes, and ERA_CM_CREW=0 get "".
+    A crew failure becomes an explicit 'did not contribute' block — never an exception."""
+    if task_type != "ads" or os.getenv("ERA_CM_CREW", "1").lower() in ("0", "false", "no", "off"):
+        return ""
+    try:
+        from app.cm_intents import ads_mode
+
+        if ads_mode(instruction) != "build":
+            return ""
+        from crew import cm_stage
+
+        package = cm_stage.creative_package(
+            brand_key, str(brand.get("display_name") or brand_key), instruction, brand=brand
+        )
+        log_event(
+            dispatch_logger,
+            "cm.crew.package" if package["ok"] else "cm.crew.skipped",
+            "INFO" if package["ok"] else "WARNING",
+            brand=brand_key,
+            chars=len(package.get("text") or ""),
+            reason=package.get("reason") or "",
+        )
+        return cm_stage.render_note(package)
+    except Exception as exc:  # noqa: BLE001 - the crew never blocks a CM job
+        log_event(dispatch_logger, "cm.crew.skipped", "WARNING", brand=brand_key, reason=str(exc))
+        return ""
+
+
+def build_brief(
+    brand_key, brand, task_type, instruction, defaults=None, all_brands=None, crew_note=""
+):
     """The structured brief Era hands to Claude. On-brand, gated, with the exact
     destinations embedded so it can never resolve them to the wrong account.
 
@@ -1661,7 +1719,7 @@ def build_brief(brand_key, brand, task_type, instruction, defaults=None, all_bra
     # "never stop to ask" instruction directly contradicts the mandatory
     # per-campaign budget question). Early return, skip everything below.
     if task_type == "ads":
-        return _build_ads_brief(brand_key, brand, instruction, vault_note, lessons_note)
+        return _build_ads_brief(brand_key, brand, instruction, vault_note, lessons_note, crew_note)
 
     offer_note = _offers_note(brand)
     caption_note = _caption_rules_note(brand)
@@ -2147,6 +2205,11 @@ _READONLY_INFLIGHT_LOCK = threading.Lock()
 # ---------------------------------------------------------------------------
 _DIRECT_MODEL = os.getenv("ERA_CLAUDE_MODEL", os.getenv("ERA_ADS_MODEL", "sonnet"))
 _ADS_DIRECT_MODEL = _DIRECT_MODEL  # back-compat name
+# The local route (first): Ollama serves /v1/messages, so `claude -p` talks to it
+# with a base-URL override. Tool use needs a model that supports it.
+_LOCAL_URL = os.getenv("ERA_CM_LOCAL_URL", "http://127.0.0.1:11434")
+_LOCAL_MODEL = os.getenv("ERA_CM_LOCAL_MODEL", "qwen3.5:9b")
+_GATEWAY_COMBO = os.getenv("ERA_CM_GATEWAY_COMBO", "era-cm")
 # User-level env vars that point Claude Code at OmniRoute (API key + base URL +
 # gateway model alias). With them removed, `claude -p` uses the account's own
 # subscription login stored in CLAUDE_CONFIG_DIR.
@@ -2159,6 +2222,11 @@ _GATEWAY_ENV_VARS = (
 # A direct run that fails with any of these never reached real work — the route
 # itself is unavailable, so the gateway gets the same run.
 _ROUTE_FAILURE_MARKERS = (
+    # Local route (Ollama) down or the model missing: the gateway takes the run.
+    "connection refused",
+    "econnrefused",
+    "unable to connect",
+    "try pulling it",
     "oauth session expired",
     "failed to authenticate",
     "not logged in",
@@ -2231,20 +2299,95 @@ def _routes_for(accounts, env):
     fast), then OmniRoute on the first profile as the last resort.
     """
     routes = []
-    for d in accounts:
-        direct_env = {k: v for k, v in env.items() if k not in _GATEWAY_ENV_VARS}
-        direct_env["CLAUDE_CONFIG_DIR"] = d
-        routes.append((f"direct:{Path(d).name}", direct_env, ["--model", _DIRECT_MODEL], d))
+    # Karim, 2026-11-19: CM work runs on the LOCAL model first (Ollama's
+    # Anthropic-compatible endpoint), OmniRoute is the fallback. The profile dir
+    # is still the first account's, because that is where the MCP servers live.
+    local_env = {k: v for k, v in env.items() if k not in _GATEWAY_ENV_VARS}
+    local_env.update(
+        CLAUDE_CONFIG_DIR=accounts[0],
+        ANTHROPIC_BASE_URL=_LOCAL_URL,
+        ANTHROPIC_AUTH_TOKEN="ollama",
+        ANTHROPIC_API_KEY="",
+    )
+    routes.append((f"local:{_LOCAL_MODEL}", local_env, ["--model", _LOCAL_MODEL], accounts[0]))
+    if os.getenv("ERA_CM_DIRECT_ROUTES", "").lower() in ("1", "true", "yes", "on"):
+        # The Claude subscriptions are gone (PF-043); opt-in only.
+        for d in accounts:
+            direct_env = {k: v for k, v in env.items() if k not in _GATEWAY_ENV_VARS}
+            direct_env["CLAUDE_CONFIG_DIR"] = d
+            routes.append((f"direct:{Path(d).name}", direct_env, ["--model", _DIRECT_MODEL], d))
     gateway_env = {**env, "CLAUDE_CONFIG_DIR": accounts[0]}
-    routes.append((f"gateway:{Path(accounts[0]).name}", gateway_env, [], accounts[0]))
-    return routes
+    if env.get("ANTHROPIC_BASE_URL"):
+        # The OmniRoute combo made of models verified to answer tool calls (free and
+        # local first, nothing paid). The user's `era-gateway` combo starts with an
+        # expired Claude login and then spends OpenAI credits.
+        gateway_env["ANTHROPIC_MODEL"] = _GATEWAY_COMBO
+    gateway_route = (f"gateway:{Path(accounts[0]).name}", gateway_env, [], accounts[0])
+    # The owner's spoken choice of brain (core/llm/brains.py): "automatic" keeps the order
+    # above (local first, OmniRoute fallback); a pin puts that brain first and keeps the
+    # others as fallbacks, so a pin never turns a recoverable failure into a dead job.
+    try:
+        from core.llm import brains
+
+        order = brains.cm_order()
+    except Exception:  # noqa: BLE001 - a routing preference never blocks a job
+        order = ("local", "gateway:omniroute")
+    if order == ("local", "gateway:omniroute"):
+        return routes + [gateway_route]
+    claude_route = (
+        f"gateway-claude:{Path(accounts[0]).name}",
+        {**gateway_env, "ANTHROPIC_MODEL": brains.CLAUDE_MODEL},
+        [],
+        accounts[0],
+    )
+    by_key = {"local": routes, "gateway:omniroute": [gateway_route], "gateway:claude": [claude_route]}
+    return [r for key in order for r in by_key[key]]
+
+
+_LOGIN_STALL_MARKERS = (
+    "connect.composio.dev/link",
+    "click this link to authenticate",
+    "click the link to authenticate",
+    "click this link to authorize",
+    "complete the authentication",
+    "please re-authenticate",
+    "please authenticate",
+    "sign in to continue",
+)
+
+
+def _stalled_on_login(result):
+    """True when a SHORT final message asks the user to authenticate or connect. A real
+    report is long; an auth request is a few lines, so length separates the two."""
+    text = str(result or "").strip()
+    if not text or len(text) > 1200:
+        return False
+    low = text.lower()
+    return any(m in low for m in _LOGIN_STALL_MARKERS)
+
+
+_HOLLOW_REPLY = re.compile(
+    r"i'?m ready to help|what would you like|how can i (?:help|assist)|i'?m standing by"
+    r"|what can i help|let me know what you(?:'d| would) like",
+    re.IGNORECASE,
+)
+
+
+def _hollow_reply(result):
+    """PF-069: a SHORT final message that only offers help ("I'm ready to help!
+    What would you like?") answered nothing. Live 2026-11-20 14:12: the local Qwen
+    model ignored "create Facebook descriptions for the new reels", listed its
+    tools, wrote nothing, and the run was logged "ok (wrote 0 files)"."""
+    text = str(result or "").strip()
+    return bool(text) and len(text) <= 1500 and _HOLLOW_REPLY.search(text) is not None
 
 
 def _is_route_failure(proc):
     if proc.returncode == 0:
         try:
-            if not json.loads(proc.stdout).get("is_error"):
-                return False
+            out = json.loads(proc.stdout)
+            if not out.get("is_error"):
+                return _hollow_reply(out.get("result"))  # the next route may do the work
         except (json.JSONDecodeError, TypeError, AttributeError):
             return False
     text = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
@@ -2324,13 +2467,32 @@ _ADS_SESSIONS_PATH = Path(
 _ADS_RESUME_WINDOW_S = 3 * 3600
 
 
+def _ads_skill_fingerprint():
+    """A short hash of the era-ads-manager skill file. A saved session remembers the skill it
+    was started with; when the skill changes (owner 2026-11-20: it must always follow Meta's
+    new rules), a resumed session would keep acting on the OLD text, so it is not resumed."""
+    try:
+        import hashlib
+
+        return hashlib.sha256(_ADS_SKILL_PATH.read_bytes()).hexdigest()[:16]
+    except Exception:  # noqa: BLE001 - an unreadable skill means a fresh brief
+        return ""
+
+
 def _load_ads_session(brand_key):
-    """The session id of this brand's last ads build run, if recent enough."""
+    """The session id of this brand's last ads build run, if recent enough AND started
+    under the current version of the skill."""
     try:
         data = json.loads(_ADS_SESSIONS_PATH.read_text(encoding="utf-8"))
         entry = data.get(brand_key) or {}
-        if time.time() - float(entry.get("ts", 0)) <= _ADS_RESUME_WINDOW_S:
-            return entry.get("session_id") or None
+        if time.time() - float(entry.get("ts", 0)) > _ADS_RESUME_WINDOW_S:
+            return None
+        if entry.get("skill") != _ads_skill_fingerprint():
+            log_event(
+                dispatch_logger, "cm.ads.session_dropped", "INFO", brand=brand_key, reason="skill_changed"
+            )
+            return None
+        return entry.get("session_id") or None
     except Exception:  # noqa: BLE001 - no usable session means a fresh brief
         pass
     return None
@@ -2352,7 +2514,12 @@ def _save_ads_session(brand_key, session_id, config_dir=None):
             data = json.loads(_ADS_SESSIONS_PATH.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             data = {}
-        data[brand_key] = {"session_id": session_id, "ts": time.time(), "config_dir": config_dir}
+        data[brand_key] = {
+            "session_id": session_id,
+            "ts": time.time(),
+            "config_dir": config_dir,
+            "skill": _ads_skill_fingerprint(),
+        }
         _ADS_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _ADS_SESSIONS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception:  # noqa: BLE001 - bookkeeping never fails a run
@@ -2362,8 +2529,10 @@ def _save_ads_session(brand_key, session_id, config_dir=None):
 def _ads_followup_prompt(instruction):
     return (
         "FOLLOW-UP FROM KARIM on the campaign we were just discussing. Every rule "
-        "from the original brief still applies (Ad Account Lock, always PAUSED, "
-        "no automated greeting).\n\n"
+        "from the original brief and from the era-ads-manager skill still applies "
+        "(Ad Account Lock, the pre-build gate, nothing published or activated); the "
+        "skill is the authority on messaging and welcome-message rules, not this "
+        "conversation's earlier text.\n\n"
         f"HIS MESSAGE: {instruction}\n\n"
         "If this answers what you asked, do NOT ask again — build the campaign "
         "now, PAUSED, and end with the short spoken summary. If it is clearly a "
@@ -2723,6 +2892,8 @@ def run_task(
         instruction,
         defaults=cfg.get("defaults"),
         all_brands=cfg.get("brands"),
+        crew_note=_meta_currency_note_for(task_type, instruction)
+        + _crew_note_for(brand_key, brand, task_type, instruction),
     )
     cmd = [
         CLAUDE_BIN,
@@ -2973,6 +3144,42 @@ def run_task(
             _save_ads_session(brand_key, data["session_id"], used_dir)
     except (json.JSONDecodeError, AttributeError):
         result = proc.stdout
+
+    # A run that exits 0 but ends on "click this link to authenticate" did no work.
+    # Live 2026-11-19: a free model wandered to Composio, asked for a Meta login that was
+    # not needed, and Era logged "ok (wrote 0 files)". Report it as the failure it is.
+    if _stalled_on_login(result):
+        friendly = (
+            "The run stopped and asked for a login or connection instead of doing the work: "
+            + str(result).strip().replace("\n", " ")[:240]
+        )
+        _log_to_vault(brand_key, task_type, instruction, "failed", friendly[:400])
+        return {
+            "ok": False,
+            "brand": brand_key,
+            "queued_behind": queued_behind,
+            "error": friendly,
+            "raw_error": str(result)[:2000],
+            "wrote_files": wrote,
+            "log_path": log_path,
+        }
+
+    # PF-069: every route answered with an offer of help and wrote nothing.
+    if not wrote and _hollow_reply(result):
+        friendly = (
+            "The model did not do the work: it only offered help. "
+            + str(result).strip().replace("\n", " ")[:200]
+        )
+        _log_to_vault(brand_key, task_type, instruction, "failed", friendly[:400])
+        return {
+            "ok": False,
+            "brand": brand_key,
+            "queued_behind": queued_behind,
+            "error": friendly,
+            "raw_error": str(result)[:2000],
+            "wrote_files": wrote,
+            "log_path": log_path,
+        }
 
     # A run that wrote nothing is reported honestly in the vault too — a hollow
     # ok=True is exactly the outcome the run log needs to make visible, so the
