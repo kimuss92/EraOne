@@ -530,6 +530,13 @@ class AudioIOMixin:
             # replaced by silence. Fail-open by design.
             gate = self._attention_gate()
             keep_open = self._attention_keep_open()
+            if getattr(self, "_is_speaking", False) or getattr(self, "_local_speaking", False):
+                # PF-066: she is mid-reply in his conversation; do not let the
+                # window lapse under her (it only ever counted from "done").
+                try:
+                    self._listening_state().hold_while_speaking()
+                except Exception:
+                    pass
             for frame in frames:
                 for out in gate.feed(frame, keep_open=keep_open):
                     self._note_sent_voice(out)
@@ -613,6 +620,11 @@ class AudioIOMixin:
         An error now lets the window rules decide instead of "busy" forever.
         """
         try:
+            # PF-066: "stay silent" is final until her name is heard again; a
+            # busy state (processing, local reply) must not keep the mic open.
+            listening = getattr(self, "_listening", None)
+            if listening is not None and listening.forced_closed():
+                return None
             store = getattr(self, "_pending_store", None)
             if store is not None and store.peek() is not None:
                 return "confirmation"

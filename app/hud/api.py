@@ -87,6 +87,7 @@ class HudApi:
         r.add_post("/api/voice/start", self.voice_start)
         r.add_post("/api/voice/stop", self.voice_stop)
         r.add_post("/api/standby", self.standby)
+        r.add_post("/api/inactivity", self.inactivity)
         r.add_post("/api/shutdown", self.shutdown)
         r.add_post("/api/restart", self.restart)
         r.add_post("/api/reveal", self.reveal)
@@ -446,6 +447,16 @@ class HudApi:
             return web.json_response({"error": "on must be true or false"}, status=400)
         self._need_engine()
         cmd = "__standby__" if on else "__unstandby__"
+        return web.json_response({"accepted": self._call(self.s._on_command, cmd)})
+
+    async def inactivity(self, r: web.Request):
+        """HUD "i" key: inactivity mode on/off (the conversation window, not standby)."""
+        body = await _json_body(r)
+        on = body.get("on")
+        if not isinstance(on, bool):
+            return web.json_response({"error": "on must be true or false"}, status=400)
+        self._need_engine()
+        cmd = "__inactivity__" if on else "__activity__"
         return web.json_response({"accepted": self._call(self.s._on_command, cmd)})
 
     async def shutdown(self, r: web.Request):

@@ -62,8 +62,14 @@ _END_SILENCE_S = 0.7  # this much quiet ends an utterance
 # match. Optional greeting/name before, "please"/"now"/"sir" after.
 _SILENCE_ORDER = re.compile(
     r"^\W*(?:(?:hey|ok|okay)\s+)?(?:era(?:\s+one)?\s*[,;:]?\s*)?(?:please\s+)?"
+    # PF-066: the natural ways people ask ("can you stay silent", "I want you to
+    # remain silent", "just be quiet"), not only the bare imperative.
+    r"(?:(?:(?:can|could|will|would)\s+you\s+(?:please\s+)?"
+    r"|(?:i\s+(?:want|need)\s+you\s+to\s+)|just\s+))?"
     r"(?:(?:remain|stay|keep|be|go)\s+(?:silent|quiet)"
-    r"|(?:reste[zr]?|restez)\s+silencieu(?:x|se))"
+    r"|stop\s+talking"
+    r"|(?:reste[zr]?|restez)\s+silencieu(?:x|se)"
+    r"|tais[\s-]+toi|taisez[\s-]+vous)"
     r"(?:[\s,]+(?:now|please|for\s+now|sir|era))*\W*$",
     re.IGNORECASE,
 )
@@ -106,6 +112,7 @@ def is_silence_order(text: str) -> bool:
 # PF-038: Era's reply must finish within this long of the owner's in-window turn
 # to continue the conversation (covers a reply that ends just after expiry).
 OWNER_TURN_REPLY_S = 60.0
+_PASSING_REANCHOR_S = 2.0
 _PREROLL_FRAMES = 5  # ~0.3 s at 64 ms frames: the word's onset, kept for Gemini
 
 IDLE, CHECKING, PASSING, DROPPING = "idle", "checking", "passing", "dropping"
@@ -208,6 +215,9 @@ class ListeningState:
         self._explicit_reply_pending = False
         # When the owner took a voice turn inside an OPEN window (PF-038).
         self._owner_turn_at: float | None = None
+        # PF-066: set by an explicit close ("stay silent"); busy exemptions must
+        # not hold the mic open until Era is addressed by name again.
+        self._forced_closed = False
 
     def era_finished_speaking(self, interrupted: bool, internal: bool = False) -> None:
         """Era's reply re-anchors the window only after an explicit address.
@@ -245,6 +255,10 @@ class ListeningState:
         explicit=True: the user addressed Era by name, by typing or by waking
         her. Only an explicit address lets Era's OWN reply re-anchor the window.
         """
+        if explicit:
+            self._forced_closed = False
+        elif self._forced_closed:
+            return  # "stay silent": only an explicit address (her name) reopens
         self._session.note_accepted()
         if explicit:
             self._explicit_reply_pending = True
@@ -263,10 +277,23 @@ class ListeningState:
             return
         self._owner_turn_at = self._clock()
 
+    def hold_while_speaking(self) -> None:
+        """PF-066: Era is talking in a conversation the owner started inside an
+        open window: keep that window from lapsing under her. Never re-opens a
+        closed window and never applies to a scheduled report (no owner turn)."""
+        if self._forced_closed or not self._session.open():
+            return
+        if self._owner_turn_at is not None or self._explicit_reply_pending:
+            self._session.note_accepted()
+
+    def forced_closed(self) -> bool:
+        return self._forced_closed
+
     def close_session(self) -> None:
         """Close the session ("standby" in the one-mode model)."""
         self._explicit_reply_pending = False
         self._owner_turn_at = None
+        self._forced_closed = True
         self._session.close()
 
     def echo_hold_active(self) -> bool:
@@ -310,6 +337,7 @@ class AttentionGate:
         self._speech_s = 0.0
         self._quiet_s = 0.0
         self._dropped_s = 0.0
+        self._passing_s = 0.0
         self._rec = None
 
     def _is_speech(self, frame: bytes) -> bool:
@@ -409,6 +437,14 @@ class AttentionGate:
         # PASSING / DROPPING until the utterance ends.
         self._quiet_s = 0.0 if speech else self._quiet_s + dur
         passing = self.mode == PASSING
+        if passing and speech:
+            # PF-066: a long owner utterance must not outlive its own window (it
+            # was cut at expiry and the next words needed her name). Re-anchor
+            # while he is talking, at most every _PASSING_REANCHOR_S of speech.
+            self._passing_s += dur
+            if self._passing_s >= _PASSING_REANCHOR_S:
+                self._passing_s = 0.0
+                self._reanchor_passing()
         if not passing:
             self._dropped_s += dur
             if self._dropped_s >= get_listening_config()["name_check_s"]:

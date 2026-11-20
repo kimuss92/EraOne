@@ -1099,6 +1099,11 @@ class EraLive(
             self.start_dispatch(text, dispatch_decision)
             return
 
+        # === HUD "i" key (PF-066): inactivity mode on / off, no standby ===
+        if text.strip() in ("__inactivity__", "__activity__"):
+            self._hud_set_inactivity(text.strip() == "__inactivity__")
+            return
+
         # === F4 toggle: enter or exit standby ===
         if text.strip() == "__standby__":
             if not self._standby_active:
@@ -2243,6 +2248,21 @@ class EraLive(
                 print(f"[SILENCE] barge-in skipped: {type(e).__name__}: {e}")
         print(f"[SILENCE] Inactivity mode ordered ({source}).")
         self.ui.write_log("SYS: Staying silent - say 'Era' to talk to me again.")
+
+    def _hud_set_inactivity(self, on: bool) -> None:
+        """PF-066: the HUD "i" key. ON closes the conversation window exactly
+        like "stay silent" (mic and Live session stay warm, only her name
+        reopens it); OFF reopens it as if she had just been addressed."""
+        try:
+            if on:
+                _close_listening_session(self)
+                self.ui.write_log("SYS: Inactivity mode on (HUD) - say 'Era' to talk to me.")
+            else:
+                self._listening_state().note_activity(explicit=True)
+                self.ui.write_log("SYS: Inactivity mode off (HUD) - I'm listening.")
+            print(f"[SILENCE] Inactivity mode {'on' if on else 'off'} (hud).")
+        except Exception as e:
+            print(f"[SILENCE] HUD inactivity toggle failed: {type(e).__name__}: {e}")
 
     def _silence_partial(self, text: str) -> bool:
         """PF-039, growing voice transcript. Returns True while it is a bare

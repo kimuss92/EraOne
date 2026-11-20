@@ -4,7 +4,7 @@
 // with Ctrl/⌘/Alt held (Ctrl+K stays the palette).
 
 export type ShortcutId =
-  | 'mic' | 'standby' | 'ask' | 'conversation' | 'schedule' | 'capabilities'
+  | 'mic' | 'standby' | 'inactivity' | 'ask' | 'conversation' | 'schedule' | 'capabilities'
   | 'diagnostics' | 'settings' | 'left' | 'right' | 'fullscreen'
   | 'restart' | 'exit' | 'help';
 
@@ -19,6 +19,7 @@ export interface Shortcut {
 export const SHORTCUTS: Shortcut[] = [
   { id: 'mic', key: 'M', label: 'Mute / unmute the microphone' },
   { id: 'standby', key: 'S', label: 'Standby / wake' },
+  { id: 'inactivity', key: 'I', label: 'Inactivity mode on / off' },
   { id: 'ask', key: '/', label: 'Focus the command bar' },
   { id: 'conversation', key: 'C', label: 'Conversation history' },
   { id: 'schedule', key: 'T', label: 'Scheduled tasks' },

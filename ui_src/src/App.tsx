@@ -192,6 +192,9 @@ export default function App() {
       switch (id) {
         case 'mic': if (s.link === 'online') actions.setMic(!s.micActive); break;
         case 'standby': if (s.link === 'online') actions.setStandby(!s.standby); break;
+        case 'inactivity':
+          if (s.link === 'online' && !s.standby) actions.setInactivity(s.listeningMode !== 'inactive');
+          break;
         case 'ask': (codeEnabled.current ? codeCmdRef : cmdRef).current?.focus(); break;
         case 'conversation': toggleDrawer('conversation'); break;
         case 'schedule': toggleDrawer('schedule'); break;
@@ -215,7 +218,7 @@ export default function App() {
       const inCode = codeEnabled.current;
       const sc = !typing() && (!s.palette || inCode) && !e.repeat ? matchShortcut(e) : null;
       if (sc) {
-        if (inCode && !['mic', 'standby', 'ask', 'fullscreen'].includes(sc)) return;
+        if (inCode && !['mic', 'standby', 'inactivity', 'ask', 'fullscreen'].includes(sc)) return;
         e.preventDefault();
         runShortcut(sc);
         return;

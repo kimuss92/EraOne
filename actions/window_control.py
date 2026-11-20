@@ -51,8 +51,8 @@ MASTER_APP_REGISTRY = {
     "code": {"exe": "Code.exe", "class": "Chrome_WidgetWin_1"},
     "photoshop": {"exe": "Photoshop.exe", "class": "photoshop"},
     "illustrator": {"exe": "Illustrator.exe", "class": "illustrator_app"},
-    "premiere": {"exe": "Premiere.exe", "class": "Premiere Pro"},
-    "premiere pro": {"exe": "Premiere.exe", "class": "Premiere Pro"},
+    "premiere": {"exe": "Adobe Premiere Pro.exe", "class": "Premiere Pro"},
+    "premiere pro": {"exe": "Adobe Premiere Pro.exe", "class": "Premiere Pro"},
     "whatsapp": {"exe": "WhatsApp.exe", "class": "ApplicationFrameWindow"},
     "telegram": {"exe": "Telegram.exe", "class": "TelegramWidget"},
 }

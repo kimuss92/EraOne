@@ -101,6 +101,8 @@ improvement themes to revisit against evidence; #44 visual polish stays paused.
 
 ## 🔴 In progress
 
+**2026-11-20 · Inactivity / HUD "i" key (Claude, PF-066):** coded and guarded on Windows, NOT live-verified. Owed: restart Era; talk past the 2-minute window (long reply and long owner speech); "stay silent" / "can you stay silent" / "Era silent"; press "i" in the HUD (on and off); say "hide telemetry". Details in handoff.md.
+
 **2026-11-19 · Crew end-to-end fix (Claude):** CodeMode is OFF (PF-050). The crew now survives
 Hermes stalls (PF-051), stages exact edits without a second model and never claims an unstaged
 fix (PF-052), and Hermes replies parse (PF-053). Live: Cody staged Development job

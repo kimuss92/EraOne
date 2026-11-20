@@ -630,6 +630,9 @@ export const actions = {
   setStandby(on: boolean): void {
     void api('/api/standby', { method: 'POST', body: { on } }).catch(() => {});
   },
+  setInactivity(on: boolean): void {
+    void api('/api/inactivity', { method: 'POST', body: { on } }).catch(() => {});
+  },
   selectModel(alias: string): void {
     send({ type: 'model_select', alias });
   },

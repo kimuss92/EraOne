@@ -51,6 +51,9 @@ _FAILURE_CLAUSE = re.compile(
 )
 
 
+_LOG_LINE = re.compile(r"^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}")
+
+
 def looks_like_failure(text: str) -> bool:
     """True when `text` reads as a tool's failure message rather than content.
 
@@ -72,6 +75,11 @@ def looks_like_failure(text: str) -> bool:
     if stripped[0] in "{[":
         return False
     first = stripped.split("\n", 1)[0].strip()
+    # A timestamped log line is file CONTENT, not a status (live 2026-11-20: reading
+    # eraone-error.log opened with "2026-09-26 04:07 | ERROR | stderr ..." and the
+    # successful read was reported as a failed call).
+    if _LOG_LINE.match(first):
+        return False
     lower = first.lower()
     if len(first) > _STATUS_LINE_MAX:
         return _opens_with_failure_clause(lower)

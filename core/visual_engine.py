@@ -205,11 +205,33 @@ def panel_catalog() -> list[dict]:
     return [{"id": key, **copy.deepcopy(value)} for key, value in PANELS.items()]
 
 
+def _resolve_panel_id(raw) -> str | None:
+    """Map a spoken/model-written panel name onto a real PANELS id.
+
+    Live 2026-11-20: Era sent ``hud.telemetry`` (the HUD's own word for the
+    System panel) and it was rejected although "telemetry" is a declared alias.
+    Exact ids still win; then aliases, with or without the ``hud.`` prefix.
+    """
+    if not isinstance(raw, str):
+        return None
+    if raw in PANELS:
+        return raw
+    word = raw.strip().lower().replace("_", " ").replace("-", " ")
+    if word.startswith(("hud.", "hud ")):
+        word = word[4:]
+    word = " ".join(word.split())
+    for key, spec in PANELS.items():
+        names = {key[4:].replace("_", " "), spec["label"].lower(), *spec.get("aliases", ())}
+        if word in names:
+            return key
+    return None
+
+
 def _panel(command: dict) -> dict:
     if set(command) != {"action", "panel_id", "visible"}:
         raise ValueError("Panel requires only action, panel_id and visible")
-    panel_id, visible = command["panel_id"], command["visible"]
-    if not isinstance(panel_id, str) or panel_id not in PANELS:
+    panel_id, visible = _resolve_panel_id(command["panel_id"]), command["visible"]
+    if panel_id is None:
         raise ValueError("Unknown HUD panel; use action panels for supported semantic IDs")
     if type(visible) is not bool:
         raise ValueError("Panel visibility must be boolean")

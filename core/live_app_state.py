@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import re
 import time
 from pathlib import PureWindowsPath
 
@@ -20,6 +22,10 @@ _READS = {
     "active",
     "monitors",
 }
+
+
+# PF-068: set by refresh_after_command only while verifying an OPEN.
+_DISCOVER: contextvars.ContextVar[bool] = contextvars.ContextVar("live_discover", default=False)
 
 
 def command_target(tool: str, params: dict) -> str | None:
@@ -57,6 +63,12 @@ def _identity(app: str) -> tuple[str, set[str]]:
     if not exe.lower().endswith(".exe"):
         exe += ".exe"
     names = {exe.casefold()}
+    try:  # PF-068: the exe the launcher itself resolves, for any app
+        from actions.open_app import known_exe_names
+
+        names |= set(known_exe_names(app))
+    except Exception:
+        pass
     if key == "calculator":
         names.update({"calculator.exe", "calculatorapp.exe"})
         # Shared Store host presence alone cannot prove Calculator is running.
@@ -70,6 +82,53 @@ def _processes(names: set[str]) -> list[int]:
     return [
         p.pid for p in process_awareness.list_processes(refresh=True) if p.name.casefold() in names
     ]
+
+
+def _title_words(app: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z0-9]+", str(app or "").casefold()) if w]
+
+
+def _names_from_window_titles(app: str) -> set[str]:
+    """Process names that own a visible window whose title contains every word of
+    `app`. Only for apps with no registry entry; needs 2+ letters per word set so
+    a one-word title never matches half the desktop by accident."""
+    words = _title_words(app)
+    if not words or len("".join(words)) < 4:
+        return set()
+    import psutil
+    import win32gui
+    import win32process
+
+    found: set[str] = set()
+
+    def collect(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
+        title = win32gui.GetWindowText(hwnd).casefold()
+        if title and all(w in title for w in words):
+            pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+            try:
+                found.add(psutil.Process(pid).name().casefold())
+            except psutil.NoSuchProcess:
+                pass
+        return True
+
+    win32gui.EnumWindows(collect, None)
+    return found
+
+
+def _names_from_process_stems(app: str) -> set[str]:
+    """Running process names whose stem, without spaces or punctuation, contains
+    the app's words run together ("premiere pro" -> "adobepremierepro.exe")."""
+    # A version ("2026", "v2") is not part of an exe name: drop number-only words.
+    joined = "".join(w for w in _title_words(app) if not w.isdigit())
+    if len(joined) < 6:
+        return set()
+    return {
+        p.name.casefold()
+        for p in process_awareness.list_processes(refresh=False)
+        if joined in re.sub(r"[^a-z0-9]", "", p.name.casefold().removesuffix(".exe"))
+    }
 
 
 def _windows(names: set[str]) -> list[dict]:
@@ -224,7 +283,11 @@ def _browser_playback(source: str) -> str:
 
 
 def collect_live_state(app: str) -> dict:
-    """No cache reads; independent failed probes retain their unknown state."""
+    """No cache reads; independent failed probes retain their unknown state.
+
+    When `_DISCOVER` is set (an OPEN was asked, PF-068) it also finds an unregistered app by
+    its window title / process name. Never for a close: a lingering title would
+    make a closed app look running."""
     state = {
         "app": app,
         "observed_at": time.time(),
@@ -247,6 +310,18 @@ def collect_live_state(app: str) -> dict:
         state["process_running"] = bool(state["pids"])
     except Exception:
         state["errors"].append("process_unavailable")
+    if _DISCOVER.get() and state["process_running"] is False:
+        # PF-068 (also Adobe Premiere Pro, whose exe is "Adobe Premiere Pro.exe"): an app outside the registry has an exe we can only guess
+        # ("neat download manager.exe" vs the real NeatDM.exe). Look for a visible
+        # window whose TITLE names the app and take its real process name.
+        try:
+            found = _names_from_window_titles(app) | _names_from_process_stems(app)
+            if found:
+                names = names | found
+                state["pids"] = _processes(names)
+                state["process_running"] = bool(state["pids"])
+        except Exception:
+            state["errors"].append("title_match_unavailable")
     try:
         state["windows"] = _windows(names)
     except Exception:
@@ -554,6 +629,7 @@ async def refresh_after_command(tool: str, params: dict, raw):
     interval = 1.0 if playback_check else 0.2
     deadline = time.monotonic() + (3.5 if playback_check else 2.0)
     state = None
+    _DISCOVER.set(expected == ("window", True))  # copied into the probe thread
     for attempt in range(3):
         if cancelled():
             return raw

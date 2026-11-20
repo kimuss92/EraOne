@@ -55,8 +55,8 @@ MASTER_APP_REGISTRY = {
     "code": {"exe": "Code.exe", "class": "Chrome_WidgetWin_1"},
     "photoshop": {"exe": "Photoshop.exe", "class": "photoshop"},
     "illustrator": {"exe": "Illustrator.exe", "class": "illustrator_app"},
-    "premiere": {"exe": "Premiere.exe", "class": "Premiere Pro"},
-    "premiere pro": {"exe": "Premiere.exe", "class": "Premiere Pro"},
+    "premiere": {"exe": "Adobe Premiere Pro.exe", "class": "Premiere Pro"},
+    "premiere pro": {"exe": "Adobe Premiere Pro.exe", "class": "Premiere Pro"},
     "whatsapp": {"exe": "WhatsApp.exe", "class": "ApplicationFrameWindow"},
     "telegram": {"exe": "Telegram.exe", "class": "TelegramWidget"},
     "neat download manager": {"exe": "NeatDM.exe", "class": "NeatDownloadManagerClass"},
@@ -212,6 +212,36 @@ def _focus_launch_window(hwnd: int) -> bool:
     raise_if_cancelled()
     force_absolute_focus(hwnd)
     return win32gui.GetForegroundWindow() == hwnd
+
+
+_EXE_HINTS: dict[str, frozenset[str]] = {}
+_BOOTSTRAP_EXES = frozenset({"update.exe", "updater.exe", "launcher.exe"})
+
+
+def known_exe_names(app_name: str) -> frozenset[str]:
+    """PF-068: the real process name(s) of ANY app, from the same registry /
+    Start Menu shortcut resolution that launches it - never a guess from the
+    spoken name ("Neat Download Manager" -> NeatDM.exe, not "neat download
+    manager.exe"). Only a found answer is cached, so a later install is found."""
+    key = _normalize_app_token(app_name) or str(app_name or "").casefold()
+    if key in _EXE_HINTS:
+        return _EXE_HINTS[key]
+    names: set[str] = set()
+    try:
+        reg = get_executable_from_registry(app_name)
+        shortcut = None if reg else scan_start_menu_shortcuts(app_name)
+        inspected = inspect_shortcut(shortcut) if shortcut else None
+        binary = reg or (inspected[0] if inspected else None)
+        if binary:
+            name = Path(binary).name.casefold()
+            if name.endswith(".exe") and name not in _BOOTSTRAP_EXES:
+                names.add(name)
+    except Exception:
+        pass
+    found = frozenset(names)
+    if found:
+        _EXE_HINTS[key] = found
+    return found
 
 
 def _launch_result(app_name: str, executable: str | None = None, timeout: float = 3.0) -> str:
