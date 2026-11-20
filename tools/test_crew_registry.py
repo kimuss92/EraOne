@@ -85,11 +85,48 @@ class TestShippedCrew:
     def test_nabar_cannot_write_anything(self, report):
         nabar = report.specs["nabar"]
         assert nabar.write_zones == ()
-        assert set(nabar.capabilities) == {"vault.read", "vault.search", "code.check"}
+        assert set(nabar.capabilities) == {
+            "source.inspect",
+            "source.read",
+            "vault.read",
+            "vault.search",
+            "code.check",
+            "diagnosis.list",
+            "diagnosis.read",
+            "era.list",
+            "era.read",
+            "development.list",
+            "development.read",
+        }
+
+    def test_cody_writes_his_own_change_without_a_second_model(self, report):
+        """PF-052: live 2026-11-19 Cody's first step, code.propose, called Gemini 3.8
+        Flash during a Google overload and spent the whole 240 s crew deadline."""
+        cody = report.specs["cody"]
+        assert "code.propose" not in cody.capabilities
+        assert "code.propose" not in cody.prompt
+        assert "source.stage in the same turn" in cody.prompt
 
     def test_cody_cannot_write_the_vault_or_the_repo(self, report):
         cody = set(report.specs["cody"].capabilities)
-        assert cody == {"code.propose", "code.check", "vault.read", "vault.search"}
+        assert cody == {
+            "source.inspect",
+            "source.read",
+            "source.stage",
+            "code.check",
+            "vault.read",
+            "vault.search",
+            "diagnosis.list",
+            "diagnosis.read",
+            "era.list",
+            "era.read",
+            "development.list",
+            "development.read",
+        }
+
+    def test_only_cody_and_drew_may_stage_source(self, report):
+        holders = sorted(b.id for b in report.specs.values() if "source.stage" in b.capabilities)
+        assert holders == ["cody", "drew"]
 
     def test_only_drew_may_propose_replacing_a_note(self, report):
         holders = [b.id for b in report.specs.values() if "vault.replace_staged" in b.capabilities]
@@ -118,6 +155,8 @@ BAD_FILES = {
     "missing_prompt_file": {"prompt": "prompts/nope.md"},
     "prompt_traversal": {"prompt": "../../outside.md"},
     "capabilities_not_a_list": {"capabilities": "vault.read"},
+    "max_steps_too_high": {"max_steps": "50"},  # PF-054: bounded 2-12
+    "max_steps_not_int": {"max_steps": '"many"'},
 }
 
 

@@ -276,6 +276,13 @@ authentication.** It now requires a shared secret and **denies everything by def
   a warning at startup saying so. Telegram works from everywhere anyway, so you may
   simply not need this endpoint any more.
 
+Successful `/remote_voice` submission now returns HTTP `202` with
+`{"status":"accepted","queued":"<command>"}`. This acknowledges receipt;
+it does not claim the task finished. Clients that required the former `200`
+or `executed` field must accept `202` and the `queued` field. The immediate
+notification says “Remote command received”; execution outcomes come separately.
+Malformed command payloads return `400`; authorization remains unchanged.
+
 ---
 
 ## 10. Status & housekeeping

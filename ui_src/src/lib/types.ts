@@ -74,6 +74,14 @@ export interface ToolRun {
   routedTo?: string;
 }
 
+export interface WidgetLayout {
+  schemaVersion: number;
+  revision: number;
+  view: 'command-center' | 'conversation';
+  widgets: { id: string; visible: boolean; x: number; y: number; w: number; h: number }[];
+  catalog: Record<string, string>;
+}
+
 export interface ContextCard {
   id: string;
   type: string;
@@ -173,7 +181,75 @@ export interface ConnectionInfo {
   since?: number;
 }
 
+export interface FileObservation {
+  revision: number;
+  health: string;
+  coverage: string;
+  observedAt: number;
+  roots: string[];
+  failedRoots: string[];
+  droppedEvents: number;
+  coalescedEvents: number;
+  exclusions: string[];
+  changes: {
+    kind: string; path: string; destination: string | null; isDirectory: boolean;
+    observedAt: number; reconciledAt: number;
+    source: { state: string; sizeBytes: number | null; modifiedAt: number | null };
+    target: { state: string; sizeBytes: number | null; modifiedAt: number | null } | null;
+  }[];
+}
+
+export interface NetworkObservation {
+  revision: number;
+  health: string;
+  coverage: string;
+  observedAt: number;
+  internet: 'unknown';
+  interfaces: { name: string; index: number | null; isUp: boolean }[];
+}
+
+export interface DeviceObservation {
+  revision: number;
+  health: string;
+  coverage: string;
+  scope: 'active-audio-endpoints';
+  observedAt: number;
+  endpoints: { id: string; name: string; flow: 'input' | 'output'; kind: string }[];
+  processDefaults: Record<'input' | 'output', Record<'console' | 'multimedia' | 'communications', string | null>>;
+  bluetoothConnection: 'unknown';
+  streamRoute: 'unknown';
+}
+
+export interface ProcessObservation {
+  revision: number;
+  health: string;
+  observedAt: number;
+  coverage: string;
+  omitted: number;
+  processes: { id: string; pid: number; app: string; startedAt: number | null; identityVerified: boolean }[];
+}
+
+export interface ForegroundObservation {
+  revision: number;
+  health: string;
+  observedAt: number;
+  foreground: { hwnd: number; pid: number; app: string } | null;
+}
+
+export interface MediaObservation {
+  revision: number;
+  health: string;
+  observedAt: number;
+  sessions: { id: string; app: string; status: string }[];
+}
+
+export interface BrowserMediaObservation {
+  revision: number;
+  sessions: { id: string; browser: string; source: string; status: string; observedAt: number; health: string }[];
+}
+
 export interface Transcript {
+  caption?: { id: string; text: string; engine: string; state: string; at: number };
   user: string;
   userFinal: boolean;
   response: string;
@@ -184,7 +260,7 @@ export interface Transcript {
   respAt?: number;
 }
 
-export type DrawerId = 'conversation' | 'diagnostics' | 'settings' | 'capabilities' | 'schedule' | 'shortcuts' | 'development' | null;
+export type DrawerId = 'conversation' | 'diagnostics' | 'settings' | 'capabilities' | 'schedule' | 'shortcuts' | 'development' | 'telemetry' | 'activity' | 'memory' | 'context' | 'telegram' | null;
 
 export type NoticeKind = 'success' | 'info' | 'warn' | 'error' | 'approval';
 
@@ -250,4 +326,24 @@ export interface HudSettings {
   /** Why the active voice differs from the configured one, if it does. */
   gemini_voice_note?: string;
   voice_note?: string;
+}
+
+export interface TelegramCallStatus {
+  instanceId: string;
+  revision: number;
+  state: string;
+  generation: string;
+  canStart: boolean;
+  canHangup: boolean;
+  canRecover?: boolean;
+  canRenewTest?: boolean;
+  listeningArmed?: boolean;
+  canDial?: boolean;
+  receivingRetrying?: boolean;
+  reason: string;
+  error: string;
+  inputCaption: string;
+  outputCaption: string;
+  remoteDiscardObserved: boolean;
+  processReaped: boolean;
 }

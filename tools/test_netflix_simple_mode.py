@@ -587,6 +587,16 @@ class TestOpenNetflixNativeSearch:
         result = _open_netflix_native_search(page, sess, "One Piece")
 
         assert result is True
+        page.keyboard.press.assert_called_once_with("ControlOrMeta+A")
+        page.keyboard.type.assert_called_once_with("One Piece", delay=30)
+
+    def test_keyboard_failure_does_not_claim_search_was_entered(self):
+        page = MagicMock()
+        page.evaluate.side_effect = ["clicked", "found"]
+        page.keyboard.type.side_effect = RuntimeError("keyboard disconnected")
+        sess = MagicMock()
+        sess.run.side_effect = lambda value, **kw: value
+        assert _open_netflix_native_search(page, sess, "One Piece") is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

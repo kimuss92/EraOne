@@ -1,0 +1,7 @@
+[2026-10-13 13:30:15] [WARNING] [era_one.main] {"ts": "2026-10-13T12:30:15.390Z", "level": "WARNING", "logger": "era_one.main", "event": "awareness.process.read_failed", "error_type": "ValueError"}
+Native inventory health: unavailable
+Coverage: none
+Observed instances: 0
+Omitted: 0
+Clean stop: True
+Worker stopped: True

@@ -185,7 +185,27 @@ _GATE_IMPORT = re.compile(
 
 def target_refusal(rel: str) -> str:
     """'' when self_heal may edit `rel`, else why not (→ escalate)."""
-    from actions.self_improve import SAFETY_CRITICAL, _rel, _resolve_target
+    from actions.self_improve import REPO_ROOT, SAFETY_CRITICAL, _rel, _resolve_target
+
+    # Scope must not change with file size. Resolve first so traversal and
+    # symlinks cannot disguise an app dispatcher as a healable module.
+    try:
+        candidate = (REPO_ROOT / rel).resolve().relative_to(REPO_ROOT).as_posix()
+    except (ValueError, OSError):
+        candidate = ""
+    if candidate.startswith(("runtime/", "memory/", "config/")) or any(
+        part.startswith(".") for part in Path(candidate).parts
+    ):
+        return f"{candidate} is protected — I never modify backups, secrets or state."
+    if candidate and (
+        Path(candidate).name.startswith(("test_", "conftest"))
+        or candidate.startswith(("tools/", "tests/"))
+    ):
+        return f"{candidate} is a test — tests are the judge, never the patient"
+    if candidate and not candidate.startswith(HEALABLE_DIRS):
+        return (
+            f"{candidate} is outside the modules I may heal on my own ({', '.join(HEALABLE_DIRS)})"
+        )
 
     p, err = _resolve_target(rel)
     if p is None:

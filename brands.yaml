@@ -67,9 +67,9 @@ brands:
     # Era sets CLAUDE_CONFIG_DIR to claude_config_dir to select the account,
     # and runs Claude Code with cwd = project_dir. No API key involved.
     claude_config_dir: "C:\\Users\\nesri\\.claude-delta"   # DELTA CUISINE Claude account
-    project_dir: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation"
+    project_dir: "D:\\master folder\\delta cuisine"          # repointed 2026-10-16 (was ...\claude automation)
     browser_profile: "Brave/Profile 1 (Delta Cuisine)"     # for manual review only
-    working_dir: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation"
+    working_dir: "D:\\master folder\\delta cuisine"
     charter_file: "MASTER_CONTENT_BLUEPRINT.md"
     # NOTE 2026-07-20: memory_dir is DEAD CONFIG — nothing reads it, and the
     # folder has never existed in either brand's project_dir. It was the intended
@@ -80,7 +80,12 @@ brands:
     # Kept only so the key doesn't silently vanish; delete it once nothing refers
     # to it. Do not treat it as a live path.
     memory_dir: "memory"                         # DEAD — see note above
-    texture_folder: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation\\textures"
+    texture_folder: "D:\\master folder\\delta cuisine\\textures"
+    # CONTENT WORKFLOW (added 2026-10-16, vault: Delta_Content_Workflow). Read by the
+    # `package` and `edit` lanes. Folders default to <project_dir>\renders, \final,
+    # \remotion; add renders_dir / final_dir / remotion_dir here to override.
+    # Caption language follows the voiceover (French VO = French caption).
+    content_languages: {primary: "French", secondary: "Tunisian derja (Arabic script)", primary_share: 70}
 
     # --- notifications ---
     notify_email: "kimuss92@gmail.com"
@@ -816,7 +821,7 @@ brands:
       # supports it; otherwise apply at ad-set level.
       audiences:
       - name: "Claude DC Audience"
-        source_report: "D:\\Ctrl Z\\Freelence\\DC\\IG\\ABC\\claude automation\\graphify-out\\\
+        source_report: "D:\\master folder\\delta cuisine\\graphify-out\\\
           converted\\rapport_instagram_delta_cuisine_f44c6f76.md"
         insight: "audience responds to aspiration/storytelling (luxury kitchens, dressing
           sur mesure: 100+ engagements) far more than price-led posts"
@@ -885,10 +890,10 @@ brands:
     aliases: ["ceram", "ceram quartz", "quartz", "ceramquartz"]
 
     claude_config_dir: "C:\\Users\\nesri\\.claude-freelance"  # FREELANCE Claude account
-    project_dir: "D:\\telechargements\\ceramequartz\\new"      # your Ceram Quartz folder
+    project_dir: "D:\\master folder\\ceram quartz"             # repointed 2026-10-16 (was ...\ceramequartz\new)
     browser_profile: "Brave/Default (CtrlZ std / freelance)"
-    working_dir: "D:\\telechargements\\ceramequartz\\new"
-    charter_file: "CERAM_QUARTZ_CHARTER.md"       # built from your assets
+    working_dir: "D:\\master folder\\ceram quartz"
+    charter_file: "reports\\CERAM_QUARTZ_CHARTER.md"       # built from your assets
     memory_dir: "memory"                                       # DEAD CONFIG — see the note on delta_cuisine's memory_dir
 
     notify_email: "creakba@gmail.com"            # confirmed — Gmail sending set up in Composio
@@ -896,77 +901,30 @@ brands:
     timezone: "Africa/Tunis"                     # confirmed — report shows 94.8% of audience in Tunisia
     language: "fr"                               # confirmed
 
-    # UPDATED 2026-07-20 from D:\my workflow\CLAUDE.md (2026-07-19): "master space
-    # CQ" is the space to generate into going forward. Previous value here was
-    # a22a1207-83aa-475f-b153-b825b9b9d56d, one of the superseded experimental
-    # spaces ("CQ CLAUDE"). Restore it if generations land in the wrong place.
-    magnific_space: "https://www.magnific.com/app/spaces/a24c6c83-0bd2-48db-bdfc-49d0e30b7a28"
-    magnific_space_name: "master space CQ"
-
-    # MAGNIFIC FLOWS + AD-CREATIVE (added 2026-07-29, for the `adcreative` lane).
-    # See delta_cuisine.magnific for the full rationale — same account, same
-    # ceiling, same "Agent / Brand Kit are NOT reachable from MCP" finding, so
-    # brand compliance comes from design_rules below and CERAM_QUARTZ_CHARTER.md.
-    magnific:
-      credit_ceiling_per_run: 600
-      require_simulate: true
-      # No 16:9 — this brand has no landscape placement. 9:16 IS kept: CQ runs
-      # reels on IG + FB (charter §8), it just has no TikTok.
-      ad_ratios: ["1:1", "4:5", "9:16"]
-      approved_flows:
-      - {id: "X5DBfolnSW", name: "Multi-format resizer", credits: 150, use: "one approved
-          slab visual -> every ad ratio"}
-      # Localize matters MORE for this brand than for DC: content_mix allows an
-      # Arabic (Tunisian dialect) description, and caption_footer_ar already exists.
-      - {id: "eqpdqL9Ptk", name: "Localize ads and images", credits: 75, use: "FR
-          banner -> AR, design untouched"}
-      - {id: "DKTpclpxKi", name: "Audience-driven ads", credits: 200, use: "ad variants
-          per audience, one claim each"}
-      - {id: "CQXtEEyuoQ", name: "Change material and colour", credits: 75, use: "swap
-          the slab finish in an existing in-situ shot"}
-      - {id: "LYSswO4tgm", name: "Product color variants", credits: 75, use: "one
-          kitchen, several slab colourways"}
-      - {id: "wVZ7EIQVNR", name: "Render to photoreal", credits: 75, use: "lift a
-          CGI-looking kitchen render to photoreal"}
-      banned_flows:
-      - {id: "1RDr4rEVPs", reason: "Product ad spot — 3360 credits. Explicit spoken
-          order only."}
-      - {id: "lUh9gv9EVU", reason: "Multishot brand story — 4200 credits. Explicit
-          order only."}
-      - {id: "19cr4rEVPs", reason: "UGC unboxing — 10621 credits, EXCEEDS the whole
-          balance."}
-      - {id: "aLUfShW4BA", reason: "UGC tutorial — 10621 credits, EXCEEDS the whole
-          balance."}
-      # A flow's output is a PHOTO, never a finished slide. Carousel slides are
-      # built by placing that photo into offre.psd via the photoshop MCP
-      # (charter §6) — a flow must never be used to fake the branded layout,
-      # because it cannot reproduce the logo lockup, name-bar or footer band.
-      never: "use a flow output directly as a carousel slide, or let a flow render
-        brand text/logo/footer — layout comes from offre.psd in real Photoshop, always"
-    # ^ CONFIRMED working plain link (invite-link version is no longer needed).
-    # NOTE: Magnific + Adobe are the SAME login as Delta Cuisine -> Era's global
-    # lock already guarantees this brand never runs while DC is running.
-
-    # MASTER PSD TEMPLATE (added 2026-07-13): the real, layered Photoshop source of
-    # truth for every carousel slide look (cover/name-bar, detail+facts, plain
-    # in-situ). Layer groups toggle between slide types — see
-    # CERAM_QUARTZ_CHARTER.md §6 for exactly which groups correspond to which
-    # slide. The `photoshop` MCP server (github.com/alisaitteke/photoshop-mcp,
-    # registered in this account's Claude config) drives real Photoshop against
-    # this file: toggle layer visibility, edit the product-name text layer, place
-    # generated images, then export. NEVER edit the master file in place — always
-    # save the populated result as a new file so offre.psd stays a clean template
-    # for the next carousel.
-    master_psd_template: "offre.psd"
+    # RETIRED 2026-10-16 (Karim): Ceram Quartz no longer uses Magnific, its flows, or
+    # the Photoshop / offre.psd carousel route. Magnific and Adobe are on Delta
+    # Cuisine's company account; mixing the brands there could cause trouble with
+    # that owner. Karim now generates images and video himself; Era only writes
+    # tool-neutral prompts (the `package` lane) and edits his renders (the `edit` lane).
+    # Removed from this block: magnific_space "master space CQ"
+    # (a24c6c83-0bd2-48db-bdfc-49d0e30b7a28), the magnific: flows block (credit
+    # ceiling 600, six approved flows) and master_psd_template "templates\offre.psd".
+    # The offre.psd FILE is untouched on disk. To restore, copy the block back from
+    # brands.yaml.bak_20261016_phase2. era_dispatch enforces this flag: no
+    # mcp__magnific in any CQ run, no Magnific/Photoshop brief text, no adcreative.
+    magnific_allowed: false
 
     # TEXTURE INPUT (mirrors DC's texture-swap pattern, pointed at this brand's
     # own folder): the AI reads slab textures from
-    #   D:\telechargements\ceramequartz\new\TEXTURES
+    #   D:\master folder\ceram quartz\textures   (18 slabs; repointed 2026-10-16)
     # You upload/update this folder manually whenever there are new finitions/
     # slabs. Era/Claude does NOT invent textures — it only uses what's in this
     # folder, same "never provide reference images, read textures only" rule
     # as Delta Cuisine's Assistant #10 pipeline.
-    texture_folder: "D:\\telechargements\\ceramequartz\\new\\TEXTURES"
+    texture_folder: "D:\\master folder\\ceram quartz\\textures"
+    # CONTENT WORKFLOW (added 2026-10-16, vault: Ceram_Content_Workflow). See the
+    # delta_cuisine entry. Karim generates images/video himself — NEVER Magnific here.
+    content_languages: {primary: "Tunisian derja (Arabic script)", secondary: "French", primary_share: 70}
 
     # DESIGN RULES (added 2026-07-29). Until now this brand had NO design_rules
     # block, so build_brief's design_note rendered EMPTY for every Ceram Quartz
@@ -1046,14 +1004,15 @@ brands:
         never: "invent a claim beyond these six, or reorder/substitute the slide-2
           three"
       carousel:
-        # charter §6 — the master template is offre.psd (project root).
+        # charter §6 describes the offre.psd layout. CHANGED 2026-10-16 (Karim): the
+        # Photoshop / Magnific route is OFF for this brand (shared Adobe+Magnific
+        # login with Delta Cuisine). The layout below is still the spec.
         canvas: "1080x1350, 4:5"
-        build_method: "generate the photos in the Ceram Quartz Magnific Space FIRST,
-          then PLACE them into offre.psd's image slots in REAL Photoshop via the `photoshop`
-          MCP. NEVER freehand-recreate the layout in another tool — that is exactly
-          what caused the previous drift."
-        never_overwrite_master: "save the populated result as a NEW file (<item>_slideN.psd
-          or straight to PNG); offre.psd stays a clean template"
+        build_method: "Karim generates the photos himself. Era writes the tool-neutral
+          image prompts and the slide text/layout spec (the `package` lane) and does NOT
+          open Photoshop, use the `photoshop` MCP, or touch offre.psd. How the slides are
+          assembled from Karim's photos is decided with Karim — do not invent a route."
+        never_overwrite_master: "never modify offre.psd or any template file"
         slide_1_cover: "layer groups: `top image` + `Texture` + `Fixed names` (name-bar
           + product-name text) + `FOOTER` + `LOGO` (+ `PRIX` only if a promo is active)"
         slide_2_detail_facts: "`full image` + `fact` (the fixed 3 facts above) + `FOOTER`
@@ -1084,8 +1043,8 @@ brands:
         promo: "same visual system PLUS the price badge (campaign price) and the offer.
           French voice-over allowed HERE ONLY; music ducks under the VO and returns
           after. Repeat the offer/CTA at the end."
-        production: "if produced via Magnific, use the Ceram Quartz Space with Ceram
-          Quartz slab textures — NEVER mix in Delta Cuisine assets or branding"
+        production: "Karim generates the clips himself (never Magnific for this brand),
+          using Ceram Quartz slab textures — NEVER mix in Delta Cuisine assets or branding"
       in_situ_context:
         setting: "modern handleless kitchens — the slab is the HERO, shot as macro
           texture and in situ (charter §1)"
@@ -1249,7 +1208,7 @@ brands:
       # Spec derived from the brand's strategic report (fable_meta.md Step 3).
       audiences:
       - name: "Claude CQ AUDIENCE"
-        source_report: "D:\\telechargements\\ceramequartz\\new\\Rapport_Strategique_Instagram_CeramQuartz.md"
+        source_report: "D:\\master folder\\ceram quartz\\reports\\Rapport_Strategique_Instagram_CeramQuartz.md"
         insight: "62.8% women, 25-44 = 70.7%, Tunisia = 94.8%; CTA/promo posts with
           price+phone drive action; carousels = best format"
         geo: "Tunisia"

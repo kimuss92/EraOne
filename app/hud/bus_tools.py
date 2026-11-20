@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from copy import deepcopy
 from typing import Any
 
 from app.hud import tool_adapter
@@ -17,7 +18,10 @@ from app.hud.bus_const import MAX_TOOLS
 class ToolEventsMixin:
     @staticmethod
     def _public_run(run: dict) -> dict:
-        return {k: v for k, v in run.items() if not k.startswith("_")}
+        public = {k: v for k, v in run.items() if not k.startswith("_")}
+        if "recovery" in public:
+            public["recovery"] = deepcopy(public["recovery"])
+        return public
 
     def tool_started(
         self,
@@ -135,6 +139,17 @@ class ToolEventsMixin:
                     return
                 now_ts = time.time()
                 info = tool_adapter.summarize(tool, args, result, call_id=call_id, ts=now_ts)
+                data = getattr(result, "data", None)
+                recovery = data.get("recovery") if isinstance(data, dict) else None
+                if isinstance(recovery, dict) and recovery.get("strategy") == "same_read_once":
+                    run["recovery"] = deepcopy(recovery)
+                    if recovery.get("attempts") == 2:
+                        note = (
+                            "Read retried once. "
+                            if info["status"] == "success"
+                            else "Read retry did not complete. "
+                        )
+                        info["summary"] = note + info["summary"]
                 dur = (
                     duration_ms if duration_ms is not None else getattr(result, "duration_ms", None)
                 )
@@ -148,6 +163,15 @@ class ToolEventsMixin:
                 )
                 if routed_to and routed_to != tool:
                     run["routedTo"] = routed_to
+                if info["status"] == "awaiting":
+                    # Tie the NEEDS APPROVAL row to the confirmation it armed, so the
+                    # row settles when that confirmation resolves (bus_approval.py).
+                    from app.hud.bus_approval import _live_pending
+
+                    pending = _live_pending()
+                    if pending is not None:
+                        run["_confirmation_id"] = pending.confirmation_id
+                        self._watch_confirmations()
                 self._tool_latency[tool] = int(dur)
                 status = info["status"]
                 etype = {

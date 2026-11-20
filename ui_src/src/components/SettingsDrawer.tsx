@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import Drawer from './Drawer';
+import EmpowerSettings from './EmpowerSettings';
 import { setState, useHud } from '../lib/store';
 import { api } from '../lib/transport';
-import { setSoundsEnabled } from '../lib/sounds';
+import { setSoundsEnabled, useSoundsEnabled } from '../lib/sounds';
 import type { HudSettings } from '../lib/types';
 
 function Toggle({ label, hint, on, onChange, disabled }: { label: string; hint?: string; on: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
@@ -20,6 +21,7 @@ function Toggle({ label, hint, on, onChange, disabled }: { label: string; hint?:
 }
 
 export default function SettingsDrawer() {
+  const sounds = useSoundsEnabled();
   const theme = useHud(s => s.theme);
   const [cfg, setCfg] = useState<HudSettings | null>(null);
   const [city, setCity] = useState('');
@@ -33,7 +35,7 @@ export default function SettingsDrawer() {
     try {
       const next = await api<HudSettings>('/api/settings', { method: 'POST', body: patch });
       setCfg(next);
-      setSoundsEnabled(next.hud_sounds);
+      if ('hud_sounds' in patch) setSoundsEnabled(next.hud_sounds);
       setMsg(next.voice_note || 'Saved.');
       window.dispatchEvent(new Event('era:settings'));
     } catch (e) {
@@ -50,7 +52,7 @@ export default function SettingsDrawer() {
           <>
             <h3 className="micro pt-1 t2">APPEARANCE</h3>
             <Toggle label="Light theme" hint="Also switchable by voice: “light mode” / “dark mode”." on={theme === 'light'} onChange={v => setState({ theme: v ? 'light' : 'dark' })} />
-            <Toggle label="HUD sounds" hint="Subtle cues for wake, tool completion, errors and replies. Era's voice is separate." on={cfg.hud_sounds} onChange={v => save({ hud_sounds: v })} />
+            <Toggle label="HUD sounds" hint="Quiet navigation and completion cues. Silent during listening or speech." on={sounds} onChange={v => { setSoundsEnabled(v); void save({ hud_sounds: v }); }} />
 
             <h3 className="micro pt-3 t2">VOICE</h3>
             <label className="block py-2">
@@ -96,6 +98,7 @@ export default function SettingsDrawer() {
             />
           </>
         )}
+        <EmpowerSettings />
         {msg && <p className="pt-2 text-meta t3">{msg}</p>}
       </div>
     </Drawer>

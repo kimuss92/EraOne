@@ -11,6 +11,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from app.era_live import local_fallback as lf
 from core import local_stt, local_tts
@@ -172,6 +173,51 @@ def test_reconnect_order_ends_the_local_loop():
     stub = Stub()
     utter(stub, "reconnect to the cloud")
     assert stub._local_exit.is_set() and stub.turns == []
+
+
+@pytest.mark.parametrize("device_name,gain", [("Casque (CY03-CB36)", 8), ("Realtek Microphone", 1)])
+def test_backup_capture_uses_pinned_input_and_conditions_confirmed_glasses(
+    monkeypatch, device_name, gain
+):
+    from core.vad import BargeInDetector
+
+    stub = Stub()
+    stub._barge_in = BargeInDetector()
+    stub._local_outage_reason = "claude"
+    stub._local_listener = SimpleNamespace(reset=lambda: None)
+    opened, captured = [], []
+
+    async def prepare(reason):
+        pass
+
+    async def frame(data):
+        captured.append(data)
+        stub._local_exit.set()
+
+    class Stream:
+        def __init__(self, **kwargs):
+            opened.append(kwargs)
+            self.callback = kwargs["callback"]
+
+        def __enter__(self):
+            # Input begins after endpoint identification, as on real hardware.
+            asyncio.get_running_loop().call_soon(
+                self.callback, np.full(1024, 50, dtype="<i2"), 1024, None, None
+            )
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(stub, "_local_prepare", prepare)
+    monkeypatch.setattr(stub, "_local_on_frame", frame)
+    monkeypatch.setattr(lf.voice_input, "resolve_input_index", lambda sd: 7)
+    monkeypatch.setattr(lf.sd, "InputStream", Stream)
+    monkeypatch.setattr(lf.sd, "query_devices", lambda index, kind: {"name": device_name})
+    asyncio.run(stub._run_local_fallback(5, "claude"))
+    assert opened[0]["device"] == 7
+    assert np.frombuffer(captured[0], dtype="<i2")[0] == 50 * gain
+    assert not stub.local_mode_active()
 
 
 def test_standby_only_wakes_on_the_wake_word():
@@ -512,8 +558,6 @@ def test_plain_socket_close_is_not_offline():
 
 
 # ── Gemini-independence (2026-10-09): upstream handover, no Ollama needed ────
-import pytest  # noqa: E402
-
 from app.era_live import local_fallback as lf  # noqa: E402
 from app.era_live.local_fallback import handover_reason  # noqa: E402
 

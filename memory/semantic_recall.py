@@ -90,10 +90,18 @@ COSINE_SPAN = 0.34  # 0.70 - CUT: maps a cosine of 0.70+ to a full 1.0 score
 _QUERY_TIMEOUT_S = 2.5
 _INDEX_TIMEOUT_S = 120.0
 _PROBE_TIMEOUT_S = 1.5
+_META_TIMEOUT_S = 1.0  # /api/tags and /api/ps: metadata only, never loads a model
+_WARMUP_TIMEOUT_S = 90.0  # a cold all-minilm load measured 16.3 s (2026-11-12)
+
+# How long Ollama keeps the model resident after a request. Its default is
+# 5 minutes, and recall is sporadic, so the model was usually COLD by the next
+# question. 46 MB resident is negligible next to the chat models on this box.
+KEEP_ALIVE = os.environ.get("ERA_EMBED_KEEP_ALIVE", "30m")
 
 _lock = threading.Lock()
 _probe: tuple[float, bool] | None = None  # (when, reachable) — see available()
 _PROBE_TTL_S = 60.0
+_warmup_thread: threading.Thread | None = None
 
 
 def _base_url() -> str:
@@ -116,6 +124,67 @@ def _post(path: str, payload: dict, timeout_s: float) -> dict | None:
         return None
 
 
+def _get(path: str, timeout_s: float) -> dict | None:
+    try:
+        with urllib.request.urlopen(f"{_base_url()}{path}", timeout=timeout_s) as resp:  # noqa: S310 (localhost)
+            return json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
+
+
+def _names(listing: dict | None) -> set[str] | None:
+    """Model names from /api/tags or /api/ps, or None when the answer is unusable."""
+    models = (listing or {}).get("models") if isinstance(listing, dict) else None
+    if not isinstance(models, list):
+        return None
+    return {str(m.get("name") or m.get("model") or "") for m in models if isinstance(m, dict)}
+
+
+def _listed(names: set[str] | None) -> bool | None:
+    if names is None:
+        return None
+    wanted = MODEL if ":" in MODEL else f"{MODEL}:latest"
+    return MODEL in names or wanted in names
+
+
+def _model_state() -> tuple[bool | None, bool | None]:
+    """(installed, loaded) from Ollama's metadata endpoints; None = unknown.
+
+    Neither call loads a model, so asking costs milliseconds even when cold.
+    """
+    installed = _listed(_names(_get("/api/tags", _META_TIMEOUT_S)))
+    if installed is False:
+        return False, False
+    return installed, _listed(_names(_get("/api/ps", _META_TIMEOUT_S)))
+
+
+def _start_warmup() -> bool:
+    """Load the model in the background, once; mark recall available on success.
+
+    WHY (2026-11-12): a probe that met a cold model read it as ABSENT and cached
+    that for a minute, so after every Ollama idle-unload Era recalled by words
+    only, silently. The conversation never waits for this: the current turn
+    stays lexical, and the first turn after the load completes is semantic.
+    """
+    global _warmup_thread
+    if _warmup_thread is not None and _warmup_thread.is_alive():
+        return False
+
+    def _run() -> None:
+        global _probe
+        started = time.monotonic()
+        ok = embed(["warm"], timeout_s=_WARMUP_TIMEOUT_S) is not None
+        if ok:
+            _probe = (time.monotonic(), True)
+            print(f"[Memory] [SEMANTIC] {MODEL} loaded in {time.monotonic() - started:.1f}s")
+        else:
+            print(f"[Memory] [SEMANTIC] {MODEL} warm-up failed; recall stays lexical")
+
+    _warmup_thread = threading.Thread(target=_run, name="semantic-recall-warmup", daemon=True)
+    _warmup_thread.start()
+    return True
+
+
 def embed(texts: list[str], *, timeout_s: float = _INDEX_TIMEOUT_S) -> np.ndarray | None:
     """L2-normalised embeddings for `texts`, or None if they cannot be had.
 
@@ -124,7 +193,7 @@ def embed(texts: list[str], *, timeout_s: float = _INDEX_TIMEOUT_S) -> np.ndarra
     """
     if not texts:
         return None
-    out = _post("/api/embed", {"model": MODEL, "input": texts}, timeout_s)
+    out = _post("/api/embed", {"model": MODEL, "input": texts, "keep_alive": KEEP_ALIVE}, timeout_s)
     vectors = (out or {}).get("embeddings")
     if not isinstance(vectors, list) or len(vectors) != len(texts):
         return None
@@ -157,8 +226,21 @@ def available() -> bool:
     now = time.monotonic()
     if _probe is not None and now - _probe[0] < _PROBE_TTL_S:
         return _probe[1]
+    seen = _probe
     try:
-        ok = embed(["probe"], timeout_s=_PROBE_TIMEOUT_S) is not None
+        installed, loaded = _model_state()
+        if installed is False:
+            ok = False  # not pulled: no probe, no warm-up, nothing to wait for
+        elif installed and loaded is False:
+            # Cold, not absent. Do not spend 1.5 s of the conversation on a
+            # probe that cannot succeed; load it in the background instead.
+            _start_warmup()
+            ok = False
+        else:
+            # Loaded, or the metadata endpoints could not say: probe as before.
+            ok = embed(["probe"], timeout_s=_PROBE_TIMEOUT_S) is not None
+            if not ok and installed:
+                _start_warmup()
     except Exception as e:
         # _post already swallows the expected network errors, so reaching here
         # means something unforeseen. "Unavailable" is the only safe reading:
@@ -166,6 +248,10 @@ def available() -> bool:
         # ranker's try/except must be a second line of defence, not the first.
         print(f"[Memory] [SEMANTIC] probe failed, treating as unavailable: {e}")
         ok = False
+    if _probe is not seen:
+        # A warm-up finished while we were deciding: its answer is newer than
+        # ours, and overwriting a fresh True with a stale False would undo it.
+        return _probe[1]
     _probe = (now, ok)
     return ok
 

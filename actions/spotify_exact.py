@@ -240,3 +240,42 @@ def forward(seconds=15) -> dict:
 
 def rewind(seconds=15) -> dict:
     return seek_relative(-abs(float(seconds if seconds is not None else 15)))
+
+
+def confirm_volume_step(direction: str, press, timeout_s: float = 1.2):
+    """Run Spotify's own volume keystroke, then READ the Windows session volume back.
+
+    The Ctrl+Up/Down macro reported "volume increased" without ever looking,
+    so Era could only say she couldn't confirm it (PF-030). Only a read-back
+    that moved the right way becomes a verified result. Anything else returns
+    the macro's own text unchanged, so no outcome is ever upgraded.
+    """
+    import time
+
+    from core.tool_result import ToolResult
+
+    before = get_volume_exact()
+    message = press()
+    if not (isinstance(message, str) and before.get("ok")):
+        return message
+    sign = 1 if direction == "up" else -1
+    deadline = time.monotonic() + timeout_s
+    while True:
+        after = get_volume_exact()
+        if after.get("ok") and (after["percent"] - before["percent"]) * sign > 0:
+            result = ToolResult.ok(
+                f"Spotify volume {direction} to {after['percent']}%, sir.",
+                data={"volume_before": before, "volume_after": after},
+                tool_name="spotify_control",
+                action_name=f"volume_{direction}",
+            )
+            result.verified = True
+            result.verifier_name = "spotify_native"
+            result.verification_status = "VERIFIED"
+            result.verification_message = (
+                f"Windows session volume read back: {before['percent']}% -> {after['percent']}%."
+            )
+            return result
+        if time.monotonic() >= deadline:
+            return message
+        time.sleep(0.15)

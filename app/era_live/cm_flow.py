@@ -7,6 +7,7 @@ and CM report delivery. Operates on self.* state.
 import asyncio
 import re
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +16,8 @@ from app.era_constants import _CM_HANDOFF_WINDOW_S
 from app.hud.events import hud
 from app.notify import _tg_notify
 from app.text_intents import _build_paste_clarify_instruction, _say_exactly
+from core.cancel_registry import CURRENT_TOKEN, REGISTRY, CancelledTask, offload
+from core.tool_result import ToolResult
 
 
 class _CMOutcome:
@@ -26,6 +29,12 @@ class _CMOutcome:
     def __init__(self, error: str) -> None:
         self.error = error
         self.message = ""
+
+
+def _check_cm_cancel() -> None:
+    token = CURRENT_TOKEN.get()
+    if token is not None and token.cancelled():
+        raise CancelledTask("The user cancelled this CM request.")
 
 
 def _speakable_ads_result(text: Any, limit: int = 650) -> str:
@@ -154,11 +163,13 @@ class CMFlowMixin:
                     print(
                         f"[PASTE] lane-unclaimed input classified as {kind}; asking user what to do."
                     )
-                    await self.session.send_realtime_input(
-                        text=_build_paste_clarify_instruction(kind, text)
-                    )
+                    from core.model_reply import send_model_text
+
+                    await send_model_text(self, _build_paste_clarify_instruction(kind, text))
                 else:
-                    await self.session.send_realtime_input(text=text)
+                    from core.model_reply import send_model_text
+
+                    await send_model_text(self, text)
                 hud.request_sent("typed")
                 return
             payload = {"text": text, "task_type": _infer_cm_task_type(text)}
@@ -295,17 +306,41 @@ class CMFlowMixin:
         for half an hour, so it never holds the agent state). "Ended" is all the
         wrapper can truthfully say — the job reports its own outcome aloud."""
         args = {"task_type": payload.get("task_type", "weekly"), "brand": payload.get("brand_key")}
-        cid = hud.tool_started(None, "community_manager", args, background=True, source="cm lane")
+        token, existing = REGISTRY.claim_unique(
+            "cm-" + uuid.uuid4().hex,
+            "cm_request",
+            {**args, "order": str(payload.get("text", "")).strip()},
+        )
+        if existing is not None:
+            return
+        try:
+            cid = hud.tool_started(
+                token.cid, "community_manager", args, background=True, source="cm lane"
+            )
+            REGISTRY.rekey_claim(token, cid)
+        except BaseException:
+            REGISTRY.finish(token.cid)
+            raise
         outcome: Any = None
+        context_token = CURRENT_TOKEN.set(token)
         try:
             # Through the class, so an object that only borrowed _run_cm_flow
             # (tests bind mixin methods one by one) still reaches the job body.
+            _check_cm_cancel()
             await CMFlowMixin._run_cm_flow_job(self, payload, announce=announce)
             outcome = "Job ended — Era reports the outcome"
+        except CancelledTask:
+            outcome = ToolResult.fail(
+                "CM request cancelled; already dispatched effects cannot be undone.",
+                error_type="Cancelled",
+            )
+            hud.tool_cancelled(cid, "Cancellation acknowledged.")
         except BaseException as e:
             outcome = _CMOutcome(f"CM job raised: {type(e).__name__}")
             raise
         finally:
+            CURRENT_TOKEN.reset(context_token)
+            REGISTRY.finish(cid)
             hud.tool_finished(cid, "community_manager", args, outcome)
 
     async def _run_cm_flow_job(self, payload: dict[str, Any], *, announce: bool = True) -> None:
@@ -320,6 +355,7 @@ class CMFlowMixin:
         but the community_manager tool sets it False — Gemini already voices its
         own acknowledgement from the tool result, so a second echo would double up.
         """
+        _check_cm_cancel()
         text = payload["text"]
         task_type = payload.get("task_type", "weekly")
         brand_key = payload.get("brand_key")
@@ -344,25 +380,22 @@ class CMFlowMixin:
 
         try:
             if brand_key:
-                result = await asyncio.to_thread(
-                    ed.run_task,
-                    text,
-                    task_type=task_type,
-                    brand_key=brand_key,
+                result = await offload(
+                    lambda: ed.run_task(text, task_type=task_type, brand_key=brand_key)
                 )
             else:
                 import lane_dispatch
 
-                result = await asyncio.to_thread(
-                    lane_dispatch.handle,
-                    text,
-                    task_type=task_type,
-                    dispatch=True,
+                result = await offload(
+                    lambda: lane_dispatch.handle(text, task_type=task_type, dispatch=True)
                 )
+        except CancelledTask:
+            raise
         except Exception as e:
             self._deliver_or_queue_cm_report(f"That community-management task failed: {e}")
             return
 
+        _check_cm_cancel()
         print(
             f"[CM-FLOW] dispatch result: need_brand={result.get('need_brand')} "
             f"ok={result.get('ok')} brand={result.get('brand')}"
@@ -558,6 +591,9 @@ class CMFlowMixin:
         it wasn't asked a rhetorical question in is the existing, wanted
         behavior.
         """
+        from app.away_calls import automatic_report
+
+        automatic_report(self, text, "background")
         # Standby keeps the live session OPEN but gates its audio, so `self.session`
         # is truthy while Era is effectively deaf and mute. Speaking then feeds the
         # report to a session whose reply is discarded: the 2026-09-19 ads report
@@ -571,4 +607,7 @@ class CMFlowMixin:
         # used to leave only the last one.
         held = self._pending_cm_announcement
         self._pending_cm_announcement = f"{held}\n{text}" if held else text
-        self.ui.write_log(f"SYS: CM report held for next reconnect: {text[:200]}")
+        self.ui.write_log(f"SYS: Task report queued: {text[:200]}")
+        wake = getattr(self, "_request_completion_wake", None)
+        if wake is not None:
+            wake()

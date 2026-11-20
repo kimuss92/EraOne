@@ -3,7 +3,7 @@
 Central synchronous media state manager for Era One (Option 1: standalone).
 
 - Cached dict = intended media state.
-- Lightweight window-title substring verification (no DOM injection).
+- Fresh native/browser playback evidence supersedes intention.
 - Single double-playback sweep called by all three controllers.
 - Never launches an app; only pauses sources already running.
 """
@@ -97,9 +97,28 @@ def set_status(source: str, status: str, **details) -> None:
 
 
 def is_playing(source: str) -> bool:
-    """Query live tool before confirming; NEVER return cached state alone."""
+    """Affirmative playback evidence; callers still verify task outcomes live.
+
+    Fresh native and browser observations supersede intention. After observation
+    starts, unknown state returns False, which does not prove paused playback.
+    Unobserved browser sources retain the legacy intention fallback.
+    """
     # Source-of-truth: live status query supersedes cache per /goal directive.
     # Caller MUST have verified via spotify_control(action='status') or equivalent.
+    from core.system_awareness import get_media_awareness, observed_source_status
+
+    observed = observed_source_status(source.lower().strip())
+    if observed is not None:
+        return observed == "playing"
+    if source.lower().strip() == "spotify" and get_media_awareness().has_observed():
+        # Unknown/removed telemetry must not resurrect an old requested status.
+        # False means no affirmative evidence, not verified paused playback.
+        return False
+    if source.lower().strip() in ("youtube", "netflix"):
+        from core.browser_media import get_browser_media_cache
+
+        if get_browser_media_cache().has_observed(source.lower().strip()):
+            return False
     with _LOCK:
         return MEDIA_STATE.get(source.lower().strip(), {}).get("status") == "playing"
 
@@ -110,14 +129,10 @@ def mark_paused(source: str, player=None) -> None:
 
 # ── state reconciliation bridge (GSMTC → MEDIA_STATE) ────────────────────────
 def get_live_spotify_status() -> dict:
-    """Real-time query via spotify_control(status). Source of truth over MEDIA_STATE."""
-    try:
-        from app.era_live.tool_dispatch import dispatch
+    """Read the OS directly; never fall back to requested/cached playback."""
+    from core.live_app_state import collect_live_state
 
-        # Direct tool query supersedes assumed/visual/cache per goal step 3.
-        return dispatch({"name": "spotify_control", "arguments": {"action": "status"}})
-    except Exception:
-        return {}
+    return collect_live_state("spotify")
 
 
 def reconcile_from_os_sessions(sessions: list[dict]) -> None:
@@ -142,44 +157,41 @@ def _cdp_pause_video(domain: str) -> bool:
         from actions.browser_control import get_browser_session
 
         sess = get_browser_session("brave", connect_only=True)
-        script = (
-            "const v=document.querySelector('video'); if(v){v.pause(); return true;} return false;"
-        )
+        script = "const v=document.querySelector('video'); if(v){v.pause(); return v.paused === true;} return false;"
         result = sess.run(sess.evaluate_background_media(domain, script))
-        return "true" in str(result).lower()
+        return result is True or str(result).strip().lower() == "true"
     except Exception:
         return False
 
 
-def _pause_source(source: str, player=None) -> None:
+def _pause_source(source: str, player=None) -> bool:
     try:
         if source == "spotify":
             # Strict process check: only pause if Spotify.exe is actually running
             if not _is_spotify_process_running():
-                return  # Spotify not running, nothing to pause
+                return False  # absence of a process is not a paused read-back
             # State check: only pause if currently playing
             if not is_playing("spotify"):
-                return  # Spotify not playing, nothing to pause
+                from core.system_awareness import observed_source_status
+
+                return observed_source_status("spotify") == "paused"
             # Both checks passed - safely pause Spotify
-            from actions.spotify_control import spotify_control
+            from actions.spotify_control import APPCOMMAND_MEDIA_PAUSE, _send_spotify_command
 
-            spotify_control({"action": "pause_if_running_only"}, player=player)
+            # The public legacy pause helper may send a global toggle and write
+            # intent before verification. Exclusivity must stay targeted.
+            if not _send_spotify_command(APPCOMMAND_MEDIA_PAUSE):
+                return False
+            from core.system_awareness import observed_source_status
+
+            return observed_source_status("spotify") == "paused"
         elif source == "youtube":
-            if source_window_present("youtube"):
-                from actions.youtube_video import youtube_video
-
-                youtube_video({"action": "youtube_pause"}, player=player)
-            else:
-                _cdp_pause_video("youtube.com")
+            return _cdp_pause_video("youtube.com")
         elif source == "netflix":
-            if source_window_present("netflix"):
-                from actions.netflix_control import netflix_control
-
-                netflix_control({"action": "pause"}, player=player)
-            else:
-                _cdp_pause_video("netflix.com")
+            return _cdp_pause_video("netflix.com")
     except Exception as exc:
         log("MediaState", f"pause {source} skipped: {exc}", player)
+    return False
 
 
 # ── single-playback enforcement ──────────────────────────────────────────────
@@ -191,9 +203,15 @@ def enforce_single_playback(active: str, player=None) -> None:
     set_status(active, "playing")
     for source in _VALID:
         if source != active:
-            _pause_source(source, player=player)
-            set_status(source, "paused")
-    log("MediaState", f"single-playback → {active}", player)
+            if _pause_source(source, player=player):
+                set_status(source, "paused")
+            else:
+                log("MediaState", f"pause {source} unverified; intended state retained", player)
+    log(
+        "MediaState",
+        f"single-playback requested → {active}; only confirmed pauses recorded",
+        player,
+    )
 
 
 def post_action_sweep(player=None) -> str | None:
@@ -204,8 +222,13 @@ def post_action_sweep(player=None) -> str | None:
         return None
     verified = [s for s in playing if s == "spotify" or source_window_present(s)] or playing
     keep = verified[0]
-    for source in _VALID:
+    unresolved = []
+    for source in playing:
         if source != keep:
-            _pause_source(source, player=player)
-            set_status(source, "paused")
+            if _pause_source(source, player=player):
+                set_status(source, "paused")
+            else:
+                unresolved.append(source)
+    if unresolved:
+        return f"Double-playback unresolved → kept {keep}; pause unverified for {', '.join(unresolved)}."
     return f"Double-playback resolved → kept {keep}."

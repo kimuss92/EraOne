@@ -24,7 +24,7 @@ from core.ai_provider import DEFAULT_FAST_MODEL, generate_json
 # Routing defaults to offline rules. Model-assisted CM classification is an
 # explicit opt-in through ERA_LANE_PROVIDER_ORDER (e.g. "ollama,gemini").
 _DEFAULT_PROVIDER_ORDER = "rules"
-_DEFAULT_LOCAL_MODEL = "qwen2.5-coder:7b"
+_DEFAULT_LOCAL_MODEL = "qwen3.5:9b"
 
 
 def _provider_order() -> list[str]:

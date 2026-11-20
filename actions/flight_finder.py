@@ -58,8 +58,9 @@ API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    from core.protected_config import read_config
+
+    return read_config(API_CONFIG_PATH)["gemini_api_key"]
 
 
 _MONTH_MAP: dict[str, int] = {
@@ -174,14 +175,10 @@ def _build_google_flights_url(
     else:
         trip = f"Flights+from+{origin}+to+{destination}+on+{date}"
 
-    return (
-        f"{base}"
-        f"?q={trip}"
-        f"&tfs=CBwQAhoeEgoyMDI1LTAzLTE1agcIARIDSVNUcgcIARIDTEhS"
-        f"&curr=USD"
-        f"&cabin={cabin_code}"
-        f"&adults={passengers}"
-    )
+    # No `tfs=` blob: a hardcoded one (decoded: 2025-03-15, IST -> LHR) sat here and
+    # Google Flights let it override `q`, so every search opened an old Istanbul ->
+    # London page (found live 2026-11-17). `q` alone carries route and date.
+    return f"{base}?q={trip}&curr=USD&cabin={cabin_code}&adults={passengers}"
 
 
 def _search_flights_browser(

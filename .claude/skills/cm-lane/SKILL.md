@@ -180,6 +180,38 @@ Offline test suite: `tools/test_music_generate.py` (live Lyria call is a
 manual opt-in via `ERA_LIVE_TESTS=1`, never runs in the normal suite; the key
 itself resolves through `get_music_api_key()`, config first).
 
+### Content-workflow lanes: `package` and `edit` (2026-10-16)
+
+Karim generates and renders images/video himself. Vault: `Content_Workflow_Standard`
+(+ the brand `*_Content_Workflow` notes). Two lanes in `era_dispatch`, neither can
+generate or publish (no Magnific/Photoshop/Composio; scoped Bash for `edit`):
+
+- **`package`** — prompts (exact texture names listed BY CODE from `texture_folder`),
+  animation prompts, on-screen text, derja AND French voiceover draft, caption draft;
+  writes `<project_dir>\reports\<slug>_package.md` with `status: awaiting_gate_a`
+  and STOPS. Gate A approval goes through the existing `approve` lane.
+- **`edit`** — `validate_edit_inputs()` runs BEFORE any spawn: the render must exist
+  inside the brand's `renders` folder; every other path in the order must be a music
+  file or inside the brand's `final`/`remotion`; another brand's folder, UNC, `..`,
+  `%VAR%` and `~` are refused. Builds in Remotion, ffmpeg mux, output to `final` as a
+  draft; user-supplied music only, never generates music.
+- **`edit` Telegram push (2026-10-27)** — the lane has no Python, so the model cannot
+  run `era_telegram.py`. `run_task` calls `_push_edit_drafts()` itself, only after a
+  clean exit: it scans THIS brand's `final` folder (new media files, no symlinks, no
+  "(approved)" names, max 3), sends them to the owner chat as DRAFT review copies
+  (oversize video -> 540 px preview from `runtime/tg_preview`, else a text with the
+  path) and appends one line to the result. Never raises; `ERA_EDIT_PUSH=0` turns it
+  off. Tests: `tools/test_edit_push.py`.
+- Folders default to `<project_dir>\renders|final|remotion` (override with
+  `renders_dir`/`final_dir`/`remotion_dir`); languages come from `content_languages`.
+- **Ceram Quartz: `magnific_allowed: false`.** No `mcp__magnific`/`mcp__photoshop` on
+  any lane (strip + `--disallowedTools`), no flows/PSD brief text, `adcreative` refused,
+  no failover onto another brand's Claude profile (except `ads`). Backup of the old
+  block: `brands.yaml.bak_20261016_phase2`.
+- Routing: `app/cm_intents.py` (`_EDIT_INTENT` beats revise/approve/publish — fewer
+  tools is the safe direction) and a `tool_dispatch` override so a model-passed
+  `weekly` cannot hijack a package/edit order. Tests: `tools/test_content_workflow.py`.
+
 ### Meta Ads (paid campaigns)
 
 `task_type="ads"` is a **separate brief** (`era_dispatch._build_ads_brief()`),

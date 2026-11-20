@@ -42,8 +42,80 @@ def _live_pending() -> Any:
         return None
 
 
+# How a resolved confirmation settles the Live Tasks row that asked for it. Without
+# this the row kept its NEEDS APPROVAL badge forever after a yes, a no or an expiry
+# (2026-10-16), so the panel contradicted both the header and Era.
+_SETTLE = {
+    "consumed": ("success", "Approved."),
+    "cancelled": ("cancelled", "Declined — nothing was done."),
+    "expired": ("cancelled", "Approval expired — nothing was done."),
+    "replaced": ("cancelled", "Superseded by a newer request."),
+}
+_SETTLE_UNKNOWN = ("cancelled", "No longer waiting for approval.")
+
+
 class ApprovalMixin:
     _approval: dict | None = None
+    _confirmation_outcomes: dict[str, str] | None = None
+    _confirmation_unsubscribe: Any = None
+
+    def _watch_confirmations(self) -> None:
+        """Subscribe once to the store, so a resolution settles the HUD at once
+        instead of at the next APPROVAL_RECHECK_S re-read (never raises)."""
+        if self._confirmation_unsubscribe is not None:
+            return
+        try:
+            from core.pending_confirmation import get_shared_store
+
+            self._confirmation_unsubscribe = get_shared_store().subscribe(
+                self._on_confirmation_event
+            )
+        except Exception:
+            pass
+
+    def _on_confirmation_event(self, event: dict) -> None:
+        """Store lifecycle callback; runs outside the store's lock."""
+        try:
+            state = event.get("state")
+            if state == "stored":
+                return
+            with self._lock:
+                outcomes = self._confirmation_outcomes
+                if outcomes is None:
+                    outcomes = self._confirmation_outcomes = {}
+                outcomes[str(event.get("confirmation_id") or "")] = str(state)
+                while len(outcomes) > 32:
+                    outcomes.pop(next(iter(outcomes)))
+                self._sync_approval()
+                self._poke()
+        except Exception:
+            pass
+
+    def _settle_awaiting_runs(self, live_id: str | None) -> None:
+        """Close every NEEDS APPROVAL row whose confirmation is no longer live.
+
+        Isolated: a fault here must never stop _sync_approval mirroring the store."""
+        try:
+            self._settle_awaiting_runs_unsafe(live_id)
+        except Exception:
+            pass
+
+    def _settle_awaiting_runs_unsafe(self, live_id: str | None) -> None:
+        outcomes = self._confirmation_outcomes or {}
+        for cid, run in getattr(self, "_tools", {}).items():
+            conf = run.get("_confirmation_id")
+            if run.get("status") != "awaiting" or not conf or conf == live_id:
+                continue
+            status, summary = _SETTLE.get(outcomes.get(conf, ""), _SETTLE_UNKNOWN)
+            run.update(status=status, summary=summary, finishedAt=time.time())
+            self._emit(
+                "tool.completed" if status == "success" else "tool.cancelled",
+                toolName=run["tool"],
+                toolCallId=cid,
+                label=run["label"],
+                message=summary,
+                metadata=self._public_run(run),
+            )
 
     def approval_public(self) -> dict | None:
         a = self._approval
@@ -69,6 +141,7 @@ class ApprovalMixin:
         """Make the HUD's approval match the store. Call under the bus lock."""
         try:
             p = _live_pending()
+            self._settle_awaiting_runs(p.confirmation_id if p is not None else None)
             a = self._approval
             now = time.monotonic()
             if a is not None and p is not None and p.confirmation_id == a["id"]:

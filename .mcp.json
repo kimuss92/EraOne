@@ -21,7 +21,7 @@
       "autoStart": false
     },
     "context7": {
-      "type": "stdio",
+      "type": "http",
       "command": "cmd",
       "args": [
         "/c",
@@ -29,7 +29,8 @@
         "-y",
         "@upstash/context7-mcp"
       ],
-      "env": {}
+      "env": {},
+      "url": "https://mcp.context7.com/mcp"
     },
     "photoshop": {
       "type": "stdio",
@@ -43,6 +44,10 @@
       "env": {
         "LOG_LEVEL": "1"
       }
+    },
+    "exa": {
+      "type": "http",
+      "url": "https://mcp.exa.ai/mcp"
     }
   }
 }

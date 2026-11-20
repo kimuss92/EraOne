@@ -3,7 +3,6 @@ Uses existing Gemini grounded search (same key as web_search.py).
 No new dependencies; safe against quota errors (retries transient 429/503).
 """
 
-import json
 import time
 
 from core.utils import get_base_dir
@@ -15,8 +14,9 @@ TRANSIENT = ("429", "resource_exhausted", "quota", "rate limit", "500", "502", "
 
 
 def _key():
-    with open(CONFIG) as f:
-        return json.load(f)["gemini_api_key"]
+    from core.protected_config import read_config
+
+    return read_config(CONFIG)["gemini_api_key"]
 
 
 def inspire(query="open source python desktop AI assistant agent features 2026", retries=2):

@@ -45,6 +45,16 @@ from actions.page_refs import hold_if_sensitive
 from core.utils import get_os, log
 from core.win_subprocess import NO_WINDOW
 
+# PF-067: seconds of no browser use before the CDP attachment is released, and how
+# often that is checked. Env ERA_BROWSER_IDLE_RELEASE_S overrides (0 = never).
+_IDLE_CHECK_S = 5.0
+try:
+    IDLE_RELEASE_S = float(os.environ.get("ERA_BROWSER_IDLE_RELEASE_S", "45"))
+except ValueError:
+    IDLE_RELEASE_S = 45.0
+if IDLE_RELEASE_S <= 0:
+    IDLE_RELEASE_S = float("inf")
+
 _OS = get_os()  # "windows" | "darwin" | "linux"
 
 # How long a deliberate tab selection wins over "whatever tab looks active"
@@ -410,6 +420,22 @@ class _BrowserSession:
         # Serialises driver restarts: several tool threads can notice a dead
         # driver at once, and only one of them should replace it.
         self._driver_lock = threading.Lock()
+        self._media_observer = None
+        # PF-067: when Era last used the browser, and how many calls run now.
+        self._last_used = time.monotonic()
+        self._inflight = 0
+
+    def _schedule_media_observation(self) -> None:
+        loop = getattr(self, "_loop", None)
+        if loop is None or not loop.is_running() or not getattr(self, "_cdp_ready", False):
+            return
+        from core.browser_media import BrowserMediaObserver
+
+        if getattr(self, "_media_observer", None) is None:
+            self._media_observer = BrowserMediaObserver(self.browser_name)
+        observer = self._media_observer
+        for page in list(self._pages):
+            loop.call_soon_threadsafe(observer.track, page)
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -531,6 +557,30 @@ class _BrowserSession:
 
     async def _async_init(self):
         self._pw = await async_playwright().start()
+        self._idle_task = asyncio.ensure_future(self._idle_release_loop())
+
+    async def _idle_release_loop(self) -> None:
+        """PF-067: let go of the user's browser when Era is not using it.
+
+        Live 2026-11-20: with Era running, Cloudflare's "verifying you are human"
+        check on Brave never finished; with Era closed it did. Era attaches to the
+        user's own Brave over CDP and, until now, kept that attachment (and the
+        automation hooks on every tab) for as long as she ran. Cloudflare
+        Turnstile detects it. After IDLE_RELEASE_S without a browser call the
+        attachment is dropped (the same clean detach as a driver restart; Brave
+        and its tabs are untouched) and the next call reattaches by itself.
+        """
+        while True:
+            await asyncio.sleep(_IDLE_CHECK_S)
+            try:
+                if self._cdp_ready and self.idle_for_release():
+                    log("Browser", "Idle - releasing the CDP link so sites see a normal browser.")
+                    await self._restart_driver("idle release")
+            except Exception as e:
+                log("Browser", f"Idle release skipped: {type(e).__name__}: {e}")
+
+    def idle_for_release(self) -> bool:
+        return self._inflight == 0 and time.monotonic() - self._last_used >= IDLE_RELEASE_S
 
     def run(self, coro, timeout: int = 60) -> str:
         """Run `coro` on the session loop, surviving a dead or hung driver.
@@ -547,6 +597,14 @@ class _BrowserSession:
             raise RuntimeError(f"Session '{self.browser_name}' not started.")
         self._ensure_driver()
         retry = rebuild_call(self, coro)
+        self._inflight += 1
+        try:
+            return self._run_guarded(coro, timeout, retry)
+        finally:
+            self._inflight -= 1
+            self._last_used = time.monotonic()
+
+    def _run_guarded(self, coro, timeout: int, retry):
         try:
             result = self._submit(coro, timeout)
         except concurrent.futures.TimeoutError:
@@ -655,6 +713,10 @@ class _BrowserSession:
             asyncio.run_coroutine_threadsafe(self._async_close(), self._loop).result(10)
 
     async def _async_close(self):
+        observer = getattr(self, "_media_observer", None)
+        if observer is not None:
+            observer.close()
+            self._media_observer = None
         if self._context:
             try:
                 await self._context.close()
@@ -719,6 +781,10 @@ class _BrowserSession:
 
     def _drop_stale_connection(self) -> None:
         """Forget a dead CDP attachment so the next _launch() reattaches cleanly."""
+        observer = getattr(self, "_media_observer", None)
+        if observer is not None:
+            observer.close()
+            self._media_observer = None
         self._context = None
         self._browser_obj = None
         self._pages = []
@@ -831,6 +897,7 @@ class _BrowserSession:
                 await self._restore_native_downloads(p)
 
             self._cdp_ready = True
+            self._schedule_media_observation()
             log("Browser", f"CDP connected: {len(self._pages)} existing pages")
             log("Browser", "🔗 CDP Link active on port 9222.")
             return
@@ -935,8 +1002,18 @@ class _BrowserSession:
             import psutil
 
             names = self._browser_exe_names()
-            for proc in psutil.process_iter(["name"]):
+            for proc in psutil.process_iter(["name", "cmdline"]):
                 if (proc.info.get("name") or "").lower() in names:
+                    args = proc.info.get("cmdline") or []
+                    # Renderer children and isolated headless automation do not
+                    # hold the user's default browser profile. In particular,
+                    # agent-browser's port=0 instance must not prevent launch.
+                    if any(arg.startswith("--type=") for arg in args):
+                        continue
+                    if any(arg.split("=", 1)[0] == "--headless" for arg in args) and any(
+                        arg.split("=", 1)[0] == "--user-data-dir" for arg in args
+                    ):
+                        continue
                     return True
         except Exception:
             pass
@@ -1016,6 +1093,7 @@ class _BrowserSession:
             self._pages.append(page)
             page.on("close", self._on_page_close)
             page.on("framenavigated", self._on_page_updated)
+            self._schedule_media_observation()
 
             # Reset Playwright's default light-scheme emulation on any newly
             # adopted tab too (runs for both init-time and later tabs; the call
@@ -1034,6 +1112,9 @@ class _BrowserSession:
                 asyncio.run_coroutine_threadsafe(self._restore_native_downloads(page), self._loop)
 
     def _on_page_close(self, page: Page):
+        observer = getattr(self, "_media_observer", None)
+        if observer is not None:
+            observer.remove(page)
         if page in self._pages:
             self._pages.remove(page)
             if self._active >= len(self._pages) and self._pages:
@@ -1044,6 +1125,7 @@ class _BrowserSession:
     def _on_page_updated(self, frame=None):
         """Event handler for page URL or title updates."""
         try:
+            self._schedule_media_observation()
             if self._loop and self._loop.is_running():
                 asyncio.run_coroutine_threadsafe(
                     self._sort_tabs_by_visual_position(self._pages), self._loop

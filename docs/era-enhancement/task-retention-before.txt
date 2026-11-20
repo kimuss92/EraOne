@@ -1,0 +1,11 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+______________ test_history_retention_never_deletes_active_tasks ______________
+tools\test_task_store.py:21: in test_history_retention_never_deletes_active_tasks
+    assert store.get_task(tid) is not None
+E   AssertionError: assert None is not None
+E    +  where None = get_task('pending')
+E    +    where get_task = <agent.task_store.TaskStore object at 0x00000211A7E3CE10>.get_task
+=========================== short test summary info ===========================
+FAILED tools/test_task_store.py::test_history_retention_never_deletes_active_tasks
+1 failed in 0.61s

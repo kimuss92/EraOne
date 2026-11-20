@@ -212,6 +212,32 @@ class TestTurnLoop:
         assert "2 steps left" in prompts[runtime.MAX_STEPS - 2]
         assert "LAST step" in prompts[runtime.MAX_STEPS - 1]
 
+    def test_a_bot_may_carry_its_own_step_budget(self, vault):
+        """PF-054: live 2026-11-19 Cody spent the default 6 steps re-reading and never staged."""
+        from dataclasses import replace
+
+        searches = [call("vault.search", query=f"q{i}") for i in range(9)]
+        t, llm = crew({"drew": [*searches, final("ok")]})
+        t.register("drew", replace(t._bots["drew"], max_steps=9))
+        res = ask(t, "drew")
+        assert len(res.data["capabilities_used"]) == 9
+        prompts = [user for _, user in llm.calls]
+        assert "STEP BUDGET" not in prompts[5]  # the default budget no longer applies
+        assert "LAST step" in prompts[8]
+
+    def test_a_bot_that_can_stage_is_told_to_stage_not_to_give_up(self):
+        from crew import step_budget
+
+        stage_note = step_budget.note(5, 6, can_stage=True)
+        assert "call source.stage NOW" in stage_note
+        assert "source.stage" not in step_budget.note(5, 6)  # others keep the plain warning
+        assert step_budget.note(1, 6, can_stage=True) == ""
+
+    def test_cody_has_room_for_a_fix_and_a_retry(self):
+        cody = load_specs().specs["cody"]
+        assert cody.max_steps == 10
+        assert "FAILED verification" in cody.prompt
+
     def test_a_wrap_up_that_still_calls_a_capability_runs_nothing(self, vault):
         before = note(vault)
         searches = [call("vault.search", query=f"q{i}") for i in range(runtime.MAX_STEPS)]
@@ -839,7 +865,7 @@ class TestBreakItOnPurpose:
         t.register("drew", load_specs().specs["drew"])
         res = ask(t, "drew")
         assert_crew_failure_shape(res)
-        assert res.error_type == "BotError" and note(vault) == before
+        assert res.error_type == "LLMUnavailable" and note(vault) == before
         # and the transport is still usable afterwards:
         t._llm = ScriptedLLM({"drew": [final("back")]})
         assert ask(t, "drew").message == "back"
@@ -870,6 +896,28 @@ class TestBreakItOnPurpose:
                 assert res.error_type in {"BadRequest", "UnknownBot", "LLMUnavailable"}
             res = runtime.run_tool({"action": "ask", "bot": "bob", "task": "hi"})
             assert res.error_type == "UnknownBot"
+            # A one-word unknown action is still refused, never guessed at.
+            assert runtime.run_tool({"action": "explode", "task": "x"}).error_type == "BadRequest"
+        finally:
+            runtime.reset_transport(None)
+
+    def test_a_sentence_in_the_action_field_is_asked_as_the_task(self, vault):
+        # 2026-11-06 live: action="Ask them to acknowledge this connection check." was
+        # refused as an unsupported action, so the user's connection check never ran.
+        seen = []
+
+        class Rec:
+            def dispatch(self, bot, turn):
+                seen.append((bot, turn.task))
+                return runtime.ToolResult.ok(message="ack")
+
+        runtime.reset_transport(Rec(), {})
+        try:
+            res = runtime.run_tool(
+                {"bot": "laura", "action": "Ask them to acknowledge this connection check."}
+            )
+            assert res.success
+            assert seen == [("laura", "Ask them to acknowledge this connection check.")]
         finally:
             runtime.reset_transport(None)
 
@@ -911,7 +959,9 @@ class TestBreakItOnPurpose:
         [x.join() for x in threads]
         assert note(vault, "00 - Inbox/Scratch.md").count("by drew -->") == 8
 
-    def test_resetting_the_transport_recovers_the_tool(self, vault):
+    def test_resetting_the_transport_recovers_the_tool(self, vault, monkeypatch):
+        # Exercise factory reset independently of the user's Hermes service.
+        monkeypatch.setenv("ERA_CREW_TRANSPORT", "in_process")
         runtime.reset_transport(None)
         first = runtime.get_transport()
         assert first.health().ok and first.capabilities("laura")

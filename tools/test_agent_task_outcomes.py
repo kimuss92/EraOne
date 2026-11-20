@@ -34,18 +34,29 @@ def test_invalid_plan_is_failed_not_completed(monkeypatch):
 
 def test_agent_task_planning_timeout_is_reported_without_hanging(monkeypatch):
     import asyncio
-    import time
+    import threading
+
+    release, finished = threading.Event(), threading.Event()
+
+    def blocked_plan(goal):
+        release.wait(5)
+        finished.set()
+        return {"steps": []}
 
     monkeypatch.setattr(ex, "PLAN_TIMEOUT_SECONDS", 0.01, raising=False)
-    monkeypatch.setattr(ex, "create_plan", lambda goal: time.sleep(0.2) or {"steps": []})
+    monkeypatch.setattr(ex, "create_plan", blocked_plan)
 
-    started = time.monotonic()
-    result = asyncio.run(ex.AgentExecutor().execute("brief"))
+    async def run():
+        return await asyncio.wait_for(ex.AgentExecutor().execute("brief"), timeout=1)
 
-    assert time.monotonic() - started < 0.1
-    assert isinstance(result, ToolResult)
-    assert not result.success
-    assert result.error_type == "PlanningTimeout"
+    try:
+        result = asyncio.run(run())
+        assert not finished.is_set(), "the executor must return while its model call is blocked"
+        assert isinstance(result, ToolResult)
+        assert not result.success
+        assert result.error_type == "PlanningTimeout"
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize(
@@ -315,18 +326,29 @@ def test_awaiting_approval_keeps_confirmation_id_in_status(monkeypatch, plan):
 
 def test_agent_task_replanning_timeout_is_reported_without_hanging(monkeypatch, plan):
     import asyncio
-    import time
+    import threading
+
+    release, finished = threading.Event(), threading.Event()
+
+    def blocked_replan(*args):
+        release.wait(5)
+        finished.set()
+        return plan
 
     monkeypatch.setattr(ex, "PLAN_TIMEOUT_SECONDS", 0.01, raising=False)
     monkeypatch.setattr(ex, "_call_tool_result", lambda *a: ToolResult.fail("Search unavailable."))
     monkeypatch.setattr(ex, "analyze_error", lambda *a, **k: {"decision": "replan"})
-    monkeypatch.setattr(ex, "replan", lambda *args: time.sleep(0.2) or plan)
+    monkeypatch.setattr(ex, "replan", blocked_replan)
 
-    started = time.monotonic()
-    result = asyncio.run(ex.AgentExecutor().execute("brief"))
+    async def run():
+        return await asyncio.wait_for(ex.AgentExecutor().execute("brief"), timeout=1)
 
-    assert time.monotonic() - started < 0.1
-    assert isinstance(result, ToolResult)
-    assert not result.success
-    assert result.error_type == "PlanningTimeout"
-    assert "replanning timed out" in result.message
+    try:
+        result = asyncio.run(run())
+        assert not finished.is_set(), "the executor must return while its model call is blocked"
+        assert isinstance(result, ToolResult)
+        assert not result.success
+        assert result.error_type == "PlanningTimeout"
+        assert "replanning timed out" in result.message
+    finally:
+        release.set()

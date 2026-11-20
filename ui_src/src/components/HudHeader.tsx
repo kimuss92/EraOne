@@ -14,8 +14,11 @@ import {
   X,
 } from 'lucide-react';
 import ModelIndicator from './ModelIndicator';
+import CodeModelSelector from './CodeModelSelector';
+import { useCodeMode } from '../lib/codemode';
 import { useDevelopment, working } from '../lib/development';
 import { actions, isQtHost } from '../lib/transport';
+import { useBorderless, windowAction } from '../lib/windowFrame';
 import { DOCK_QUERY, setState, togglePanel, useHud, useMedia } from '../lib/store';
 
 function Clock() {
@@ -36,13 +39,14 @@ function Clock() {
   );
 }
 
-function Segment({ label, value, sub, tone = 't1', onClick, title }: {
+function Segment({ label, value, sub, tone = 't1', onClick, title, active = false }: {
   label: string;
   value: string;
   sub?: string;
   tone?: string;
   onClick?: () => void;
   title?: string;
+  active?: boolean;
 }) {
   const body = (
     <>
@@ -58,8 +62,14 @@ function Segment({ label, value, sub, tone = 't1', onClick, title }: {
       {body}
     </button>
   ) : (
-    <div className="seg" title={title}>{body}</div>
+    <div className="seg" title={title} data-active={active}>{body}</div>
   );
+}
+
+/** Empty header space (not a control or a status block) acts as the title bar. */
+function grip(target: EventTarget, header: EventTarget): boolean {
+  const el = target as HTMLElement;
+  return el === header || el.classList?.contains('flex-1') || (Boolean(el.closest?.('.hud-header-left')) && !el.closest?.('button'));
 }
 
 function useFullscreen(): [boolean, () => void] {
@@ -82,6 +92,7 @@ interface Props {
 }
 
 function HudHeader({ toolCount, voice }: Props) {
+  const { state: codeMode } = useCodeMode();
   const { jobs, stale } = useDevelopment();
   const pending = jobs.filter(j => j.state === 'awaiting_approval').length;
   const active = !stale && jobs.some(working);
@@ -97,30 +108,43 @@ function HudHeader({ toolCount, voice }: Props) {
   const showRight = useHud(s => s.showRight);
   const overlay = useHud(s => s.overlay);
   const approval = useHud(s => s.approval);
+  const cockpit = useHud(s => Boolean(s.widgetLayout));
   const leftOn = useMedia(DOCK_QUERY.left) ? showLeft : overlay === 'left';
   const rightOn = useMedia(DOCK_QUERY.right) ? showRight : overlay === 'right';
   const [fs, toggleFs] = useFullscreen();
+  const frameless = useBorderless().active && !fs;
+  const winCtl = (a: 'minimize' | 'maximize' | 'close') => (isQtHost ? actions.windowControl(a) : windowAction(a));
 
   const linkUp = link === 'online';
   const modelOk = conn.kind === 'connected' || conn.kind === 'local';
   const micLabel = !linkUp ? 'UNKNOWN' : standby ? 'STANDBY' : micActive ? 'MIC ACTIVE' : 'MIC OFF';
 
   return (
-    <header className="hud-header relative z-[var(--z-header)] flex shrink-0 items-center gap-4 px-4">
-      <div className="flex items-center gap-3 pr-2" title={linkUp ? 'Connected to the local backend' : 'Local backend unreachable'}>
-        <span className={`brand-dot ${linkUp ? '' : 'brand-dot-off'}`} aria-hidden="true" />
+    <header className={`hud-header relative z-[var(--z-header)] flex shrink-0 items-center gap-4 px-4 ${cockpit ? 'hud-header-centered' : ''}`}
+      // Borderless window: the header's empty space moves the window, a
+      // double-click maximizes / restores it (like the title bar it replaces).
+      onPointerDown={e => { if (frameless && e.button === 0 && grip(e.target, e.currentTarget)) windowAction('drag'); }}
+      onDoubleClick={e => { if (frameless && grip(e.target, e.currentTarget)) windowAction('maximize'); }}>
+      {/* In the command center the wordmark lives above the agent state
+          (CoreStage); the left of the header is kept empty (reserved by the
+          user), showing LINK DOWN only while the backend is unreachable. */}
+      <div className="hud-header-left flex items-center gap-3 pr-2" title={linkUp ? 'Connected to the local backend' : 'Local backend unreachable'}>
+        {!cockpit && <span className={`brand-dot ${linkUp ? '' : 'brand-dot-off'}`} aria-hidden="true" />}
         <div className="leading-none">
-          <div className="whitespace-nowrap text-title font-semibold tracking-[0.28em] t1">ERA ONE</div>
+          {!cockpit && <div className="whitespace-nowrap text-title font-semibold tracking-[0.28em] t1">ERA ONE</div>}
           {!linkUp && <div className="micro mt-1 text-[var(--bad)]">LINK DOWN</div>}
         </div>
       </div>
 
+      <div className="hud-header-center flex min-w-0 items-center gap-4">
+      <CodeModelSelector />
       <div className="seg min-w-0">
         <span className="micro">MODEL</span>
         <ModelIndicator model={model} connected={linkUp} catalog={catalog} selected={selected} onSelect={actions.selectModel} />
       </div>
       <Segment
         label="VOICE"
+        active={linkUp && micActive && !standby}
         value={voice && linkUp ? voice.tts : 'N/A'}
         sub={micLabel}
         tone={linkUp && micActive && !standby ? 't1' : 'text-[var(--warn)]'}
@@ -136,6 +160,7 @@ function HudHeader({ toolCount, voice }: Props) {
       </div>
       <Segment
         label="CONNECTION"
+        active={linkUp}
         value={linkUp ? conn.label || 'Connecting' : 'Reconnecting…'}
         sub={linkUp && rtt !== null ? `${rtt} ms` : undefined}
         tone={!linkUp ? 'text-[var(--bad)]' : modelOk ? 'text-[var(--ok)]' : 'text-[var(--warn)]'}
@@ -147,20 +172,22 @@ function HudHeader({ toolCount, voice }: Props) {
           <ShieldQuestion className="h-3 w-3" aria-hidden="true" /> ACTION REQUIRED
         </span>
       )}
+      </div>
       <div className="flex-1" />
+      <div className="hud-header-right flex items-center gap-4">
       <button className={`dev-trigger ${active ? 'dev-trigger-active' : ''}`} aria-label="Development" title="Inspect source, stage improvements and review verified changes" onClick={() => setState({ drawer: 'development' })}>
-        <Code2 className="h-4 w-4" /><span>Development</span>{pending > 0 && <span className="dev-badge">{pending}</span>}
+        <Code2 className="h-4 w-4" /><span className={codeMode?.enabled ? 'ac-text' : undefined}>{codeMode?.enabled ? `CODE MODE · ${codeMode.phase}` : 'Development'}</span>{pending > 0 && <span className="dev-badge">{pending}</span>}
       </button>
-      <div className="hidden md:block"><Clock /></div>
+      <div className="hidden md:block">{!cockpit && <Clock />}</div>
 
       <nav className="flex items-center gap-1" aria-label="HUD controls">
-        <button className="icon-btn" title="Live activity panel" aria-label="Live activity panel" aria-pressed={leftOn} onClick={() => togglePanel('left')}>
+          {!cockpit && <><button className="icon-btn" title="Live activity panel" aria-label="Live activity panel" aria-pressed={leftOn} onClick={() => togglePanel('left')}>
           <PanelLeft className="h-4 w-4" />
         </button>
         <button className="icon-btn" title="Context panel" aria-label="Context panel" aria-pressed={rightOn} onClick={() => togglePanel('right')}>
           <PanelRight className="h-4 w-4" />
-        </button>
-        <button className="icon-btn" title="Conversation history" aria-label="Conversation history" onClick={() => setState({ drawer: 'conversation' })}>
+          </button></>}
+          <button className="icon-btn" title="Conversation history" aria-label="Conversation history" onClick={() => setState({ drawer: 'conversation' })}>
           <MessageSquareText className="h-4 w-4" />
         </button>
         <button className="icon-btn" title="Command palette (Ctrl+K)" aria-label="Command palette (Ctrl+K)" onClick={() => setState({ palette: true })}>
@@ -169,20 +196,21 @@ function HudHeader({ toolCount, voice }: Props) {
         <button className="icon-btn" title="Settings" aria-label="Settings" onClick={() => setState({ drawer: 'settings' })}>
           <Settings className="h-4 w-4" />
         </button>
-        {!isQtHost && (
+        {!isQtHost && !frameless && (
           <button className="icon-btn" title={fs ? 'Exit fullscreen' : 'Fullscreen'} aria-label={fs ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFs}>
             {fs ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
           </button>
         )}
-        {isQtHost && (
+        {(isQtHost || frameless) && (
           <>
             <span className="mx-1 h-5 w-px bg-[var(--line)]" aria-hidden="true" />
-            <button className="icon-btn" title="Minimize" aria-label="Minimize" onClick={() => actions.windowControl('minimize')}><Minus className="h-4 w-4" /></button>
-            <button className="icon-btn" title="Maximize / restore" aria-label="Maximize / restore" onClick={() => actions.windowControl('maximize')}><Square className="h-3.5 w-3.5" /></button>
-            <button className="icon-btn hover:!text-[var(--bad)]" title="Close window" aria-label="Close window" onClick={() => actions.windowControl('close')}><X className="h-4 w-4" /></button>
+            <button className="icon-btn" title="Minimize" aria-label="Minimize" onClick={() => winCtl('minimize')}><Minus className="h-4 w-4" /></button>
+            <button className="icon-btn" title="Maximize / restore" aria-label="Maximize / restore" onClick={() => winCtl('maximize')}><Square className="h-3.5 w-3.5" /></button>
+            <button className="icon-btn hover:!text-[var(--bad)]" title="Close window" aria-label="Close window" onClick={() => winCtl('close')}><X className="h-4 w-4" /></button>
           </>
         )}
       </nav>
+      </div>
     </header>
   );
 }

@@ -507,12 +507,16 @@ def test_delta_wardrobe_accessories_are_mandatory_but_capped():
     assert "3" in acc["select"], "presence is mandatory, quantity stays capped"
 
 
-def test_both_brands_point_at_their_master_magnific_space():
+def test_only_delta_cuisine_keeps_a_magnific_space():
+    """Ceram Quartz left Magnific on 2026-10-16 (the account is Delta Cuisine's)."""
     import era_dispatch
 
     brands = era_dispatch.load_brands()["brands"]
     assert "a243e483-a215-4f17-895c-0896895bc3f3" in brands["delta_cuisine"]["magnific_space"]
-    assert "a24c6c83-0bd2-48db-bdfc-49d0e30b7a28" in brands["ceram_quartz"]["magnific_space"]
+    cq = brands["ceram_quartz"]
+    assert cq["magnific_allowed"] is False
+    for key in ("magnific_space", "magnific_space_name", "magnific", "master_psd_template"):
+        assert key not in cq
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +584,14 @@ def test_interior_design_checklist_is_not_pushed_at_ceram_quartz(dispatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("brand_key", ["delta_cuisine", "ceram_quartz"])
+def test_ceram_quartz_brief_has_no_magnific_block(dispatch):
+    """Ceram Quartz left Magnific on 2026-10-16: the block is replaced by a ban."""
+    brief = _brief_for_brand(dispatch, "ceram_quartz", "weekly")
+    assert "MAGNIFIC — GENERATION ENGINE" not in brief
+    assert "NO MAGNIFIC, NO PHOTOSHOP" in brief
+
+
+@pytest.mark.parametrize("brand_key", ["delta_cuisine"])
 def test_magnific_block_reaches_producing_briefs(dispatch, brand_key):
     brief = _brief_for_brand(dispatch, brand_key, "adcreative")
     assert "MAGNIFIC — GENERATION ENGINE" in brief
@@ -610,15 +621,18 @@ def test_flow_ids_do_not_leak_between_brands(dispatch):
     dc_only = {"otqh829FPM", "sG1l8e2GTt"}  # DC interior flows
     cq_only = {"CQXtEEyuoQ", "LYSswO4tgm"}  # CQ slab flows
 
+    # Ceram Quartz has no flows at all any more (2026-10-16), so only Delta Cuisine
+    # can list any; neither brief may carry the other brand's flow ids.
+    assert "magnific" not in brands["ceram_quartz"]
+    owned = {f["id"] for f in brands["delta_cuisine"]["magnific"]["approved_flows"]}
+    assert not (owned & cq_only), "delta_cuisine lists another brand's flow"
     for key, foreign in (("delta_cuisine", cq_only), ("ceram_quartz", dc_only)):
-        owned = {f["id"] for f in brands[key]["magnific"]["approved_flows"]}
-        assert not (owned & foreign), f"{key} lists another brand's flow"
-        brief = _brief_for_brand(dispatch, key, "adcreative")
+        brief = _brief_for_brand(dispatch, key, "weekly")
         for flow_id in foreign:
             assert flow_id not in brief
 
 
-@pytest.mark.parametrize("brand_key", ["delta_cuisine", "ceram_quartz"])
+@pytest.mark.parametrize("brand_key", ["delta_cuisine"])
 def test_unaffordable_flows_are_banned_not_merely_unlisted(brand_key):
     """The UGC flows cost 10621 credits — more than the whole balance. Leaving
     them merely absent from approved_flows is not enough: the brief has to name

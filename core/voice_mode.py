@@ -16,6 +16,7 @@ turn to Gemini mid-sentence when Fish or Kokoro fails, and what makes a spoken
 """
 
 import json
+import re
 
 from core.utils import BASE_DIR
 
@@ -321,6 +322,32 @@ def gemini_voice_name() -> str:
     if not name or name == _refused_voice["name"]:
         return DEFAULT_GEMINI_VOICE
     return name
+
+
+DEFAULT_INPUT_LANGUAGES = ("en-US", "fr-FR")
+
+
+def input_language_codes() -> list[str]:
+    """BCP-47 hints for Gemini's speech-to-text of what the owner says.
+
+    With no hint Gemini auto-detects the language per utterance, and degraded
+    Bluetooth hands-free audio made it transcribe English as Japanese -- which
+    the grounding check then refused as "no matching spoken order". Hints bias
+    the detection without forbidding other languages. config/voice.json
+    "input_languages": a list overrides the default; an empty list restores
+    pure auto-detection.
+    """
+    try:
+        raw = json.loads(VOICE_CONFIG_PATH.read_text(encoding="utf-8")).get("input_languages")
+    except Exception:
+        raw = None
+    if not isinstance(raw, list):
+        return list(DEFAULT_INPUT_LANGUAGES)
+    return [
+        c
+        for c in (str(x).strip() for x in raw)
+        if re.fullmatch(r"[a-z]{2,3}(-[A-Za-z0-9]{2,4})?", c)
+    ]
 
 
 def set_gemini_voice(name: str) -> str:

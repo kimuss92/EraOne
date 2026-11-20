@@ -399,7 +399,9 @@ class KokoroVoice:
 
     def token_ids(self, text: str) -> list[int]:
         ids = [self._tokens[s] for s in self.phonemes(text) if s in self._tokens]
-        return ids[: _MAX_TOKENS - 2]
+        if len(ids) > _MAX_TOKENS - 2:
+            raise ValueError("phrase exceeds Kokoro token capacity; refusing truncated speech")
+        return ids
 
     # ── synthesis ────────────────────────────────────────────────────────────
     def synthesize(self, text: str, voice: str = "") -> bytes:

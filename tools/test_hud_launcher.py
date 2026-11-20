@@ -34,6 +34,90 @@ def test_mutex_names_are_scoped_to_an_overridden_home():
     assert instance.EXIT_ALREADY_RUNNING == era_supervisor.EXIT_ALREADY_RUNNING == 86
 
 
+def test_tray_open_focuses_existing_window_without_client_count(monkeypatch):
+    from app.hud import browser
+
+    monkeypatch.delenv("ERA_NO_BROWSER")
+    monkeypatch.setattr(browser, "focus_existing", lambda: True)
+
+    def duplicate(*args):
+        pytest.fail("An existing HUD must not launch another browser window")
+
+    monkeypatch.setattr(browser, "launch_app_window", duplicate)
+    monkeypatch.setattr(browser.webbrowser, "open", duplicate)
+    assert browser.open_hud("http://127.0.0.1:8765/") == "focused"
+
+
+def test_concurrent_clicks_launch_one_window_while_chromium_starts(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.hud import browser
+
+    monkeypatch.delenv("ERA_NO_BROWSER")
+    monkeypatch.setattr(browser, "_last_launch", ("", 0.0))
+    monkeypatch.setattr(browser, "focus_existing", lambda: False)
+    launched = []
+    monkeypatch.setattr(browser, "launch_app_window", lambda url: launched.append(url) or True)
+    url = "http://127.0.0.1:8765/"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: browser.open_hud(url), range(8)))
+    assert launched == [url]
+    assert results.count("app") == 1 and results.count("opening") == 7
+    monkeypatch.setattr(browser, "focus_existing", lambda: True)
+    assert browser.open_hud(url) == "focused"
+
+
+def test_launch_can_retry_after_startup_coalescing_window(monkeypatch):
+    from app.hud import browser
+
+    monkeypatch.delenv("ERA_NO_BROWSER")
+    url = "http://127.0.0.1:8765/"
+    monkeypatch.setattr(browser, "_last_launch", (url, browser.time.monotonic() - 6))
+    monkeypatch.setattr(browser, "focus_existing", lambda: False)
+    monkeypatch.setattr(browser, "launch_app_window", lambda url: True)
+    assert browser.open_hud(url) == "app"
+
+
+def test_closing_last_interface_restores_hidden_floating_icon(monkeypatch):
+    from app.hud import browser, floating_launcher
+
+    settings.update({"floating_icon": False})
+    monkeypatch.setattr(browser, "find_hud_window", lambda: None)
+    actual = floating_launcher.restore_access_when_closed(settings.load())
+    assert actual["floating_icon"] is True
+    assert settings.load()["floating_icon"] is True
+
+
+def test_hide_stays_respected_while_interface_exists_including_minimized(monkeypatch):
+    from app.hud import browser, floating_launcher
+
+    settings.update({"floating_icon": False})
+    monkeypatch.setattr(browser, "find_hud_window", lambda: 1234)
+    actual = floating_launcher.restore_access_when_closed(settings.load())
+    assert actual["floating_icon"] is False
+    assert settings.load()["floating_icon"] is False
+
+
+def test_hide_stays_respected_when_no_workspace_was_open(monkeypatch):
+    from app.hud import browser, floating_launcher
+
+    settings.update({"floating_icon": False})
+    monkeypatch.setattr(browser, "find_hud_window", lambda: None)
+    actual = floating_launcher.restore_access_when_closed(settings.load(), workspace_was_open=False)
+    assert actual["floating_icon"] is False
+    assert settings.load()["floating_icon"] is False
+
+
+def test_visible_floating_icon_does_not_rewrite_settings_each_poll(monkeypatch):
+    from app.hud import floating_launcher
+
+    def unexpected_write(*args):
+        pytest.fail("Visible icon must not rewrite settings on each poll")
+
+    monkeypatch.setattr(settings, "update", unexpected_write)
+    assert floating_launcher.restore_access_when_closed({"floating_icon": True})["floating_icon"]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="named mutexes are Windows-only")
 def test_a_second_owner_is_refused_and_released_on_close():
     a = instance.NamedMutex(instance.backend_mutex_name())
@@ -132,9 +216,60 @@ def test_stdio_log_masks_secrets_and_classifies_lines(tmp_path):
     assert "device lost" in err and "web_search" not in err
 
 
-def test_stdio_log_rotates_without_raising(tmp_path):
+def test_stdio_log_rotates_without_raising(tmp_path, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    # Windows readers can briefly prevent a rename. Advance the writer's retry
+    # clock rather than requiring a size bound during its documented backoff.
+    clock = [time.monotonic()]
+    monkeypatch.setattr(stdio_log, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     w = stdio_log.RotatingWriter(tmp_path / "x.log", max_bytes=200, backups=2)
-    for i in range(50):
-        w.write(f"line {i:04d} " + "x" * 40 + "\n")
-    assert (tmp_path / "x.log.1").exists()
-    assert (tmp_path / "x.log").stat().st_size < 400
+    try:
+        for i in range(50):
+            w.write(f"line {i:04d} " + "x" * 40 + "\n")
+        deadline = time.monotonic() + 2
+        while (tmp_path / "x.log").stat().st_size >= 400 and time.monotonic() < deadline:
+            time.sleep(0.02)
+            clock[0] += 61
+            w.write("retry after rotation cooldown\n")
+        assert (tmp_path / "x.log.1").exists()
+        assert (tmp_path / "x.log").stat().st_size < 400
+    finally:
+        if w._fh is not None:
+            w._fh.close()
+
+
+def test_stdio_rotation_preserves_writes_and_recovers_after_sharing_violation(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    clock = [100.0]
+    monkeypatch.setattr(stdio_log, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    real_replace = os.replace
+    attempts = []
+
+    def replace(source, target):
+        attempts.append(source)
+        if len(attempts) == 1:
+            raise PermissionError("simulated Windows sharing violation")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(stdio_log.os, "replace", replace)
+    path = tmp_path / "retry.log"
+    writer = stdio_log.RotatingWriter(path, max_bytes=10, backups=1)
+    try:
+        writer.write("first-long-line\n")
+        writer.write("during-lock\n")
+        writer.write("during-backoff\n")
+        assert len(attempts) == 1
+        assert "during-lock" in path.read_text()
+        clock[0] += 61
+        writer.write("after\n")
+        assert len(attempts) == 2
+        assert "during-backoff" in (tmp_path / "retry.log.1").read_text()
+        assert path.read_text().strip() == "after"
+    finally:
+        if writer._fh is not None:
+            writer._fh.close()

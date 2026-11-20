@@ -14,8 +14,10 @@ Usage:
 from __future__ import annotations
 
 import collections
+import json
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -26,6 +28,19 @@ try:
     _VAD_AVAILABLE = True
 except ImportError:
     _VAD_AVAILABLE = False
+
+
+def voice_settings() -> dict:
+    """Non-secret voice settings override legacy main-config audio values."""
+    try:
+        value = json.loads(
+            (Path(__file__).resolve().parents[1] / "config" / "voice.json").read_text(
+                encoding="utf-8-sig"
+            )
+        )
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 class VoiceActivityDetector:
@@ -237,6 +252,10 @@ class BargeInDetector:
     """
 
     _VAD_FRAME_MS = 30  # webrtcvad accepts only 10/20/30 ms frames
+    # Runaway breaker: this many fires inside the window pauses interruption.
+    RUNAWAY_FIRES = 3
+    RUNAWAY_WINDOW_S = 15.0
+    RUNAWAY_SUSPEND_S = 300.0
 
     def __init__(
         self,
@@ -247,13 +266,22 @@ class BargeInDetector:
         min_speech_ms: int = 150,
         onset_grace_ms: int = 300,
         echo_factor: float = 2.0,
+        require_speech_vad: bool = False,
         sample_rate: int = 16000,
     ) -> None:
         # Validate at the boundary: clamp to ranges the rest of the class assumes,
         # so a hand-edited config cannot produce a detector that never fires or
         # one that divides by zero.
         self.enabled = bool(enabled)
+        self.require_speech_vad = bool(require_speech_vad)
+        self._configured_require_speech_vad = self.require_speech_vad
         self.amplitude_threshold = max(0.0, min(1.0, float(amplitude_threshold)))
+        self._configured_amplitude_threshold = self.amplitude_threshold
+        self._input_wearable = False
+        self._output_open_speaker = False  # unknown until the speaker opens
+        self._fires: collections.deque[float] = collections.deque()
+        self._suspended_until = 0.0
+        self.last_trip_ts = 0.0  # monotonic time the breaker last tripped (for logging)
         self.min_speech_ms = max(self._VAD_FRAME_MS, int(min_speech_ms))
         self.onset_grace_ms = max(0, int(onset_grace_ms))
         self.echo_factor = max(0.0, min(10.0, float(echo_factor)))  # 0 = off
@@ -297,6 +325,80 @@ class BargeInDetector:
         with self._lock:
             self.enabled = bool(value)
 
+    @staticmethod
+    def _is_wearable(device_name: str) -> bool:
+        name = "".join(c for c in str(device_name or "").lower() if c.isalnum())
+        return "cy03cb36" in name or "starglass" in name
+
+    def _apply_floor(self) -> None:
+        """Pick the floor for the current mic + speaker pair (caller holds _lock).
+
+        The quiet 0.012 floor is only safe when Era's voice plays IN the wearable
+        (earpiece: almost no echo reaches its mic). With the glasses mic and her
+        voice on open PC speakers, the 8x-boosted mic hears the speakers far above
+        0.012 and she interrupted herself, then answered her own echo, every turn
+        (2026-11-05 22:10). That pair keeps the configured floor and needs real
+        speech.
+        """
+        open_speaker_echo = self._input_wearable and self._output_open_speaker
+        quiet_floor = self._input_wearable and not open_speaker_echo
+        self.amplitude_threshold = (
+            min(self._configured_amplitude_threshold, 0.012)
+            if quiet_floor
+            else self._configured_amplitude_threshold
+        )
+        self.require_speech_vad = self._configured_require_speech_vad or open_speaker_echo
+
+    def configure_input(self, device_name: str) -> bool:
+        """A known wearable mic needs a quieter floor than the laptop array."""
+        wearable = self._is_wearable(device_name)
+        with self._lock:
+            if wearable != self._input_wearable:
+                self._fires.clear()
+                self._suspended_until = 0.0
+            self._input_wearable = wearable
+            self._apply_floor()
+        return wearable
+
+    def configure_output(self, device_name: str) -> bool:
+        """Record where Era's voice plays. True == an open speaker (echo-prone).
+
+        An empty/unknown name changes nothing: the floor stays as configured for
+        the mic, exactly as before this was known.
+        """
+        if not str(device_name or "").strip():
+            return self._output_open_speaker
+        open_speaker = not self._is_wearable(device_name)
+        with self._lock:
+            if open_speaker != self._output_open_speaker:
+                self._fires.clear()
+                self._suspended_until = 0.0
+            self._output_open_speaker = open_speaker
+            self._apply_floor()
+        return open_speaker
+
+    def suspended(self) -> bool:
+        """True while the runaway breaker holds interruption off."""
+        with self._lock:
+            return time.monotonic() < self._suspended_until
+
+    def _note_fire(self) -> bool:
+        """Record a fire (caller holds _lock). True == this fire trips the breaker.
+
+        A person does not cut Era off within seconds on every reply, several
+        times running; her own echo does. Whatever the mic/speaker pair, that
+        pattern pauses interruption so the self-answer loop cannot sustain itself.
+        """
+        now = time.monotonic()
+        self._fires.append(now)
+        while self._fires and now - self._fires[0] > self.RUNAWAY_WINDOW_S:
+            self._fires.popleft()
+        if len(self._fires) >= self.RUNAWAY_FIRES:
+            self._fires.clear()
+            self._suspended_until = now + self.RUNAWAY_SUSPEND_S
+            return True
+        return False
+
     # ── Detection (mic-callback thread) ────────────────────────────────────────
     def _count_voiced(self, buffer_bytes: bytes) -> int:
         """How many 30 ms sub-frames of `buffer_bytes` are voiced speech.
@@ -309,6 +411,8 @@ class BargeInDetector:
         if fb <= 0:
             return 0
         if self._vad is None:
+            if self.require_speech_vad:
+                return 0  # Missing speech recognition must not turn noise into speech.
             return max(1, len(buffer_bytes) // fb)
         n = 0
         for i in range(0, len(buffer_bytes) - fb + 1, fb):
@@ -324,6 +428,26 @@ class BargeInDetector:
         if self._voiced_ms <= 0.0 and self._burst:
             self._echo.extend(self._burst)  # never became an interruption: her echo
             self._burst.clear()
+
+    def _speech_shaped(self, buffer_bytes: bytes) -> bool:
+        """Reject DC and broadband noise that WebRTC can call initial speech.
+
+        This applies only to interruption, never to normal Gemini input. Speech
+        has a structured spectrum; white/fan-like broadband noise is much flatter.
+        """
+        samples = np.frombuffer(buffer_bytes[: len(buffer_bytes) // 2 * 2], dtype="<i2").astype(
+            np.float32
+        )
+        if len(samples) < 160:
+            return False
+        samples /= 32768.0
+        power = np.abs(np.fft.rfft(samples * np.hanning(len(samples)))) ** 2
+        frequencies = np.fft.rfftfreq(len(samples), 1 / self._sample_rate)
+        band = power[(frequencies >= 100) & (frequencies <= 5000)]
+        if not band.size or float(band.mean()) < 1e-10:
+            return False
+        flatness = float(np.exp(np.mean(np.log(band + 1e-12))) / (band.mean() + 1e-12))
+        return flatness < 0.45
 
     def _echo_floor(self) -> float:
         """echo_factor x the loud end (90th percentile) of her recent echo."""
@@ -343,6 +467,8 @@ class BargeInDetector:
         with self._lock:
             if not self._active:
                 return False
+            if time.monotonic() < self._suspended_until:
+                return False  # runaway breaker: her echo was cutting her off
             level = _frame_rms(buffer_bytes)
             if (time.time() - self._onset_ts) * 1000.0 < self.onset_grace_ms:
                 self._echo.append(level)  # her own voice, settling: the echo seed
@@ -358,15 +484,26 @@ class BargeInDetector:
                 self._decay()
                 return False
             voiced = self._count_voiced(buffer_bytes)
-            if voiced <= 0:
+            frame_count = len(buffer_bytes) // self._vad_frame_bytes
+            if voiced <= 0 or (
+                self.require_speech_vad
+                and (voiced < 0.75 * frame_count or not self._speech_shaped(buffer_bytes))
+            ):
                 self._echo.append(level)
-                self._decay()
+                if self.require_speech_vad:
+                    self._voiced_ms = 0.0
+                    self._burst.clear()
+                else:
+                    self._decay()
                 return False
             self._burst.append(level)
             self._voiced_ms += voiced * self._VAD_FRAME_MS
             if self._voiced_ms >= self.min_speech_ms:
                 self._active = False  # one-shot; re-arms on the next note_speaking(True)
                 self._burst.clear()
+                if self._note_fire():
+                    self.last_trip_ts = time.monotonic()
+                    return False  # the fire that proves a loop is not acted on
                 return True
             return False
 
@@ -378,11 +515,10 @@ def get_barge_in_config() -> dict:
     ``barge_in`` block of the main config; every field has a safe default so the
     feature works with no config at all.
 
-    Defaults are tuned for RESPONSIVENESS on a headset or a mic with usable echo
-    separation: a 0.05 amplitude floor (so normal-volume speech interrupts, not
-    only a raised voice) and a 150 ms sustain minimum (~40% faster cut-in than the
-    old 250 ms). The webrtcvad speech gating and the 300 ms onset grace still guard
-    against a stray echo blip. If Era interrupts HERSELF on open laptop speakers,
+    Voice-specific settings take precedence over legacy main-config settings.
+    Current voice settings use 300 ms of sustained speech and require webrtcvad;
+    the amplitude-only compatibility mode is not the live default. If Era
+    interrupts HERSELF on open laptop speakers,
     raise ``amplitude_threshold`` (run ``tools/calibrate_barge_in.py`` for a
     measured value), or set ``barge_in.enabled`` false to restore half-duplex.
     """
@@ -395,9 +531,11 @@ def get_barge_in_config() -> dict:
     except Exception:
         cfg = {}
     bi = cfg.get("barge_in", {}) if isinstance(cfg.get("barge_in"), dict) else {}
+    current = voice_settings().get("barge_in", {})
+    current = current if isinstance(current, dict) else {}
 
     def _get(key: str, env: str, default):
-        val = bi.get(key)
+        val = current.get(key, bi.get(key))
         if val is None:
             val = cfg.get(f"barge_in_{key}")
         if val is None:
@@ -426,6 +564,9 @@ def get_barge_in_config() -> dict:
         "min_speech_ms": _as_num(_get("min_speech_ms", "ERA_BARGE_IN_MIN_MS", 150), 150, int),
         "onset_grace_ms": _as_num(_get("onset_grace_ms", "ERA_BARGE_IN_GRACE_MS", 300), 300, int),
         "echo_factor": _as_num(_get("echo_factor", "ERA_BARGE_IN_ECHO", 2.0), 2.0, float),
+        "require_speech_vad": _as_bool(
+            _get("require_speech_vad", "ERA_BARGE_IN_REQUIRE_VAD", True), True
+        ),
     }
 
 
@@ -530,9 +671,11 @@ def get_endpointing_config() -> dict:
     except Exception:
         cfg = {}
     ep = cfg.get("endpointing", {}) if isinstance(cfg.get("endpointing"), dict) else {}
+    current = voice_settings().get("endpointing", {})
+    current = current if isinstance(current, dict) else {}
 
     def _get(key: str, env: str):
-        val = ep.get(key)
+        val = current.get(key, ep.get(key))
         if val is None:
             val = cfg.get(f"endpointing_{key}")
         if val is None:

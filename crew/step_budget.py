@@ -18,14 +18,29 @@ WRAP_UP_NOTE = (
 )
 
 
-def note(step: int, max_steps: int) -> str:
-    """The budget line appended to the bot's prompt on this step ("" when not yet close)."""
+def note(step: int, max_steps: int, *, can_stage: bool = False) -> str:
+    """The budget line appended to the bot's prompt on this step ("" when not yet close).
+
+    PF-054: for a bot that may stage and has not yet, "finish" must not mean "give up on
+    the change". Live 2026-11-19 Cody, told "finish on the next step", answered with a
+    plan instead of the source.stage the owner asked for.
+    """
     left = max_steps - step + 1
+    stage = (
+        " If the user asked for a change and you have read the file, call source.stage NOW "
+        "with your edits instead of answering; a plan in a final is not a change."
+        if can_stage and left <= 2
+        else ""
+    )
     if left == 1:
-        return 'STEP BUDGET: this is your LAST step. Reply now with {"final": ...} using what you have.'
+        return (
+            'STEP BUDGET: this is your LAST step. Reply now with {"final": ...} using what you have.'
+            + stage
+        )
     if left == 2:
         return (
             "STEP BUDGET: 2 steps left including this one. Finish on the next step at the latest."
+            + stage
         )
     return ""
 

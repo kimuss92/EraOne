@@ -111,12 +111,12 @@ def test_search_reports_failure_when_track_never_changes(_search_env):
     old = ("Sunroof", "Nicky Youre")
     with (
         patch.object(sc, "_now_playing", return_value=old),
-        patch.object(spotify_ui, "invoke_search_result", return_value=(True, "invoked")) as inv,
+        patch("actions.spotify_search_worker.search_ui", return_value=(True, "clicked")) as inv,
     ):
         msg = sc._spotify_search_and_play("Snoop Dogg")
-    assert "could not start" in msg and "Sunroof" in msg
+    assert "not yet confirmed" in msg and "pre-command" in msg and "Sunroof" in msg
     # retried once with a real click
-    assert inv.call_count == 2 and inv.call_args.kwargs.get("prefer_click") is True
+    assert inv.call_count == 1  # unknown playback outcome must not trigger a second click
 
     from core.tool_result import looks_like_failure
 
@@ -127,7 +127,7 @@ def test_search_reports_the_track_that_actually_started(_search_env):
     readings = iter([("Sunroof", "Nicky Youre"), ("Gin and Juice", "Snoop Dogg")])
     with (
         patch.object(sc, "_now_playing", side_effect=lambda: next(readings)),
-        patch.object(spotify_ui, "invoke_search_result", return_value=(True, "invoked")),
+        patch("actions.spotify_search_worker.search_ui", return_value=(True, "clicked")),
     ):
         msg = sc._spotify_search_and_play("Snoop Dogg")
     assert msg.startswith("Playing 'Gin and Juice' by Snoop Dogg")
@@ -137,7 +137,7 @@ def test_research_of_current_song_counts_as_success(_search_env):
     same = ("Gin and Juice", "Snoop Dogg")
     with (
         patch.object(sc, "_now_playing", return_value=same),
-        patch.object(spotify_ui, "invoke_search_result", return_value=(True, "invoked")),
+        patch("actions.spotify_search_worker.search_ui", return_value=(True, "clicked")),
     ):
         msg = sc._spotify_search_and_play("gin and juice")
     assert msg.startswith("Playing 'Gin and Juice'")
@@ -170,3 +170,342 @@ def test_computer_settings_bridge_forwards_the_query():
         cs.computer_settings({"action": "spotify_search", "value": "Snoop Dogg"})
     sent = ctl.call_args.args[0]
     assert sent == {"action": "search", "value": "Snoop Dogg"}
+
+
+# ── Liked Songs / New Releases: named control, killable worker (2026-10-16) ──
+class TestPrimaryContextPlay:
+    def test_the_named_context_beats_the_stale_pages_first_play(self, monkeypatch):
+        """Right after navigation the first 'Play <x>' can be the page being left."""
+        stale, liked = _Btn("Play سواد الغيم"), _Btn("Play Liked Songs")
+        pressed = []
+        stale.invoke = lambda: pressed.append("stale")
+        liked.invoke = lambda: pressed.append("liked")
+        monkeypatch.setattr(spotify_ui, "Desktop", lambda backend: _FakeDesktop())
+        monkeypatch.setattr(spotify_ui, "_wait_for_tree", lambda win, t: [stale, liked])
+        ok, _ = spotify_ui.invoke_primary_play(1, timeout_s=1.0, prefer="Liked Songs")
+        assert ok and pressed == ["liked"]
+
+    def test_pause_on_the_named_context_means_already_playing(self, monkeypatch):
+        monkeypatch.setattr(spotify_ui, "Desktop", lambda backend: _FakeDesktop())
+        monkeypatch.setattr(
+            spotify_ui, "_wait_for_tree", lambda win, t: [_Btn("Play X"), _Btn("Pause Liked Songs")]
+        )
+        assert spotify_ui.invoke_primary_play(1, 1.0, prefer="Liked Songs") == (
+            True,
+            "already playing",
+        )
+
+    def test_a_missing_named_control_fails_honestly_and_presses_nothing(self, monkeypatch):
+        """New Releases' dead shortcut left Liked Songs on screen; its first Play ran."""
+        other = _Btn("Play Liked Songs")
+        monkeypatch.setattr(spotify_ui, "Desktop", lambda backend: _FakeDesktop())
+        monkeypatch.setattr(spotify_ui, "_wait_for_tree", lambda win, t: [other])
+        monkeypatch.setattr(spotify_ui, "_buttons", lambda win: [other])
+        ok, detail = spotify_ui.invoke_primary_play(1, 0.05, prefer="Release Radar")
+        assert not ok and "Release Radar" in detail
+        assert other.invoked == other.clicked == 0
+
+    def test_new_releases_opens_release_radar_from_the_sidebar(self, monkeypatch):
+        monkeypatch.setattr(sc.threading.Thread, "start", lambda *a: None)
+        monkeypatch.setattr(sc, "_spotify_window_exists", lambda: True)
+        monkeypatch.setattr(sc, "_wait_for_spotify_ui_ready", lambda cold: (1, "Spotify"))
+        monkeypatch.setattr(sc, "_get_spotify_hwnd_and_title", lambda: (1, "Spotify"))
+        monkeypatch.setattr(sc, "_verify_playback_started", lambda timeout_s: True)
+        monkeypatch.setattr(sc, "_mark_spotify_playing_state", lambda: None)
+        monkeypatch.setattr(
+            sc.pyautogui, "hotkey", lambda *a: pytest.fail("dead Alt+Shift+N shortcut")
+        )
+        calls = []
+        monkeypatch.setattr(
+            "actions.spotify_search_worker.primary_ui",
+            lambda label, **kw: calls.append((label, kw.get("open_row"))) or (True, "invoked"),
+        )
+        assert "Release Radar" in sc._spotify_play_new_releases()
+        assert calls == [("Release Radar", "Release Radar")]
+
+    def test_the_sidebar_row_is_opened_not_its_play_button(self, monkeypatch):
+        play, row = _Btn("Play Release Radar"), _Btn("Release Radar Playlist • Made for K")
+        monkeypatch.setattr(spotify_ui, "Desktop", lambda backend: _FakeDesktop())
+        monkeypatch.setattr(spotify_ui, "_buttons", lambda win: [play, row])
+        assert spotify_ui.open_library_row(1, "Release Radar", timeout_s=0.5)
+        assert row.clicked == 1 and play.clicked == play.invoked == 0
+
+    def test_context_play_runs_in_the_killable_worker_not_in_process(self, monkeypatch):
+        monkeypatch.setattr(sc.threading.Thread, "start", lambda *a: None)
+        monkeypatch.setattr(sc, "_spotify_window_exists", lambda: True)
+        monkeypatch.setattr(sc, "_open_spotify_uri", lambda *a: True)
+        monkeypatch.setattr(sc, "_wait_for_spotify_ui_ready", lambda cold: (1, "Spotify"))
+        monkeypatch.setattr(sc, "_get_spotify_hwnd_and_title", lambda: (1, "Spotify"))
+        monkeypatch.setattr(sc, "_verify_playback_started", lambda timeout_s: True)
+        monkeypatch.setattr(sc, "_mark_spotify_playing_state", lambda: None)
+        monkeypatch.setattr(
+            spotify_ui, "invoke_primary_play", lambda *a, **k: pytest.fail("in-process UIA")
+        )
+        calls = []
+        monkeypatch.setattr(
+            "actions.spotify_search_worker.primary_ui",
+            lambda label, **kw: calls.append((label, kw)) or (True, "invoked"),
+        )
+        assert sc._spotify_play_liked_songs() == "Playing your Liked Songs, sir."
+        assert calls and calls[0][0] == "Liked Songs"
+
+    def test_primary_ui_asks_the_worker_for_the_named_context(self, monkeypatch):
+        import json
+        from unittest.mock import Mock
+
+        from actions import spotify_search_worker as worker
+
+        process = Mock()
+        process.poll.return_value = 0
+        process.communicate.return_value = ('ERA_SPOTIFY_RESULT:{"ok": true, "detail": "x"}', "")
+        monkeypatch.setattr(worker.subprocess, "Popen", Mock(return_value=process))
+        assert worker.primary_ui("Liked Songs", cold=False, timeout_s=5.0) == (True, "x")
+        payload = json.loads(process.communicate.call_args_list[0].args[0])
+        assert payload["mode"] == "primary" and payload["label"] == "Liked Songs"
+
+
+class _FakeDesktop:
+    def window(self, handle):
+        return object()
+
+
+# ── Stale / off-screen results and late verification (2026-10-16 live run) ──
+class _Win:
+    def __init__(self, top=0, bottom=1000):
+        self._r = type("R", (), {"top": top, "bottom": bottom})()
+
+    def rectangle(self):
+        return self._r
+
+
+class TestSearchAfterNavigation:
+    def test_a_generic_shared_word_is_not_a_match(self):
+        """'Konoha Music Station' shares only 'music' with the query: no match."""
+        rows = [_Btn("Play Konoha Music Station 🍃")]
+        assert spotify_ui._best_search_match(rows, "سواد الغيم Mikasa Music") == (None, 0)
+
+    def test_the_real_result_still_matches_without_by(self):
+        rows = [_Btn("Play Konoha Music Station"), _Btn("Play سواد الغيم by Mikasa Music")]
+        target, level = spotify_ui._best_search_match(rows, "سواد الغيم Mikasa Music")
+        assert target is rows[1] and level >= 4
+
+    def test_off_screen_rows_are_dropped(self):
+        rows = [_Btn("Play A", top=300), _Btn("Play B", top=2043)]
+        assert spotify_ui._on_screen(rows, _Win()) == [rows[0]]
+
+    def test_the_previous_page_is_never_clicked(self, monkeypatch):
+        old = _Btn("Play سواد الغيم by Mikasa Music")  # also on the stale page
+        new = _Btn("Play سواد الغيم by Mikasa Music", top=200)
+        pages = iter([[old], [old], [new, _Btn("Play Other")]])
+        last = {"page": [old]}
+
+        def buttons(win):
+            last["page"] = next(pages, last["page"])
+            return last["page"]
+
+        monkeypatch.setattr(spotify_ui, "Desktop", lambda backend: _FakeWinDesktop())
+        monkeypatch.setattr(spotify_ui, "_buttons", buttons)
+        monkeypatch.setattr(spotify_ui, "sleep_cancellable", lambda s: None)
+        ok, _ = spotify_ui.invoke_search_result(
+            1,
+            "سواد الغيم by Mikasa Music",
+            timeout_s=2.0,
+            stale_names=spotify_ui.play_names([old]),
+        )
+        assert ok and new.invoked + new.clicked == 1 and old.invoked + old.clicked == 0
+
+    def test_a_track_that_starts_late_is_still_success(self, monkeypatch):
+        """'Konoba On Our Knees' was playing while Era reported it could not start."""
+        reads = iter([("Bad Decisions", "benny blanco")] + [("On Our Knees", "Konoba")] * 50)
+        monkeypatch.setattr(sc.threading.Thread, "start", lambda *a: None)
+        monkeypatch.setattr(sc, "_spotify_window_exists", lambda: True)
+        monkeypatch.setattr(sc, "_spotify_is_playing", lambda: True)
+        monkeypatch.setattr(sc, "_mark_spotify_playing_state", lambda: None)
+        monkeypatch.setattr(sc, "_now_playing", lambda: next(reads))
+        waits = []
+
+        def wait(before, query, timeout_s=5.0):
+            waits.append(timeout_s)
+            now = sc._now_playing()
+            return now if sc._track_matches(query, now) else None
+
+        monkeypatch.setattr(sc, "_wait_for_new_track", wait)
+        monkeypatch.setattr(
+            "actions.spotify_search_worker.search_ui", lambda *a, **k: (True, "clicked")
+        )
+        out = sc._spotify_search_and_play("Konoba On Our Knees")
+        assert out.startswith("Playing 'On Our Knees' by Konoba")
+        assert waits[0] >= 3.5  # long enough for Spotify's late media-session update
+
+
+class _FakeWinDesktop:
+    def window(self, handle):
+        return _Win()
+
+
+def test_a_slow_first_load_requires_diagnosis_without_blind_replay(monkeypatch):
+    """'Try again' always worked: the first search raced Spotify still loading."""
+    monkeypatch.setattr(sc.threading.Thread, "start", lambda *a: None)
+    monkeypatch.setattr(sc, "_spotify_window_exists", lambda: True)
+    monkeypatch.setattr(sc, "_spotify_is_playing", lambda: True)
+    monkeypatch.setattr(sc, "_mark_spotify_playing_state", lambda: None)
+    tracks = {"now": ("Old", "Someone")}
+    monkeypatch.setattr(sc, "_now_playing", lambda: tracks["now"])
+    monkeypatch.setattr(
+        sc,
+        "_wait_for_new_track",
+        lambda before, q, timeout_s=5.0: (
+            tracks["now"] if tracks["now"][0] == "سواد الغيم" else None
+        ),
+    )
+    attempts = []
+
+    def search_ui(query, **kw):
+        attempts.append(kw)
+        if len(attempts) == 1:
+            return False, "Spotify's window timed out; its UI worker was stopped"
+        tracks["now"] = ("سواد الغيم", "Mikasa Music")
+        return True, "clicked"
+
+    monkeypatch.setattr("actions.spotify_search_worker.search_ui", search_ui)
+    out = sc._spotify_search_and_play("سواد الغيم by Mikasa Music")
+    assert "failed" in out and "timed out" in out
+    assert len(attempts) == 1
+
+
+# ── PF-025: a mood/genre search is verified by what it started ──────────────
+
+
+def _obs(title="", artist="", playback="playing", available=True):
+    return {"available": available, "title": title, "artist": artist, "playback": playback}
+
+
+@pytest.fixture
+def _mood_env(_search_env, monkeypatch):
+    """Live 2026-11-15 20:56: "chill music" pressed the 'Chill Hits' playlist,
+    a new song played, and Era still said PlaybackNotVerified."""
+    from core import media_observation
+
+    monkeypatch.setattr(sc, "_cancel_wait", lambda _s: None)
+    monkeypatch.setattr(sc, "_now_playing", lambda: ("Sunroof", "Nicky Youre"))
+    state = {"seq": []}
+
+    def spotify():
+        seq = state["seq"]
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    monkeypatch.setattr(media_observation, "spotify", spotify)
+    clock = {"t": 0.0}
+
+    def mono():
+        clock["t"] += 0.5  # every observation costs half a second of the 6 s window
+        return clock["t"]
+
+    monkeypatch.setattr(sc.time, "monotonic", mono)
+    return state
+
+
+def _search(state, readings, detail):
+    state["seq"] = list(readings)
+    with patch("actions.spotify_search_worker.search_ui", return_value=(True, detail)) as ui:
+        result = sc._spotify_search_and_play("chill music")
+    assert ui.call_count == 1  # never repeated to verify
+    return result
+
+
+def test_mood_playlist_that_started_a_new_song_is_verified(_mood_env):
+    before = _obs("Sunroof", "Nicky Youre")
+    result = _search(
+        _mood_env, [before, _obs("Sunflower", "Post Malone")], "clicked: Play Chill Hits"
+    )
+    assert result.success and result.verified and result.verifier_name == "spotify_native"
+    assert result.data["selected"] == "Chill Hits"
+    assert "previous_media_observation" in result.data  # outer verifier keeps this proof
+    assert "Sunflower" in result.message
+
+
+def test_mood_search_with_the_old_song_still_playing_is_not_verified(_mood_env):
+    old = _obs("Sunroof", "Nicky Youre")
+    result = _search(_mood_env, [old, old], "clicked: Play Chill Hits")
+    assert not result.success and result.error_type == "PlaybackNotVerified"
+
+
+def test_mood_search_with_nothing_playing_is_not_verified(_mood_env):
+    before = _obs("Sunroof", "Nicky Youre", playback="paused")
+    result = _search(
+        _mood_env, [before, _obs("Sunflower", "Post Malone", playback="paused")], "clicked"
+    )
+    assert not result.success and result.error_type == "PlaybackNotVerified"
+
+
+def test_mood_track_row_must_be_that_exact_track(_mood_env):
+    before = _obs("Sunroof", "Nicky Youre")
+    wrong = _search(
+        _mood_env,
+        [before, _obs("Some Other Song", "Somebody")],
+        "clicked: Play Chill Music by Lofi Fruits",
+    )
+    assert not wrong.success
+    right = _search(
+        _mood_env,
+        [before, _obs("Chill Music", "Lofi Fruits")],
+        "clicked: Play Chill Music by Lofi Fruits",
+    )
+    assert right.success and right.verified
+
+
+def test_named_song_search_stays_strict(_search_env):
+    """A specific title is never verified by "something new is playing"."""
+    readings = iter([("Sunroof", "Nicky Youre")] + [("Unrelated", "Artist")] * 50)
+    with (
+        patch.object(sc, "_now_playing", side_effect=lambda: next(readings)),
+        patch("actions.spotify_search_worker.search_ui", return_value=(True, "clicked: Play X")),
+    ):
+        msg = sc._spotify_search_and_play("Viva la Vida")
+    from core.tool_result import looks_like_failure
+
+    assert isinstance(msg, str) and looks_like_failure(msg)
+
+
+@pytest.mark.parametrize(
+    "query, mood",
+    [
+        ("chill music", True),
+        ("night music", True),
+        ("sexy music", True),
+        ("chill rap mix", True),
+        ("some jazz", True),
+        ("lofi beats.", True),
+        ("Viva la Vida", False),
+        ("Radio Newseum, please", False),
+        ("سواد الغيم by Mikasa Music", False),
+        ("", False),
+    ],
+)
+def test_what_counts_as_a_mood_request(query, mood):
+    from core.personal_media import is_mood_request
+
+    assert is_mood_request(query) is mood
+
+
+def test_the_worker_names_the_control_it_pressed():
+    btn = _Btn("Play Chill Hits")
+
+    class _Win:
+        pass
+
+    with (
+        patch.object(spotify_ui, "_UIA", True),
+        patch.object(spotify_ui, "Desktop", create=True) as desk,
+        patch.object(spotify_ui, "_buttons", return_value=[btn]),
+        patch.object(spotify_ui, "_on_screen", side_effect=lambda b, w: b),
+    ):
+        desk.return_value.window.return_value = _Win()
+        ok, detail = spotify_ui.invoke_search_result(1, "chill music", prefer_click=True)
+    assert ok and detail == "clicked: Play Chill Hits"
+    assert sc._selected_control(detail) == ("Chill Hits", "")
+    assert sc._selected_control("clicked: Play Chill Music by Lofi Fruits") == (
+        "Chill Music",
+        "Lofi Fruits",
+    )
+    assert sc._selected_control("clicked") is None

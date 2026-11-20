@@ -1,0 +1,985 @@
+diff --git a/core/attention.py b/core/attention.py
+index 7ce4919..12b6506 100644
+--- a/core/attention.py
++++ b/core/attention.py
+@@ -57,4 +57,24 @@ DEFAULTS = {
+ _VOICE_JSON = Path(__file__).resolve().parent.parent / "config" / "voice.json"
+ _END_SILENCE_S = 0.7  # this much quiet ends an utterance
++# PF-039: "stay silent" / "remain silent" puts Era straight into inactivity mode
++# (window closed, mic and session warm; only her name reopens it). Whole utterance
++# only, so "stay silent when I'm on a call" or "why did you stay silent" never
++# match. Optional greeting/name before, "please"/"now"/"sir" after.
++_SILENCE_ORDER = re.compile(
++    r"^\W*(?:(?:hey|ok|okay)\s+)?(?:era(?:\s+one)?\s*[,;:]?\s*)?(?:please\s+)?"
++    r"(?:(?:remain|stay|keep|be|go)\s+(?:silent|quiet)"
++    r"|(?:reste[zr]?|restez)\s+silencieu(?:x|se))"
++    r"(?:[\s,]+(?:now|please|for\s+now|sir|era))*\W*$",
++    re.IGNORECASE,
++)
++
++
++def is_silence_order(text: str) -> bool:
++    return bool(text) and _SILENCE_ORDER.match(text.strip()) is not None
++
++
++# PF-038: Era's reply must finish within this long of the owner's in-window turn
++# to continue the conversation (covers a reply that ends just after expiry).
++OWNER_TURN_REPLY_S = 60.0
+ _PREROLL_FRAMES = 5  # ~0.3 s at 64 ms frames: the word's onset, kept for Gemini
+ 
+@@ -157,4 +177,6 @@ class ListeningState:
+         # The user deliberately addressed Era (her name, a wake, typing).
+         self._explicit_reply_pending = False
++        # When the owner took a voice turn inside an OPEN window (PF-038).
++        self._owner_turn_at: float | None = None
+ 
+     def era_finished_speaking(self, interrupted: bool, internal: bool = False) -> None:
+@@ -165,7 +187,18 @@ class ListeningState:
+         so it neither re-anchors the window nor consumes a pending address.
+         """
+-        if self._explicit_reply_pending and not internal:
+-            self._session.note_accepted()
++        if not internal:
++            # PF-038: her reply to an owner turn taken inside an OPEN window keeps
++            # the conversation going, music or not (live 2026-11-16 21:49-21:53:
++            # Spotify on, owner talking every 10-20 s, the window lapsed mid-chat).
++            # A reply can still never RE-open a closed window (2026-10-10 loop).
++            # The turn itself was taken inside the window, so a reply that
++            # finishes just after expiry still continues it (review F1), but a
++            # stale turn (> OWNER_TURN_REPLY_S) does not.
++            turn_at = self._owner_turn_at
++            conversing = turn_at is not None and (self._clock() - turn_at <= OWNER_TURN_REPLY_S)
++            if self._explicit_reply_pending or conversing:
++                self._session.note_accepted()
+             self._explicit_reply_pending = False
++            self._owner_turn_at = None
+         if not interrupted:
+             self._hold_until = self._clock() + get_listening_config()["echo_hold_ms"] / 1000.0
+@@ -187,7 +220,22 @@ class ListeningState:
+             self._explicit_reply_pending = True
+ 
++    def note_owner_turn(self, verified: bool = False) -> None:
++        """A voice input turn was accepted (PF-038).
++
++        Counts only inside an OPEN window. While media plays it counts only when
++        the voice was verified as the owner's (voice lock on and ready): with
++        the lock off a transcribed lyric or film line is indistinguishable from
++        the owner, and the owner refused to let those keep Era listening.
++        """
++        if not self._session.open():
++            return
++        if self._media_playing() and not verified:
++            return
++        self._owner_turn_at = self._clock()
++
+     def close_session(self) -> None:
+         """Close the session ("standby" in the one-mode model)."""
+         self._explicit_reply_pending = False
++        self._owner_turn_at = None
+         self._session.close()
+ 
+diff --git a/main.py b/main.py
+index 5d0b06f..0ad3be5 100644
+--- a/main.py
++++ b/main.py
+@@ -299,4 +299,25 @@ def _build_live_health() -> LiveHealth:
+ 
+ 
++def _owner_voice_verified(era=None) -> bool:
++    """Was THIS voice turn verified as the owner's (PF-038)?
++
++    Needs the voice lock ON and ready (the speaker gate then drops other voices
++    before Gemini) AND the gate's verdict on the latest utterance it passed to
++    be a full scored match: a short follow-up passes unscored (or on a low
++    floor), so a brief lyric could ride on it (dev-review 2026-11-16). With the
++    lock off nothing can tell the owner from a song. Never raises.
++    """
++    try:
++        from core.speaker_recognition import get_verifier
++
++        verifier = get_verifier()
++        if not (verifier.enabled and verifier.readiness()[0]):
++            return False
++        gate = getattr(era, "_voice_gate", None)
++        return bool(gate is not None and gate.last_pass_fully_verified)
++    except Exception:
++        return False
++
++
+ def _speaking_for_internal_turn(era) -> bool:
+     """Is Era's current speech the reply to an internal request (a scheduled
+@@ -864,4 +885,13 @@ class EraLive(
+         self._input_envelope = envelope
+         self._tg_reply_pending = envelope.source == "telegram"
++        if envelope.source == "voice":
++            # PF-038: a voice turn inside an open window lets Era's reply to it
++            # extend the conversation (core/attention.py note_owner_turn).
++            try:
++                state = getattr(self, "_listening_state", None)
++                if callable(state):
++                    state().note_owner_turn(verified=_owner_voice_verified(self))
++            except Exception as e:
++                print(f"[ATTENTION] owner-turn hook skipped: {type(e).__name__}: {e}")
+         log_event(
+             main_logger,
+@@ -1125,4 +1155,11 @@ class EraLive(
+         # message, classifies it SHORT_UNCLEAR, and asks "what should I do with it?" —
+         # so the order was answered instead of executed. Same path as the F4 sentinel.
++        from core.attention import is_silence_order
++
++        if is_silence_order(text):
++            self.ui.write_log(f"You: {text.strip()}")
++            self._enter_inactivity("typed")
++            return
++
+         if _STANDBY_INTENT.match(text.strip()):
+             self.ui.write_log(f"SYS: Standby ordered by text: '{text.strip()}'")
+@@ -2074,4 +2111,101 @@ class EraLive(
+             task.cancel()
+ 
++    def _enter_inactivity(self, source: str, drop_reply: bool = True) -> None:
++        """PF-039: "stay silent" -> inactivity mode at once, no spoken reply.
++
++        Closes the conversation window like a one-mode standby (mic and Live
++        session stay warm, never EraState.STANDBY), so only her name reopens it,
++        and drops Era's reply to this turn: the owner asked for silence. The HUD
++        inactivity badge and entry cue (PF-035) are the acknowledgement.
++        """
++        try:
++            already = self._barge_in_requested and not self._listening_state().window_open()
++        except Exception:
++            already = False
++        if already:
++            return  # the growing transcript of the same order: done once
++        _close_listening_session(self)
++        if drop_reply:
++            # Reset at the turn boundary. Never set it AFTER that boundary
++            # (drop_reply=False), or it would swallow her NEXT reply.
++            self._barge_in_requested = True
++            try:
++                self.trigger_barge_in("silence_order")
++            except Exception as e:
++                print(f"[SILENCE] barge-in skipped: {type(e).__name__}: {e}")
++        print(f"[SILENCE] Inactivity mode ordered ({source}).")
++        self.ui.write_log("SYS: Staying silent - say 'Era' to talk to me again.")
++
++    def _silence_partial(self, text: str) -> bool:
++        """PF-039, growing voice transcript. Returns True while it is a bare
++        silence order (the caller then skips note_transcript).
++
++        Nothing irreversible happens here (dev-review: "stay silent" may be the
++        start of "stay silent when I'm on a call"): Era's reply output is HELD,
++        in order (_emit_or_hold). If more words turn it into another sentence,
++        the held output is delivered and she answers in full. The window closes
++        and the held output is discarded only at the end of speech
++        (_silence_finished).
++        """
++        from core.attention import is_silence_order
++
++        if is_silence_order(text):
++            if getattr(self, "_silence_committed", None) == text:
++                return True  # already acted on this very order
++            if not getattr(self, "_silence_hold", False):
++                self._silence_hold = True
++                self._silence_deferred = []
++            return True
++        self._silence_committed = None
++        self._release_silence_hold()  # not an order after all: she answers in full
++        return False
++
++    def _emit_or_hold(self, emit) -> None:
++        """PF-039: reply output goes out now, or is KEPT in order while a bare
++        "stay silent" might still become a longer sentence (dev-review: dropping
++        it lost the start of her answer to "stay silent when I'm on a call")."""
++        if getattr(self, "_silence_hold", False):
++            self._silence_deferred.append(emit)
++        else:
++            emit()
++
++    def _release_silence_hold(self) -> None:
++        """Not an order: deliver the held reply output in its original order."""
++        if not getattr(self, "_silence_hold", False):
++            return
++        self._silence_hold = False
++        held, self._silence_deferred = getattr(self, "_silence_deferred", []), []
++        for emit in held:
++            try:
++                emit()
++            except Exception as e:
++                print(f"[SILENCE] held output skipped: {type(e).__name__}: {e}")
++
++    def _discard_silence_hold(self) -> None:
++        """A real order: the held reply output is never delivered."""
++        self._silence_hold = False
++        self._silence_deferred = []
++
++    def _silence_finished(self, text: str, at_turn_end: bool = False) -> bool:
++        """PF-039, end of the owner's speech: commit only a whole bare order.
++
++        at_turn_end=True is the turn_complete backstop (no end-of-speech mark
++        came): her reply is already over, so nothing more is dropped.
++        """
++        from core.attention import is_silence_order
++
++        if is_silence_order(text):
++            self._discard_silence_hold()
++            if getattr(self, "_silence_committed", None) != text:
++                self._silence_committed = text
++                self._enter_inactivity("voice", drop_reply=not at_turn_end)
++            acted = True
++        else:
++            self._release_silence_hold()
++            acted = False
++        if at_turn_end:
++            self._silence_committed = None  # the turn is over: judge the next one fresh
++        return acted
++
+     def enter_standby(self, network_failure: bool = False):
+         from core.session import standby_enabled
+diff --git a/app/era_live/audio.py b/app/era_live/audio.py
+index 4958799..3966054 100644
+--- a/app/era_live/audio.py
++++ b/app/era_live/audio.py
+@@ -169,4 +169,23 @@ def _latency_mark(host, name: str, *args) -> None:
+ 
+ 
++def _emit_or_hold(era, emit) -> None:
++    """PF-039: deliver reply output now, or let the engine hold it while a bare
++    "stay silent" may still grow into a longer sentence. Test doubles without
++    the hook deliver immediately."""
++    hook = getattr(era, "_emit_or_hold", None)
++    if callable(hook):
++        hook(emit)
++    else:
++        emit()
++
++
++def _silence_turn_end(era, text: str) -> None:
++    """PF-039: resolve a pending silence hold at turn_complete (test doubles
++    without the hook have nothing held)."""
++    hook = getattr(era, "_silence_finished", None)
++    if callable(hook):
++        hook(text, at_turn_end=True)
++
++
+ class AudioIOMixin:
+     def _owned_speech_event(self, phrase, status: str) -> None:
+@@ -1061,5 +1080,7 @@ class AudioIOMixin:
+                                 else response.data
+                             )
+-                            self.audio_in_queue.put_nowait(chunk)
++                            # PF-039: held (not dropped) while "stay silent" may
++                            # still be the start of a longer sentence.
++                            _emit_or_hold(self, lambda c=chunk: self.audio_in_queue.put_nowait(c))
+ 
+                     if response.server_content:
+@@ -1100,5 +1121,5 @@ class AudioIOMixin:
+                                 if hasattr(self, "live_health"):
+                                     self.live_health.note_reply()  # a spoken transcript is an answer
+-                                hud.response_delta(txt)
++                                _emit_or_hold(self, lambda t=txt: hud.response_delta(t))
+                                 if (
+                                     native_turn is not None
+@@ -1108,8 +1129,9 @@ class AudioIOMixin:
+                                     and txt.endswith((".", "!", "?", "。", "！", "？"))
+                                 ):
+-                                    self.audio_in_queue.put_nowait(
+-                                        NativeSpeechCheckpoint(
+-                                            native_turn, " ".join(out_buf).strip()
+-                                        )
++                                    checkpoint = NativeSpeechCheckpoint(
++                                        native_turn, " ".join(out_buf).strip()
++                                    )
++                                    _emit_or_hold(
++                                        self, lambda c=checkpoint: self.audio_in_queue.put_nowait(c)
+                                     )
+                                 # ── fish_audio: the TRANSCRIPT is the speech ──
+@@ -1146,7 +1168,12 @@ class AudioIOMixin:
+                                     delta = _clean_stream_chunk(sc.output_transcription.text)
+                                     if speech_turn_owner is not None:
+-                                        self.speech_out.feed(delta, owner=speech_turn_owner)
++                                        _emit_or_hold(
++                                            self,
++                                            lambda d=delta, o=speech_turn_owner: (
++                                                self.speech_out.feed(d, owner=o)
++                                            ),
++                                        )
+                                     else:
+-                                        self.speech_out.feed(delta)
++                                        _emit_or_hold(self, lambda d=delta: self.speech_out.feed(d))
+                             elif (
+                                 VOICE_CFG.synthesizes_from_transcript()
+@@ -1155,5 +1182,5 @@ class AudioIOMixin:
+                             ):
+                                 # A whitespace-only chunk is still a word break.
+-                                self.speech_out.feed(" ")
++                                _emit_or_hold(self, lambda: self.speech_out.feed(" "))
+ 
+                         if sc.input_transcription and sc.input_transcription.text:
+@@ -1190,7 +1217,11 @@ class AudioIOMixin:
+                                 self._last_user_text = txt
+                                 self._inflight_user_text = " ".join(in_buf)
++                                # PF-039: a bare "stay silent" so far only HOLDS
++                                # her reply; the window closes at end of speech.
++                                # "Era, stay silent" must not re-open the window.
++                                silence = self._silence_partial(self._inflight_user_text)
+                                 try:
+                                     listening = getattr(self, "_listening_state", None)
+-                                    if callable(listening):
++                                    if callable(listening) and not silence:
+                                         listening().note_transcript(self._inflight_user_text)
+                                 except Exception:
+@@ -1233,4 +1264,7 @@ class AudioIOMixin:
+ 
+                             code_text = " ".join(in_buf)
++                            # PF-039: the owner finished speaking; a bare silence
++                            # order is now final (her held reply stays dropped).
++                            self._silence_finished(code_text)
+                             # Act at the end of the user's speech, not after the
+                             # model finishes an answer (which may never finish).
+@@ -1257,4 +1291,10 @@ class AudioIOMixin:
+ 
+                         if sc.turn_complete:
++                            # PF-039: resolve a pending "stay silent" hold FIRST,
++                            # before any end-of-reply marker (speech_out.end_turn,
++                            # NativeSpeechEnd) is queued, so held output for a
++                            # longer sentence is replayed inside this turn, and a
++                            # real order's output is discarded (dev-review 3rd).
++                            _silence_turn_end(self, " ".join(in_buf).strip())
+                             if codemode_owns_reply():
+                                 out_buf.clear()
+diff --git a/app/era_live/tool_dispatch.py b/app/era_live/tool_dispatch.py
+index c11761b..7646940 100644
+--- a/app/era_live/tool_dispatch.py
++++ b/app/era_live/tool_dispatch.py
+@@ -3167,5 +3403,18 @@ class ToolDispatchMixin:
+ 
+         if tool_name == "enter_standby":
++            from core.attention import is_silence_order
++
++            if is_silence_order(_current_user_text(self)):
++                # PF-039: "stay silent" means inactivity mode, never the real
++                # STANDBY (standby_enabled may be on: wake word only).
++                self._enter_inactivity("voice")
++                return "Inactivity mode: say nothing at all."
+             self.enter_standby()
++            from core.session import standby_enabled
++
++            if not standby_enabled():
++                # One-mode session (2026-11-11): there is no teardown and no
++                # code-spoken notice, so the model owns the single line.
++                return "Session closed. Say exactly 'System offline.' once, then stop."
+             # Do NOT ask the model to speak here — core/prompt.txt already
+             # tells it to stay silent around this tool, and the code plays
+diff --git a/core/voice_gate.py b/core/voice_gate.py
+index 132af11..1cf66a4 100644
+--- a/core/voice_gate.py
++++ b/core/voice_gate.py
+@@ -222,4 +222,14 @@ class UtteranceGate:
+             self._job = self._executor.submit(self._verifier.verify, pcm, purpose)
+ 
++    @property
++    def last_pass_fully_verified(self) -> bool:
++        """Was the latest utterance this gate let through SCORED as the owner?
++
++        False after a short follow-up (passed unscored or on the low follow-up
++        floor). Read-only; PF-038 uses it so an unscored lyric that slipped
++        through as a follow-up cannot extend the listening window.
++        """
++        return bool(self._owner_anchor_full)
++
+     def _mark_owner(self, now: float, full: bool) -> None:
+         if full:
+diff --git a/tools/test_reanchor_sources.py b/tools/test_reanchor_sources.py
+index f9ebca4..7811f69 100644
+--- a/tools/test_reanchor_sources.py
++++ b/tools/test_reanchor_sources.py
+@@ -107,2 +107,198 @@ def test_speech_for_an_internal_turn_is_recognised():
+     assert main._speaking_for_internal_turn(era) is False
+     assert main._speaking_for_internal_turn(SimpleNamespace()) is False
++
++
++# ── PF-038: a real conversation keeps the window open; lyrics never do ──
++
++
++def _music_state(clock):
++    return ListeningState(clock=clock, media_active=lambda: True, window_s=120)
++
++
++def test_a_verified_conversation_with_music_on_does_not_lapse_mid_chat():
++    # Live 2026-11-16 21:49-21:53: "Era" once, Spotify playing, the owner talked
++    # every 10-20 s and the window still closed mid-conversation.
++    clock = Clock()
++    state = _music_state(clock)
++    state.note_activity(explicit=True)  # "Era, play music"
++    state.era_finished_speaking(interrupted=False)
++    for _ in range(10):  # 10 unnamed follow-ups, 20 s apart (200 s > window)
++        clock.t += 15
++        state.note_owner_turn(verified=True)
++        clock.t += 5
++        state.era_finished_speaking(interrupted=False)
++        assert state.window_open() is True
++    clock.t += 121  # then real silence
++    assert state.window_open() is False
++
++
++def test_an_unverified_voice_turn_during_music_never_extends_the_window():
++    # Review F2 / owner 2026-11-16: lyrics and film lines must never keep Era
++    # listening. With the voice lock off a transcribed lyric looks like the owner.
++    clock = Clock()
++    state = _music_state(clock)
++    state.note_activity(explicit=True)
++    state.era_finished_speaking(interrupted=False)
++    for _ in range(3):
++        clock.t += 50
++        state.note_owner_turn(verified=False)  # a lyric Gemini transcribed
++        clock.t += 3
++        state.era_finished_speaking(interrupted=False)  # ...and answered
++    assert state.window_open() is False  # 159 s after the last real address
++
++
++def test_without_music_an_unnamed_turn_continues_the_conversation():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 100
++    state.note_owner_turn(verified=False)
++    clock.t += 5
++    state.era_finished_speaking(interrupted=False)
++    clock.t += 100
++    assert state.window_open() is True
++
++
++def test_a_turn_just_before_expiry_survives_a_reply_just_after_it():
++    # Review F1: turn at 119 s, reply finishing at 121 s.
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 119
++    state.note_owner_turn(verified=True)
++    clock.t += 2
++    assert state.window_open() is False
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is True
++
++
++def test_a_stale_turn_or_an_explicit_close_is_not_continued():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 10
++    state.note_owner_turn(verified=True)
++    clock.t += 200  # no reply for minutes
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is False
++    state = ListeningState(clock=clock, window_s=120)
++    state.note_owner_turn(verified=True)
++    state.close_session()  # "Era, standby"
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is False
++
++
++def test_an_owner_turn_cannot_reopen_a_closed_window():
++    clock = Clock()
++    state = _music_state(clock)
++    clock.t += 121
++    state.note_owner_turn(verified=True)  # taken after expiry
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is False
++
++
++def test_internal_speech_does_not_spend_an_owner_turn():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 100
++    state.note_owner_turn()
++    state.era_finished_speaking(interrupted=False, internal=True)  # a scheduled report
++    clock.t += 10
++    state.era_finished_speaking(interrupted=False)  # her real reply to the owner
++    clock.t += 100
++    assert state.window_open() is True
++
++
++def test_a_voice_input_marks_an_owner_turn_with_the_verification_state(monkeypatch):
++    import main
++
++    monkeypatch.setattr(main, "_owner_voice_verified", lambda era=None: True)
++    turns = []
++    era = SimpleNamespace(
++        _model_reply_ownership=None,
++        _telegram_speech=None,
++        _input_envelope=None,
++        _tg_reply_pending=False,
++        _listening_state=lambda: SimpleNamespace(
++            note_owner_turn=lambda verified=False: turns.append(verified)
++        ),
++    )
++    for source in ("voice", "typed"):
++        main.EraLive._accept_input(era, SimpleNamespace(id=source, source=source, received_at=0))
++    assert turns == [True]  # typed input is already an explicit address
++
++
++def test_owner_voice_counts_as_verified_only_for_a_scored_turn_with_the_lock_on(monkeypatch):
++    import core.speaker_recognition as sr
++    import main
++
++    scored = SimpleNamespace(_voice_gate=SimpleNamespace(last_pass_fully_verified=True))
++    unscored = SimpleNamespace(_voice_gate=SimpleNamespace(last_pass_fully_verified=False))
++    cases = [
++        (False, True, scored, False),  # lock off: nothing can tell owner from song
++        (True, False, scored, False),  # lock on but not ready
++        (True, True, None, False),  # no gate verdict at all
++        (True, True, unscored, False),  # short follow-up passed unscored
++        (True, True, scored, True),
++    ]
++    for enabled, ready, era, expected in cases:
++        fake = SimpleNamespace(enabled=enabled, readiness=lambda r=ready: (r, ""))
++        monkeypatch.setattr(sr, "get_verifier", lambda f=fake: f)
++        assert main._owner_voice_verified(era) is expected
++
++
++def _speech(seconds):
++    n = int(16000 * seconds)
++    pcm = (0.3 * np.sin(2 * np.pi * 180 * np.arange(n) / 16000) * 32767).astype("<i2")
++    return [pcm[i : i + 640].tobytes() for i in range(0, n, 640)]
++
++
++def test_an_unscored_follow_up_lyric_during_music_never_extends_the_window(monkeypatch):
++    """dev-review 2026-11-16: the REAL speaker gate passes a short follow-up
++    unscored; routed through _accept_input and Era's reply while music plays,
++    it must not extend the listening window."""
++    import core.speaker_recognition as sr
++    import main
++    from core.speaker_recognition import DEFAULT_SETTINGS, VerifyResult
++    from core.voice_gate import UtteranceGate
++
++    settings = dict(DEFAULT_SETTINGS, followup_window_s=20.0)
++
++    def verify(pcm, purpose="command"):
++        if purpose == "followup":
++            return VerifyResult(True, None, "follow-up (too short to score)")
++        return VerifyResult(True, 0.8, "match")
++
++    verifier = SimpleNamespace(
++        settings=settings, enabled=True, readiness=lambda: (True, ""), verify=verify
++    )
++    monkeypatch.setattr(sr, "get_verifier", lambda: verifier)
++    gate_clock = Clock()
++    gate = UtteranceGate(verifier, synchronous=True, clock=gate_clock)
++    silence = [bytes(640)] * 40
++
++    def feed(frames):
++        for f in frames:
++            gate_clock.t += 0.04
++            gate.feed(f)
++
++    feed(_speech(2.0) + silence)  # the owner's full command: scored
++    assert gate.last_pass_fully_verified is True
++    feed(_speech(0.2) + silence)  # a brief lyric inside the follow-up window
++    assert gate.last_pass_fully_verified is False
++
++    clock = Clock()
++    state = ListeningState(clock=clock, media_active=lambda: True, window_s=120)
++    era = SimpleNamespace(
++        _model_reply_ownership=None,
++        _telegram_speech=None,
++        _input_envelope=None,
++        _tg_reply_pending=False,
++        _listening_state=lambda: state,
++        _voice_gate=gate,
++    )
++    state.note_activity(explicit=True)
++    state.era_finished_speaking(interrupted=False)
++    clock.t += 100
++    main.EraLive._accept_input(era, SimpleNamespace(id="lyric", source="voice", received_at=0))
++    clock.t += 5
++    state.era_finished_speaking(interrupted=False)  # Gemini answered the lyric
++    clock.t += 20
++    assert state.window_open() is False  # 125 s after the last real address
+diff --git a/tools/test_silence_order.py b/tools/test_silence_order.py
+new file mode 100755
+index 0000000..c421b8e
+--- /dev/null
++++ b/tools/test_silence_order.py
+@@ -0,0 +1,384 @@
++"""PF-039: "stay silent" / "remain silent" -> inactivity mode at once.
++
++Owner 2026-11-16: saying "remain silent" or "stay silent" must immediately put
++Era into inactivity mode, so she answers only when named again. It must be the
++inactivity window (mic + Live session warm), never the real STANDBY (wake word
++only), and Era must not answer the order out loud.
++"""
++
++from __future__ import annotations
++
++import inspect
++import re
++from types import SimpleNamespace
++
++import pytest
++
++from core.attention import ListeningState, is_silence_order
++
++
++@pytest.mark.parametrize(
++    "text",
++    [
++        "stay silent",
++        "Remain silent.",
++        "Era, stay silent",
++        "era stay quiet please",
++        "Okay Era, remain silent now",
++        "be quiet",
++        "Keep quiet, sir.",
++        "Era One, stay silent for now",
++        "reste silencieuse",
++    ],
++)
++def test_silence_orders_are_recognised(text):
++    assert is_silence_order(text)
++
++
++@pytest.mark.parametrize(
++    "text",
++    [
++        "",
++        "stay silent when I'm on a call",
++        "why did you stay silent",
++        "don't stay silent",
++        "the movie stays silent at the end",
++        "silent night",
++        "can you tell me who said stay silent",
++        "stay",
++    ],
++)
++def test_other_sentences_are_not_silence_orders(text):
++    assert not is_silence_order(text)
++
++
++class _UI:
++    def __init__(self):
++        self.logs, self.states = [], []
++
++    def write_log(self, text):
++        self.logs.append(text)
++
++    def set_state(self, state):
++        self.states.append(state)
++
++
++def _era():
++    import main
++
++    state = ListeningState(window_s=120)
++    era = SimpleNamespace(
++        ui=_UI(),
++        _barge_in_requested=False,
++        _last_interaction_timestamp=0.0,
++        session_manager=SimpleNamespace(transition_to=lambda *a, **k: None),
++        _listening_state=lambda: state,
++        barge_ins=[],
++        standbys=[],
++    )
++    era.trigger_barge_in = lambda source="voice": era.barge_ins.append(source)
++    era.enter_standby = lambda *a, **k: era.standbys.append(1)
++    era._enter_inactivity = lambda source, drop_reply=True: main.EraLive._enter_inactivity(
++        era, source, drop_reply
++    )
++    era._release_silence_hold = lambda: main.EraLive._release_silence_hold(era)
++    era._discard_silence_hold = lambda: main.EraLive._discard_silence_hold(era)
++    era._emit_or_hold = lambda emit: main.EraLive._emit_or_hold(era, emit)
++    era.spoken = []
++    return main, era, state
++
++
++def _reply(era, chunk):
++    """What _receive_audio does with each reply chunk (audio, text, HUD)."""
++    from app.era_live import audio
++
++    audio._emit_or_hold(era, lambda c=chunk: era.spoken.append(c))
++
++
++def _partial(main, era, text):
++    return main.EraLive._silence_partial(era, text)
++
++
++def _finished(main, era, text, at_turn_end=False):
++    return main.EraLive._silence_finished(era, text, at_turn_end=at_turn_end)
++
++
++def _turn_boundary(era):
++    era._barge_in_requested = False  # what turn_complete does in _receive_audio
++
++
++def test_a_longer_sentence_starting_with_the_order_leaves_the_window_open():
++    # dev-review 2026-11-16: "stay silent" then "when I'm on a call" as two chunks.
++    main, era, state = _era()
++    assert _partial(main, era, "stay silent") is True  # only HOLDS her reply
++    assert era._barge_in_requested is False  # nothing is dropped
++    assert state.window_open() is True  # nothing irreversible yet
++    assert _partial(main, era, "stay silent when I'm on a call") is False
++    assert _finished(main, era, "stay silent when I'm on a call") is False
++    assert state.window_open() is True
++    assert era.barge_ins == [] and era.ui.states == []
++
++
++def test_interleaved_reply_output_is_delivered_complete_for_a_longer_sentence():
++    # dev-review 2026-11-16 (second review): input chunk -> OUTPUT chunk -> input
++    # chunk must deliver her whole ordinary reply, in order.
++    main, era, _ = _era()
++    _partial(main, era, "stay silent")
++    _reply(era, "Of course, ")
++    _reply(era, "I'll keep ")
++    assert era.spoken == []  # held, not dropped
++    _partial(main, era, "stay silent when I'm on a call")
++    assert era.spoken == ["Of course, ", "I'll keep "]
++    _reply(era, "quiet during calls.")
++    _finished(main, era, "stay silent when I'm on a call")
++    assert era.spoken == ["Of course, ", "I'll keep ", "quiet during calls."]
++
++
++def test_a_standalone_order_delivers_no_reply_at_all():
++    main, era, state = _era()
++    _partial(main, era, "stay silent")
++    _reply(era, "Understood, ")
++    _reply(era, "I'll be quiet.")
++    _finished(main, era, "stay silent")  # end-of-speech mark
++    assert era.spoken == []  # the held reply is discarded
++    assert era._barge_in_requested is True  # later chunks of it are dropped too
++    assert state.window_open() is False
++
++
++def test_an_era_prefix_of_a_longer_sentence_does_not_silence_her():
++    main, era, state = _era()
++    _partial(main, era, "Era, stay silent")
++    _reply(era, "Sure.")
++    _partial(main, era, "Era, stay silent about this at the meeting")
++    _finished(main, era, "Era, stay silent about this at the meeting")
++    assert state.window_open() is True and era._barge_in_requested is False
++    assert era.spoken == ["Sure."]
++
++
++def test_a_standalone_order_closes_the_window_without_speech():
++    main, era, state = _era()
++    assert _partial(main, era, "Era, stay silent") is True
++    assert _finished(main, era, "Era, stay silent") is True  # end-of-speech mark
++    assert state.window_open() is False
++    assert era._barge_in_requested is True  # her reply to the order is dropped
++    assert era.barge_ins == ["silence_order"] and era.standbys == []
++    _turn_boundary(era)
++    assert _finished(main, era, "Era, stay silent", at_turn_end=True) is True  # backstop
++    assert era._barge_in_requested is False  # her NEXT reply is not swallowed
++    assert era.barge_ins == ["silence_order"]
++
++
++def test_without_an_end_of_speech_mark_the_backstop_commits_but_drops_nothing_later():
++    main, era, state = _era()
++    _partial(main, era, "remain silent")
++    _turn_boundary(era)
++    assert _finished(main, era, "remain silent", at_turn_end=True) is True
++    assert state.window_open() is False
++    assert era._barge_in_requested is False
++
++
++def test_the_same_order_works_again_on_a_later_turn():
++    main, era, state = _era()
++    _partial(main, era, "Era, stay silent")
++    _finished(main, era, "Era, stay silent")
++    _turn_boundary(era)
++    _finished(main, era, "Era, stay silent", at_turn_end=True)
++    state.note_transcript("Era, what time is it?")  # she is named: window reopens
++    assert state.window_open() is True
++    _partial(main, era, "Era, stay silent")
++    _finished(main, era, "Era, stay silent")
++    assert state.window_open() is False
++
++
++def test_the_order_closes_the_window_and_drops_her_reply():
++    main, era, state = _era()
++    assert state.window_open() is True
++    main.EraLive._enter_inactivity(era, "voice")
++    assert state.window_open() is False  # only her name reopens it
++    assert era._barge_in_requested is True  # her reply to this turn is dropped
++    assert era.barge_ins == ["silence_order"]
++    assert era.standbys == []  # never the real STANDBY
++    assert era.ui.states == ["IDLE"]
++
++
++def test_her_name_reopens_it_afterwards():
++    main, era, state = _era()
++    main.EraLive._enter_inactivity(era, "voice")
++    state.note_transcript("Era, what time is it?")
++    assert state.window_open() is True
++
++
++def test_every_input_path_uses_inactivity_not_standby():
++    import main
++    from app.era_live import audio, tool_dispatch
++
++    typed = inspect.getsource(main.EraLive._handle_text_command)
++    assert typed.index("is_silence_order(text)") < typed.index(
++        "_STANDBY_INTENT.match(text.strip())"
++    )
++    voice = inspect.getsource(audio)
++    assert "silence = self._silence_partial(self._inflight_user_text)" in voice
++    assert "if callable(listening) and not silence:" in voice
++    assert "self._silence_finished(code_text)" in voice  # end-of-speech mark
++    assert "_silence_turn_end(self, " in voice  # turn_complete backstop, before end markers
++    assert "_enter_inactivity" not in voice  # never acted on a partial
++    # audio, checkpoint, HUD text, spoken text (owner/plain/space): all held, none dropped
++    assert len(re.findall(r"_emit_or_hold\(\s*self,", voice)) >= 6
++    tool = inspect.getsource(tool_dispatch)
++    i = tool.index('if tool_name == "enter_standby":')
++    branch = tool[i : i + 600]
++    assert branch.index("is_silence_order") < branch.index("self.enter_standby()")
++
++
++# ── PF-039 through the REAL _receive_audio loop (dev-review, third review) ──
++
++
++class _Nothing:
++    """Any engine part the scripted loop does not care about: callable,
++    falsy, and every attribute is another _Nothing."""
++
++    def __call__(self, *a, **k):
++        return None
++
++    def __getattr__(self, name):
++        if name.startswith("__"):
++            raise AttributeError(name)
++        return _Nothing()
++
++    def __bool__(self):
++        return False
++
++    def __iter__(self):
++        return iter(())
++
++
++def _drive_receive(monkeypatch, events):
++    """Run AudioIOMixin._receive_audio over scripted server messages in
++    transcript-speech mode; return (ordered speech_out log, listening state)."""
++    import asyncio
++
++    import app.era_live.audio as audio
++    import main
++    from core.live_turn_state import LiveTurnState
++
++    monkeypatch.setattr(audio.VOICE_CFG, "uses_speech_out", lambda: True)
++    monkeypatch.setattr(audio.VOICE_CFG, "synthesizes_from_transcript", lambda: True)
++    state = ListeningState(window_s=120)
++    log = []
++
++    class _SpeechOut:
++        def feed(self, text, owner=None):
++            log.append(("feed", text))
++
++        def end_turn(self, held_audio=None):
++            log.append(("end_turn", None))
++
++        def __getattr__(self, name):
++            return lambda *a, **k: None
++
++    class _Era(audio.AudioIOMixin):
++        _silence_partial = main.EraLive._silence_partial
++        _silence_finished = main.EraLive._silence_finished
++        _emit_or_hold = main.EraLive._emit_or_hold
++        _release_silence_hold = main.EraLive._release_silence_hold
++        _discard_silence_hold = main.EraLive._discard_silence_hold
++        _enter_inactivity = main.EraLive._enter_inactivity
++
++        def __getattr__(self, name):
++            if name.startswith("__"):
++                raise AttributeError(name)
++            return _Nothing()
++
++    def msg(inp=None, out=None, done=False):
++        content = SimpleNamespace(
++            input_transcription=SimpleNamespace(text=inp, finished=False) if inp else None,
++            output_transcription=SimpleNamespace(text=out) if out else None,
++            turn_complete=done,
++            generation_complete=done,
++            interrupted=False,
++            grounding_metadata=None,
++            model_turn=None,
++        )
++        return SimpleNamespace(
++            data=None, server_content=content, tool_call=None, session_resumption_update=None
++        )
++
++    era = _Era()
++    era.speech_out = _SpeechOut()
++    era._listening_state = lambda: state
++    era._barge_in_requested = False
++    era._go_away_event = asyncio.Event()
++    era._turn_done_event = asyncio.Event()
++    era.live_turn = LiveTurnState()
++    era.ui = _UI()
++    era.session_manager = SimpleNamespace(
++        handle_go_away=lambda _: False,
++        capture_token=lambda _: False,
++        transition_to=lambda *a, **k: None,
++    )
++    era._renewal_deadline = None
++    era._last_interaction_timestamp = 0.0
++    era._inflight_user_text = ""
++    era._shutdown_requested = False
++    era._cm_handoff_active = lambda: False
++    era._is_abort_order = lambda _: False
++    era._is_reboot_order = lambda _: False
++    era._take_cloud_audio_buffer = lambda: None
++
++    async def receive():
++        for kwargs in events:
++            yield msg(**kwargs)
++        era._go_away_event.set()
++
++    era.session = SimpleNamespace(receive=receive)
++
++    async def run():
++        try:
++            await asyncio.wait_for(era._receive_audio(), 2)
++        except Exception:
++            pass  # the scripted stream ends; only the emitted order matters
++
++    asyncio.run(run())
++    return log, state
++
++
++def test_real_loop_standalone_order_without_finished_mark_speaks_nothing(monkeypatch):
++    log, state = _drive_receive(
++        monkeypatch,
++        [
++            {"inp": "stay silent"},
++            {"out": "Understood, I'll be quiet."},
++            {"done": True},
++        ],
++    )
++    assert [e for e in log if e[0] == "feed"] == []
++    assert state.window_open() is False
++
++
++def test_real_loop_longer_sentence_delivers_the_whole_reply_before_end_turn(monkeypatch):
++    log, state = _drive_receive(
++        monkeypatch,
++        [
++            {"inp": "stay silent"},
++            {"out": "Of course, "},
++            {"inp": "when I'm on a call"},
++            {"out": "I'll stay quiet during calls."},
++            {"done": True},
++        ],
++    )
++    spoken = "".join(t for kind, t in log if kind == "feed")
++    assert "Of course," in spoken and "during calls." in spoken
++    assert spoken.index("Of course,") < spoken.index("during calls.")
++    assert log and log[-1] == ("end_turn", None)  # no reply text after its end marker
++    assert state.window_open() is True
++
++
++def test_the_hold_is_resolved_before_any_end_of_reply_marker():
++    import inspect as _inspect
++
++    from app.era_live import audio
++
++    src = _inspect.getsource(audio.AudioIOMixin._receive_audio)
++    tc = src.index("if sc.turn_complete:")
++    assert src.index("_silence_turn_end(self", tc) < src.index("self.speech_out.end_turn(", tc)
++    assert src.index("_silence_turn_end(self", tc) < src.index("NativeSpeechEnd(", tc)

@@ -256,6 +256,47 @@ class TestParsing:
     def test_garbage_yields_none(self, text):
         assert parse_json_object(text) is None
 
+    def test_code_travels_in_blocks_after_the_json(self):
+        """PF-053: Hermes over-escaped code inside JSON strings; blocks need no escaping."""
+        from crew.nabar import parse_crew_reply
+
+        text = (
+            '{"call": {"capability": "source.stage", "args": {"files": [{"path": "core/x.py",'
+            ' "edits": [{"old": "@old1", "new": "@new1"}]}], "plan": "keep @mentions"}}}\n'
+            "=====BEGIN old1=====\n"
+            '    print(f"failed ({type(exc).__name__}).")\n'
+            "=====END old1=====\n"
+            "=====BEGIN new1=====\n"
+            '    print(f"failed: {type(exc).__name__}: {exc}")\n'
+            'assert "HTTP 503" in "a\\nb"\n'
+            "=====END new1=====\n"
+        )
+        edit = parse_crew_reply(text)["call"]["args"]["files"][0]["edits"][0]
+        assert edit["old"] == '    print(f"failed ({type(exc).__name__}).")'
+        assert edit["new"].endswith('assert "HTTP 503" in "a\\nb"')  # verbatim, no escaping
+        assert parse_crew_reply(text)["call"]["args"]["plan"] == "keep @mentions"
+
+    def test_a_missing_block_makes_the_reply_unusable(self):
+        from crew.nabar import parse_crew_reply
+
+        text = '{"call": {"args": {"new": "@new1", "old": "@old1"}}}\n=====BEGIN old1=====\nx\n=====END old1====='
+        assert parse_crew_reply(text) is None
+        plain = '{"final": "ask @laura"}'
+        assert parse_crew_reply(plain) == {"final": "ask @laura"}  # no blocks: untouched
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '{"call": {"capability": "source.inspect", "args": {"query": "q"}}}]}',
+            '{"call": {"capability": "source.inspect", "args": {"query": "q"}}} and {"x": 2}',
+        ],
+    )
+    def test_a_complete_object_survives_trailing_junk(self, text):
+        """PF-053: live 2026-11-19 Hermes's valid calls carried a stray "]}" after them."""
+        assert parse_json_object(text) == {
+            "call": {"capability": "source.inspect", "args": {"query": "q"}}
+        }
+
     def test_build_report_survives_hostile_raw_output(self):
         raw = {
             "findings": "nope",

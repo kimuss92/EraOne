@@ -250,6 +250,15 @@ def test_unverified_candidate_cannot_activate(repository):
     assert not (repository / "features/sample.py").exists()
 
 
+def test_feature_snapshot_must_match_approval_before_execution(repository):
+    path = repository / "features" / "sample.py"
+    path.parent.mkdir()
+    path.write_text("raise AssertionError('unapproved code executed')")
+    with pytest.raises(ValueError, match="changed since approval"):
+        features.install([path], approved={"features/sample.py": "0" * 64})
+    assert features.catalog() == []
+
+
 def test_mutated_plan_cannot_reuse_approval(repository):
     job = pending(repository)
     job["files"][0]["diff"] = "changed preview"

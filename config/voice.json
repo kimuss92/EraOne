@@ -1,5 +1,20 @@
 {
   "mode": "gemini_audio",
   "gemini_voice": "Algenib",
-  "voice_input": "Microphone Array"
+  "voice_input": "Casque (CY03-CB36)",
+  "listening": {
+    "attention_window_s": 45.0,
+    "echo_hold_ms": 0
+  },
+  "barge_in": {
+    "min_speech_ms": 300,
+    "require_speech_vad": true
+  },
+  "endpointing": {
+    "prefix_ms": 80,
+    "silence_ms": 600,
+    "start_sensitivity": "high",
+    "end_sensitivity": "low"
+  },
+  "prefer_gemini_reconnect": true
 }

@@ -72,9 +72,10 @@ def test_without_espeak_unknown_words_are_skipped_not_fatal():
     assert "".join(k.phonemes("good zorblax sir")) == "ɡˈʊd sˌɜː"
 
 
-def test_token_ids_fit_kokoros_context():
+def test_token_overflow_rejects_speech_instead_of_truncating():
     k = _fake_engine()
-    assert len(k.token_ids("good " * 400)) == tts_kokoro._MAX_TOKENS - 2
+    with pytest.raises(ValueError, match="token capacity"):
+        k.token_ids("good " * 400)
 
 
 def test_a_broken_engine_returns_nothing_and_says_why(monkeypatch):

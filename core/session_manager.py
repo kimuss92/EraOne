@@ -16,10 +16,12 @@ DEFAULT_SESSION_FILE = Path(
     os.getenv("ERA_SESSION_FILE", str(Path.home() / ".era" / "session_state.json"))
 )
 
-# A Gemini Live resumption handle is only valid for a limited window. If the
-# saved token is older than this when we reload it, treat it as expired and start
-# a fresh session rather than trying (and failing) to resume with a stale handle.
-DEFAULT_MAX_TOKEN_AGE_SECONDS = 900.0  # 15 minutes — conservative, safe default
+# A Gemini Live resumption handle is valid for 2 hours after the last session
+# termination (ai.google.dev/gemini-api/docs/live-api/session-management). Age is
+# measured from the last handle UPDATE, which is never later than that
+# termination, so this is conservative; 5 min margin. The server's own refusal
+# stays authoritative (main.py drops a handle it rejects). Was 15 min (G0-3).
+DEFAULT_MAX_TOKEN_AGE_SECONDS = 7200.0 - 300.0
 
 
 @dataclass
@@ -182,6 +184,13 @@ class SessionManager:
 
     def get_resumption_token(self) -> str | None:
         return self.current_resumption_token
+
+    def token_expired(self, now: float | None = None) -> bool:
+        """True only for a handle held past its documented lifetime."""
+        if not self.current_resumption_token or self._token_saved_at is None:
+            return False
+        age = (time.time() if now is None else now) - self._token_saved_at
+        return age > DEFAULT_MAX_TOKEN_AGE_SECONDS
 
     def clear_token(self):
         self.current_resumption_token = None

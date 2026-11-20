@@ -39,6 +39,7 @@ from core.cm_vault import (
     _MAX_NOTE_CHARS,
     _PARA_ORDER,
     VaultNote,
+    brief_block,
 )
 from core.logger import log_event, setup_logger
 
@@ -338,7 +339,7 @@ def _audit_budget(known: dict[str, list[str]]) -> list[Finding]:
         used = 0
         dropped: list[str] = []
         for note in notes:
-            size = min(len(note.body), _MAX_NOTE_CHARS) + len(note.folder) + len(note.title) + 16
+            size = len(brief_block(note))
             if used + size > _MAX_BRIEF_CHARS:
                 dropped.append(note.rel)
                 continue

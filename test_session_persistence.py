@@ -27,13 +27,27 @@ def test_expired_token_is_dropped(tmp_path):
     path = tmp_path / "session_state.json"
     sm = SessionManager()
     sm.current_resumption_token = "handle-old"
-    sm._token_saved_at = time.time() - 3600  # 1 hour old
+    sm._token_saved_at = time.time() - 3 * 3600  # 3 hours old
     sm.save_to_disk(path)
 
     fresh = SessionManager()
-    # Default max age is 15 min, so a 1-hour-old handle must NOT be restored.
+    # Google honours a handle for 2 h after the session ends (G0-3); a
+    # 3-hour-old handle is past that and must NOT be restored.
     assert fresh.load_from_disk(path) is False
     assert fresh.get_resumption_token() is None
+
+
+def test_an_hour_old_token_is_still_restored(tmp_path):
+    """G0-3: the old 15-minute limit threw away handles the server still takes."""
+    path = tmp_path / "session_state.json"
+    sm = SessionManager()
+    sm.current_resumption_token = "handle-hour"
+    sm._token_saved_at = time.time() - 3600
+    sm.save_to_disk(path)
+
+    fresh = SessionManager()
+    assert fresh.load_from_disk(path) is True
+    assert fresh.get_resumption_token() == "handle-hour"
 
 
 def test_fresh_token_within_window_is_restored(tmp_path):

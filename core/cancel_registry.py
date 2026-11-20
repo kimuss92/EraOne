@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import itertools
+import json
 import threading
 import time
 from collections import OrderedDict, deque
@@ -91,6 +92,7 @@ class CancelToken:
     # by design) refuses the owner's next action as busy -- and worse, a later
     # "yes" meant for something else runs the abandoned one.
     confirmation_id: str = ""
+    fingerprint: str = ""
 
     def cancelled(self) -> bool:
         return self.event.is_set()
@@ -135,6 +137,36 @@ class CancelRegistry:
         with self._lock:
             self._live[cid] = token
         return token
+
+    def claim_unique(self, cid: str, tool: str, parameters: dict):
+        """Atomically reserve an exact live operation, returning any existing owner."""
+        from core.personal_media import search_identity
+
+        claim_tool, claim_parameters = search_identity(tool, parameters)
+        fingerprint = json.dumps(
+            [claim_tool, claim_parameters], sort_keys=True, ensure_ascii=True, default=str
+        )
+        with self._lock:
+            for token in self._live.values():
+                if token.fingerprint == fingerprint and not token.cancelled():
+                    return None, token
+            token = CancelToken(
+                cid=cid,
+                tool=tool,
+                generation=next(_gen_counter),
+                started_at=time.monotonic(),
+                label=tool,
+                fingerprint=fingerprint,
+            )
+            self._live[cid] = token
+            return token, None
+
+    def rekey_claim(self, token: CancelToken, cid: str) -> None:
+        with self._lock:
+            if self._live.get(token.cid) is token:
+                self._live.pop(token.cid)
+                token.cid = cid
+                self._live[cid] = token
 
     def attach_task(self, cid: str, task: Any) -> None:
         """Record the asyncio task of work that detached from the receive loop.

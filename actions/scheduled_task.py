@@ -63,7 +63,39 @@ _ACTION_ALIASES = {
     "report": "results",
     "chain": "steps",
     "sequence": "steps",
+    # 2026-10-16: the model reached for these first when asked "any pending approval?"
+    "list_pending": "pending",
+    "approvals": "pending",
+    "pending_approvals": "pending",
 }
+
+
+def _live_confirmation_line() -> str:
+    """The armed confirmation the HUD shows as NEEDS APPROVAL, or "" (never raises).
+
+    `pending` used to read only the scheduler, so with a `manage_preference` waiver
+    parked in the confirmation store (HUD: ACTION REQUIRED) Era answered "no tasks
+    are waiting for approval" (2026-10-16). The HUD reads exactly this store
+    (app/hud/bus_approval.py), so reading it here keeps the two from disagreeing.
+    """
+    try:
+        import time
+
+        from app.hud import tool_adapter
+        from core.pending_confirmation import get_shared_store
+
+        p = get_shared_store().peek()
+        if p is None:
+            return ""
+        d = tool_adapter.describe(p.tool, p.parameters)
+        left = max(0, int((p.expires_at - time.time()) // 60))
+        reason = f" — {str(p.reason).strip()}" if str(p.reason or "").strip() else ""
+        return (
+            f"- {d['label']}: {d['activity']}{reason} (expires in ~{left} min; "
+            "the user answers yes or no)"
+        )
+    except Exception:
+        return ""
 
 
 def _ok(message: str) -> dict:
@@ -214,11 +246,19 @@ def _dispatch(action, ref, p, authority: Authority) -> dict:
         name, tool_name = str(p.get("name") or ref), str(p.get("tool") or "").strip()
         args = _parse_args(p.get("tool_args"))
         steps = ts.normalize_steps(_parse_steps(p.get("steps")))
+        kind = p.get("kind")
+        # Models sometimes encode one ordinary call as a chain. Canonicalize
+        # only the unconditional case; never discard a step's run_if guard.
+        if len(steps) == 1 and not steps[0].get("run_if") and kind != "reminder":
+            tool_name, args = steps[0]["tool"], steps[0]["args"]
+            steps, kind = [], "tool"
+        elif kind == "chain" and not steps and tool_name:
+            kind = "tool"
         has_action = bool(steps or tool_name)
         task = ts.create_task(
             name,
             p.get("when") or "",
-            kind=p.get("kind") or ("tool" if has_action else "reminder"),
+            kind=kind or ("tool" if has_action else "reminder"),
             tool=tool_name,
             args=args,
             steps=steps,
@@ -350,7 +390,13 @@ def _dispatch(action, ref, p, authority: Authority) -> dict:
 
     if action == "skip":
         out = ts.skip(ref or None)
-        return _ok(f"Skipped this run of '{out['task']['name']}'. It stays scheduled.")
+        # The user just did this: never narrate it back ("the task was skipped by
+        # the user"). A two-word acknowledgement is the whole reply (2026-10-16).
+        return _ok(
+            f"Skipped this run of '{out['task']['name']}'; it stays scheduled. Reply with "
+            "two or three words only (e.g. 'Done, sir.') — do not tell the user what they "
+            "just did."
+        )
 
     if action in ("waive_confirmation", "require_confirmation"):
         waived = action == "waive_confirmation"
@@ -398,11 +444,16 @@ def _dispatch(action, ref, p, authority: Authority) -> dict:
 
     if action == "pending":
         items = ts.pending_approvals()
-        if not items:
-            return _ok("No scheduled task is waiting for approval.")
+        live = _live_confirmation_line()
+        if not items and not live:
+            return _ok("Nothing is waiting for the user's approval.")
         for t in items:  # the model reads these to the user: that is the ask
             ts.mark_announced(t["id"])
-        return _ok("Awaiting approval:\n" + "\n".join(f"- {format_task(t)}" for t in items))
+        lines = ([live] if live else []) + [f"- {format_task(t)}" for t in items]
+        return _ok(
+            "Awaiting the user's approval — name each item to them, never say nothing "
+            "is pending:\n" + "\n".join(lines)
+        )
 
     if action == "steps":
         task = ts.get_task(ref)

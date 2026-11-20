@@ -1,0 +1,28 @@
+{
+  "logs/era.log": {
+    "tail_bytes": 4614433,
+    "counts": {
+      "audio.output.fallback": 2,
+      "audio.output.lost": 0,
+      "audio.output.recovered": 0,
+      "audio.output.reenum_scheduled": 17,
+      "engine.reconnect_error": 43,
+      "MME error 6": 0,
+      "reclaiming": 0,
+      "device refresh failed": 0
+    }
+  },
+  "logs/eraone.log": {
+    "tail_bytes": 1046061,
+    "counts": {
+      "audio.output.fallback": 0,
+      "audio.output.lost": 0,
+      "audio.output.recovered": 0,
+      "audio.output.reenum_scheduled": 0,
+      "engine.reconnect_error": 0,
+      "MME error 6": 20,
+      "reclaiming": 0,
+      "device refresh failed": 0
+    }
+  }
+}

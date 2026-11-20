@@ -4,7 +4,7 @@ import { setState } from './store';
 import type { DrawerId } from './types';
 export type Widget = { id: string; kind: string; label: string; value?: string | number; series?: number[]; binding?: 'cpu_percent' | 'ram_percent' | 'development'; action?: { drawer: DrawerId } };
 export type Scene = { revision: number; bundle?: string; layout: { theme: 'light' | 'dark'; left: boolean; right: boolean; columns: number; accent: string; density: string }; widgets: Widget[] };
-export type Job = { id: string; request: string; state: string; phase?: string; progress: number; attempt?: number; plan: string; error?: string; approval: string; reload: boolean; requires_restart?: boolean; files: { path: string; diff: string }[]; checks: Record<string, unknown>; updated_at?: number };
+export type Job = { id: string; request: string; state: string; phase?: string; progress: number; attempt?: number; plan: string; error?: string; approval: string; reload: boolean; requires_restart?: boolean; owner?: string; participants?: string[]; work_id?: string; files: { path: string; diff: string }[]; checks: Record<string, unknown>; updated_at?: number };
 const Context = createContext<{ jobs: Job[]; scene: Scene | null; stale: boolean; refresh: () => void }>({ jobs: [], scene: null, stale: true, refresh: () => {} });
 export const useDevelopment = () => useContext(Context);
 export const working = (j: Job) => ['planning', 'repairing', 'verifying', 'activating'].includes(j.state);

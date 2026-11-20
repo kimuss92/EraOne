@@ -1,0 +1,148 @@
+{
+  "PC control": {
+    "files": [
+      "actions/computer_control.py",
+      "actions/desktop_ops.py",
+      "actions/window_control.py"
+    ],
+    "graph_symbols": 88,
+    "sample_symbols": [
+      "safe_screenshot_path()",
+      "Path",
+      "_require_pyautogui()",
+      "_random_data()",
+      "_user_profile()",
+      "_type()",
+      "_smart_type()",
+      "_click()",
+      "_hotkey()",
+      "_press()",
+      "_scroll()",
+      "_move()"
+    ]
+  },
+  "Files": {
+    "files": [
+      "actions/file_controller.py",
+      "actions/file_indexer.py"
+    ],
+    "graph_symbols": 124,
+    "sample_symbols": [
+      "_resolve_path()",
+      "Path",
+      "_cloud_present()",
+      "_recover_source()",
+      "_safe_trash()",
+      "_is_windows_path()",
+      "_extract_windows_path()",
+      "_get_available_drives()",
+      "_SearchContext",
+      ".__init__()",
+      ".update()",
+      ".is_fresh()"
+    ]
+  },
+  "Browser": {
+    "files": [
+      "actions/browser_control.py"
+    ],
+    "graph_symbols": 126,
+    "sample_symbols": [
+      "_trace_page()",
+      "_normalize_url()",
+      "_domain_matches()",
+      "_domain_family_matches()",
+      "_expected_domain_family_from_url()",
+      "_reusable_app_host()",
+      "_is_app_root()",
+      "_find_opera_windows()",
+      "_find_exe_windows()",
+      "_resolve_browser()",
+      "_detect_default_browser()",
+      "_try_save_grid()"
+    ]
+  },
+  "Spotify": {
+    "files": [
+      "actions/spotify_control.py"
+    ],
+    "graph_symbols": 82,
+    "sample_symbols": [
+      "_enforce_spotify_priority()",
+      "_get_spotify_hwnd_and_title()",
+      "_focus_spotify_window()",
+      "_get_spotify_volume_interface()",
+      "_get_spotify_audio_session_state()",
+      "_spotify_is_playing()",
+      "_spotify_window_exists()",
+      "_send_spotify_command()",
+      "_launch_spotify_desktop()",
+      "_open_search()",
+      "_open_spotify_uri()",
+      "_press_global_media_play_pause()"
+    ]
+  },
+  "Netflix": {
+    "files": [
+      "actions/netflix_control.py"
+    ],
+    "graph_symbols": 146,
+    "sample_symbols": [
+      "_mark_fullscreen_pending()",
+      "_fullscreen_settling()",
+      "_normalize_netflix_title_href()",
+      "_is_valid_netflix_href()",
+      "_extract_netflix_title_id()",
+      "_is_bad_netflix_element()",
+      "_looks_like_dirty_media_query()",
+      "_is_netflix_generic_heading()",
+      "_normalize_title_for_match()",
+      "_is_verified_title_match()",
+      "_read_netflix_visible_title()",
+      "_save_netflix_grid()"
+    ]
+  },
+  "Memory": {
+    "files": [
+      "memory/memory_manager.py",
+      "memory/semantic_recall.py"
+    ],
+    "graph_symbols": 64,
+    "sample_symbols": [
+      "get_base_dir()",
+      "Path",
+      "_parse_bool()",
+      "_parse_int()",
+      "_empty_memory()",
+      "load_memory()",
+      "_all_entries()",
+      "_trim_to_limit()",
+      "save_memory()",
+      "_truncate_value()",
+      "_recursive_update()",
+      "update_memory()"
+    ]
+  },
+  "Ear": {
+    "files": [
+      "core/attention.py",
+      "core/vad.py",
+      "core/speaker_recognition.py"
+    ],
+    "graph_symbols": 86,
+    "sample_symbols": [
+      "_clamp()",
+      "load_settings()",
+      "Path",
+      "pcm_to_float()",
+      "ndarray",
+      "voiced_segment()",
+      "SherpaEmbedder",
+      ".__init__()",
+      ".model_name()",
+      "._load()",
+      ".embed()",
+      "SpeakerProfile"
+    ]
+  }
+}

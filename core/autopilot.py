@@ -69,6 +69,37 @@ def classify(text: str) -> Decision:
     body = re.sub(r"^(?:please\s+|(?:can|could|would) you\s+)", "", body, flags=re.I)
     body = re.sub(r"^please\s+", "", body, flags=re.I).strip().rstrip(".!? ")
     low = body.lower()
+    if re.fullmatch(r"what(?:'s| is) running|what (?:tasks|jobs) are running", low):
+        return _local(
+            "visual_engine",
+            {"command": json.dumps({"action": "focus", "view": "activity"})},
+            "hud_focus",
+        )
+    view = re.fullmatch(
+        r"(?:show(?: me)?|open|focus|display|bring up) (?:the |my )?"
+        r"(system telemetry|telemetry|system metrics|activity|active tasks|tasks|memory|context|"
+        r"schedule|diagnostics|tools|capabilities|overview|telegram|development)(?: panel| view| dashboard)?",
+        low,
+    )
+    if view:
+        target = {
+            "system telemetry": "telemetry",
+            "system metrics": "telemetry",
+            "active tasks": "activity",
+            "tasks": "activity",
+            "capabilities": "tools",
+        }.get(view[1], view[1])
+        return _local(
+            "visual_engine",
+            {"command": json.dumps({"action": "focus", "view": target})},
+            "hud_focus",
+        )
+    # Hide/close built-in panels before the generic OS window grammar.
+    from features.hud_panel_visibility import parse_voice_command
+
+    panel = parse_voice_command(body)
+    if panel.get("ok") and panel.get("kind") == "command":
+        return _local("visual_engine", {"command": json.dumps(panel["command"])}, "hud_panel")
     # Scope is explicit: bare volume/mute means SYSTEM. Glasses never leak there.
     match = re.fullmatch(
         r"(?:(?:set|mets|règle|regle)\s+)?(?:(system|glasses|lunettes)\s+)?"

@@ -60,7 +60,10 @@ def run():
 
     # open_app verifier
     r6 = ToolResult.ok("Spotify opened successfully")
-    r6 = verify_action_result("open_app", r6)
+    from unittest.mock import patch
+
+    with patch("actions.open_app._find_launch_window", return_value=123):
+        r6 = verify_action_result("open_app", r6, {"app_name": "Spotify"})
     check("open_app verifier sets verified=True", r6.verified is True)
     check("open_app sets verifier_name", r6.verifier_name == "open_app")
     check("open_app sets verification_status=VERIFIED", r6.verification_status == "VERIFIED")
@@ -68,7 +71,7 @@ def run():
     # open_app failure message
     r7 = ToolResult.ok("could not locate")
     r7 = verify_action_result("open_app", r7, {"action": "open"})
-    check("open_app does not fail on 'could not locate' (open_app is lenient)", r7.verified is True)
+    check("open_app failure is not verified", r7.verified is False and r7.success is False)
 
     # browser_control failure
     r8 = ToolResult.ok("Unknown action: go_away")
@@ -138,7 +141,7 @@ def run():
     r18 = verify_tool_result(r18, tool="file_controller", parameters={"action": "write"})
     check(
         "verify_tool_result with tool routes to verifier",
-        r18.verified is True and r18.verifier_name == "file_controller",
+        r18.verified is False and r18.verifier_name == "file_controller",
     )
 
     r19 = ToolResult.ok("No results found for query")
@@ -170,3 +173,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+    raise SystemExit(1 if failed else 0)

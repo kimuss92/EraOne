@@ -34,10 +34,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+import uuid
 
 from app.era_live.tts_text import open_note_at, sanitize_for_tts, strip_notes
 from core import tts_router
 from core.audio_pcm import iter_pcm_frames
+from core.input_envelope import InputEnvelope
+from core.speech_frames import EnginePCM, SpeechEnd, SpeechFrame, SpeechPhrase
 from core.tts_fish import FISH, detect_lang
 
 # Sentence boundary: terminal punctuation followed by whitespace or end. Also
@@ -108,7 +111,12 @@ def split_sentences(text: str, *, final: bool = False) -> tuple[list[str], str]:
         if len(buf) >= _MAX_SENTENCE_CHARS:
             cut = buf.rfind(" ", 0, _MAX_SENTENCE_CHARS)
             if cut <= 0:
-                cut = _MAX_SENTENCE_CHARS
+                # The length limit is soft: a token may still be arriving.
+                # Wait for its actual boundary instead of voicing two halves.
+                boundary = re.search(r"\s", buf)
+                if boundary is None:
+                    break
+                cut = boundary.start()
             head = buf[:cut].strip()
             if head:
                 out.append(head)
@@ -197,8 +205,13 @@ class SpeechOut:
         # dropped there and a late Fish failure "replayed 0 buffered chunk(s)" —
         # a silent reply. Released when the turn's last sentence has played.
         self._turn_no = 0
+        self._feed_turn_no: int | None = None
+        self._queued_turns: set[int] = set()
+        self._failed_turns: set[int] = set()
         self._held_audio: dict[int, list[bytes]] = {}
         self._first_out = False  # has this turn released any text to synthesis yet?
+        self._feed_owner: InputEnvelope | None = None
+        self._external_turns: set[int] = set()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> bool:
@@ -235,6 +248,7 @@ class SpeechOut:
             print(f"[TTS] speech worker died: {type(exc).__name__}: {exc}")
 
     async def stop(self) -> None:
+        self.interrupt()  # a restarted worker must never replay old-session text
         if self._worker and not self._worker.done():
             self._worker.cancel()
             try:
@@ -244,12 +258,30 @@ class SpeechOut:
         self._worker = None
 
     # ── Input ────────────────────────────────────────────────────────────────
-    def feed(self, delta: str) -> None:
+    def _stream_turn(self) -> int:
+        if self._feed_turn_no is None:
+            self._feed_turn_no = self._turn_no
+            self._turn_no += 1
+        return self._feed_turn_no
+
+    def feed(
+        self, delta: str, *, owner: InputEnvelope | None = None, external: bool = False
+    ) -> None:
         """Accept a chunk of streamed model text."""
         if not delta:
             return
         if not self.start():
             return
+        turn_no = self._stream_turn()
+        if external:
+            self._external_turns.add(turn_no)
+        if owner is not None:
+            previous = self._feed_owner
+            if previous is not None and previous.id != owner.id:
+                raise ValueError("A speech turn cannot change its owner")
+            if previous is None and (self._first_out or self._buf.strip()):
+                raise ValueError("Speech ownership must be bound before its first text")
+            self._feed_owner = owner
         # Model notes go BEFORE splitting (they carry their own full stops), and a
         # note still streaming in is held back whole until its "]" arrives.
         self._buf = strip_notes(self._buf + delta)
@@ -265,7 +297,7 @@ class SpeechOut:
         if sentences:
             self._first_out = True
         for s in sentences:
-            self._pending.put_nowait((self._generation, self._turn_no, s))
+            self._pending.put_nowait((self._generation, turn_no, s, self._feed_owner))
 
     def pending_text(self) -> str:
         """Text produced but not yet voiced — for barge-in resume context.
@@ -286,22 +318,24 @@ class SpeechOut:
         """
         if not self.start():
             return
+        turn_no = self._stream_turn()
         # A "[" still open when the turn ends was a note cut short: never voice it.
         cut = open_note_at(self._buf)
         if cut >= 0:
             self._buf = self._buf[:cut]
         sentences, self._buf = split_sentences(self._buf, final=True)
         for s in sentences:
-            self._pending.put_nowait((self._generation, self._turn_no, s))
-        self._pending.put_nowait((self._generation, self._turn_no, _END_OF_TURN))
+            self._pending.put_nowait((self._generation, turn_no, s, self._feed_owner))
+        self._pending.put_nowait((self._generation, turn_no, _END_OF_TURN, self._feed_owner))
         if held_audio:
-            self._held_audio[self._turn_no] = list(held_audio)
+            self._held_audio[turn_no] = list(held_audio)
             while len(self._held_audio) > _MAX_HELD_TURNS:  # bounded: oldest goes first
                 self._held_audio.pop(min(self._held_audio))
-        self._turn_no += 1
+        self._feed_turn_no = None
         self._first_out = False
+        self._feed_owner = None
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, *, owner: InputEnvelope | None = None, external: bool = False) -> None:
         """Speak a complete utterance. Used by speak(); needs no Live session.
 
         Needs no SESSION, but it does need the event LOOP — the worker that
@@ -316,9 +350,11 @@ class SpeechOut:
             print("[TTS] no running loop — dropping local utterance")
             return
         sentences, _ = split_sentences(strip_notes(text), final=True)
+        if external:
+            self._external_turns.add(self._turn_no)
         for s in sentences:
-            self._pending.put_nowait((self._generation, self._turn_no, s))
-        self._pending.put_nowait((self._generation, self._turn_no, _END_OF_TURN))
+            self._pending.put_nowait((self._generation, self._turn_no, s, owner))
+        self._pending.put_nowait((self._generation, self._turn_no, _END_OF_TURN, owner))
         self._turn_no += 1
 
     # ── Interrupt ────────────────────────────────────────────────────────────
@@ -333,6 +369,11 @@ class SpeechOut:
         self._generation += 1
         self._buf = ""
         self._held_audio.clear()  # an interrupted reply must never replay later
+        self._queued_turns.clear()
+        self._failed_turns.clear()
+        self._external_turns.clear()
+        self._feed_turn_no = None
+        self._feed_owner = None
         self._first_out = False
         dropped = 0
         while not self._pending.empty():
@@ -344,7 +385,7 @@ class SpeechOut:
         return dropped
 
     # ── Fallback ─────────────────────────────────────────────────────────────
-    def _request_fallback(self, turn_no: int | None = None) -> None:
+    def _request_fallback(self, turn_no: int | None = None, *, reason: str | None = None) -> None:
         """Ask the engine to finish this turn with Gemini's own audio.
 
         Routed through the engine (not done here) because the recovery needs the
@@ -354,21 +395,35 @@ class SpeechOut:
         has it in its live buffer. getattr-guarded so SpeechOut stays usable
         standalone and in tests, where there is no engine to call back into.
         """
-        self._buf = ""
+        if self._feed_turn_no == turn_no:
+            self._buf = ""
         held = self._held_audio.pop(turn_no, None) if turn_no is not None else None
+        if reason is None:
+            reason = f"fish synthesis failed: {FISH.last_error or 'no audio'}"
+            try:
+                from core.voice_mode import VOICE_CFG
+
+                if VOICE_CFG.is_kokoro():
+                    from core.tts_kokoro import KOKORO
+
+                    reason = f"kokoro synthesis failed: {KOKORO.last_error or 'no audio'}"
+            except Exception:
+                pass
+        if turn_no in self._queued_turns:
+            # The whole native buffer has no sentence offsets. Replaying it
+            # would duplicate the local prefix still queued or already heard.
+            cb = getattr(self.era, "_tts_partial_failure", None)
+            if cb is not None:
+                try:
+                    cb(reason)
+                except Exception as e:
+                    print(f"[TTS] incomplete speech reporting failed: {e}")
+            else:
+                print(f"[TTS] Incomplete reply; whole-turn replay suppressed: {reason}")
+            return
         cb = getattr(self.era, "_tts_fallback", None)
         if cb is None:
             return
-        reason = f"fish synthesis failed: {FISH.last_error or 'no audio'}"
-        try:
-            from core.voice_mode import VOICE_CFG
-
-            if VOICE_CFG.is_kokoro():
-                from core.tts_kokoro import KOKORO
-
-                reason = f"kokoro synthesis failed: {KOKORO.last_error or 'no audio'}"
-        except Exception:
-            pass
         try:
             if held:
                 cb(reason, held_audio=held)
@@ -391,20 +446,32 @@ class SpeechOut:
     async def _run(self) -> None:
         while True:
             try:
-                generation, turn_no, item = await self._pending.get()
+                generation, turn_no, item, owner = await self._pending.get()
                 if generation != self._generation:
                     continue  # orphaned by an interrupt
 
                 if item is _END_OF_TURN:
+                    if (
+                        turn_no not in self._failed_turns
+                        and owner is not None
+                        and self._queue() is not None
+                    ):
+                        self._queue().put_nowait(SpeechEnd(owner))
                     # Every sentence of this turn has been voiced: its fallback
                     # audio can no longer be needed.
                     self._held_audio.pop(turn_no, None)
+                    self._queued_turns.discard(turn_no)
+                    self._failed_turns.discard(turn_no)
+                    self._external_turns.discard(turn_no)
                     # Only now is the turn really over: every sentence ahead of
                     # this sentinel has already been synthesized and enqueued,
                     # because the worker is strictly sequential.
                     event = getattr(self.era, "_turn_done_event", None)
                     if event is not None:
                         event.set()
+                    continue
+
+                if turn_no in self._failed_turns:
                     continue
 
                 # Only speech reaches the voice: no notes, paths, tags or markup
@@ -421,13 +488,51 @@ class SpeechOut:
                 if generation != self._generation:
                     continue
 
-                # PRIMARY: stream Fish Audio frames onto the queue AS THEY ARRIVE
-                # so playback starts on the first frame (~hundreds of ms) instead
-                # of after the whole sentence is synthesized (~seconds on a long
-                # reply). This is the latency fix — see core/tts_fish.stream().
+                # The router releases Fish frames only after a complete phrase
+                # response. A failed prefix cannot reach playback or be marked
+                # committed. Subsequent phrases still pipeline ahead of playback.
                 produced = False
                 event = getattr(self.era, "_turn_done_event", None)
-                async for chunk in tts_router.stream(item, detect_lang(item)):
+                failure_reason = None
+                try:
+                    synthesize = (
+                        tts_router.stream_text
+                        if turn_no in self._external_turns
+                        else tts_router.stream
+                    )
+                    chunks = [chunk async for chunk in synthesize(item, detect_lang(item))]
+                except Exception as e:
+                    # Discard any prefix, preserving the complete-phrase contract.
+                    # Cancellation still propagates (CancelledError is BaseException).
+                    chunks = []
+                    failure_reason = f"local synthesis failed ({type(e).__name__})"
+                    print(f"[TTS] {failure_reason}")
+                if (
+                    not any(chunks)
+                    and turn_no in self._queued_turns
+                    and generation == self._generation
+                    and turn_no not in self._external_turns
+                ):
+                    from core import tts_gemini
+                    from core.voice_mode import VOICE_CFG
+
+                    if not VOICE_CFG.is_gemini():
+                        recovered = await tts_gemini.synthesize(item)
+                        if (
+                            recovered
+                            and generation == self._generation
+                            and not VOICE_CFG.is_gemini()
+                        ):
+                            chunks = [EnginePCM(recovered, "gemini")]
+                pcm = b"".join(chunks)
+                phrase = SpeechPhrase(
+                    uuid.uuid4().hex,
+                    item,
+                    getattr(chunks[0], "engine", "unknown") if chunks else "unknown",
+                    owner,
+                )
+                offset = 0
+                for frame in iter_pcm_frames(pcm):
                     if generation != self._generation:
                         break
                     q = self._queue()
@@ -437,11 +542,16 @@ class SpeechOut:
                     # set() from the previous turn cannot end this one early.
                     if event is not None and event.is_set():
                         event.clear()
-                    for frame in iter_pcm_frames(chunk):
-                        q.put_nowait(frame)
+                    q.put_nowait(
+                        SpeechFrame(
+                            frame, phrase, first=offset == 0, last=offset + len(frame) == len(pcm)
+                        )
+                    )
+                    self._queued_turns.add(turn_no)
+                    offset += len(frame)
                     produced = True
-                    # Throttle mid-stream too, so a long reply is not buffered in
-                    # full — the whole point of streaming.
+                    # Keep only a bounded playback backlog even though this
+                    # provider phrase has already completed synthesis.
                     await self._await_backlog()
 
                 if produced and generation == self._generation:
@@ -456,12 +566,23 @@ class SpeechOut:
                         pass
 
                 if not produced and generation == self._generation:
+                    self._failed_turns.add(turn_no)
+                    if owner is not None:
+                        cb = getattr(self.era, "_owned_speech_event", None)
+                        if cb is not None:
+                            cb(phrase, "failed")
                     # FALLBACK: the primary produced nothing for this sentence.
                     # Hand the turn to Gemini's own Live audio rather than drop
                     # it. Only trip this when NO audio came — a mid-stream cut
                     # (some frames already played) must not double up with a
                     # Gemini replay of the same words.
-                    self._request_fallback(turn_no)
+                    if turn_no in self._external_turns:
+                        # There is no matching Live audio to replay for this text.
+                        self.era.ui.write_log(
+                            "WARN: CodeMode speech unavailable; the reply remains on the HUD."
+                        )
+                    else:
+                        self._request_fallback(turn_no, reason=failure_reason)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

@@ -1,0 +1,1 @@
+{"ready": true, "session_count": 1, "duplicate_start_prevented": true, "stopped": true, "thread_stopped": true}

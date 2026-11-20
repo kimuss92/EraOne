@@ -42,6 +42,11 @@ function payloadLine(c: ContextCard, key: string): string {
 }
 
 const RENDERERS: Record<string, Renderer> = {
+  email: (c, open) => {
+    const detail = payloadLine(c, 'detail');
+    // Mail is escaped text, without clickable local paths or executable HTML.
+    return detail ? <pre className="select-text whitespace-pre-wrap break-words font-sans text-small leading-relaxed t2">{open ? detail : detail.slice(0, 1500)}{!open && detail.length > 1500 ? '\n… Select the title for the full displayed result.' : ''}</pre> : <p className="card-body">{c.subtitle}</p>;
+  },
   web: (c, open) => <p className="card-body">{txt(c, open)}{payloadLine(c, 'results') && <span className="t3"> · {payloadLine(c, 'results')} sources</span>}</p>,
   memory: (c, open) => <p className="card-body">{payloadLine(c, 'value') ? <PathText text={payloadLine(c, 'value')} /> : txt(c, open)}</p>,
   file: (c, open) => {
@@ -314,7 +319,7 @@ const WEATHER_ICON: Record<string, [LucideIcon, string]> = {
 const WEATHER_REFRESH_MS = 300_000; // backend caches 5 min; the nowcast moves every 15
 const WEATHER_RETRY_MS = 60_000;
 
-function WeatherSection() {
+export function WeatherSection({ inline = false }: { inline?: boolean }) {
   const [w, setW] = useState<Weather | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -343,6 +348,17 @@ function WeatherSection() {
   const feels = w.feels_like != null && w.temperature != null && Math.round(w.feels_like) !== Math.round(w.temperature);
   const gust = w.gusts_kmh != null && w.wind_kmh != null && w.gusts_kmh >= w.wind_kmh + 10;
   const updated = w.observed_at ? w.observed_at.slice(11, 16) : '';
+  if (inline) {
+    // One line beside the clock (Time & weather widget): glyph, temperature,
+    // place and sky, then the day's range and rain chance.
+    return (
+      <div className="era-weather-inline" title={`${w.sky} · ${w.city} · humidity ${r(w.humidity)}% · wind ${r(w.wind_kmh)} km/h · Open-Meteo ${updated}`}>
+        <Glyph className={`h-7 w-7 shrink-0 ${tint}`} strokeWidth={1.4} aria-label={w.sky} />
+        <b className="tabular-nums">{r(w.temperature)}°</b>
+        <span className="min-w-0"><em>{w.city}</em><small>{w.sky} · H {r(w.high)}° L {r(w.low)}° · <Umbrella className="inline h-2.5 w-2.5" /> {r(w.rain_chance)}%</small></span>
+      </div>
+    );
+  }
   return (
     <div className="space-y-2" title={`${w.sky} · Open-Meteo, local time ${updated}`}>
       <div className="flex items-center gap-3">
@@ -471,3 +487,8 @@ export const WeatherPanel = memo(function WeatherPanel() {
 });
 
 export default memo(ContextPanel);
+
+export function ResultCard({ card }: { card: ContextCard }) {
+  const group = groupCards([card])[0];
+  return group ? <Card group={group} lead /> : null;
+}

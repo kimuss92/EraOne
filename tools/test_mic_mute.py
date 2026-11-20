@@ -266,6 +266,12 @@ def test_hard_off_keeps_indicator_off_after_unmute(era):
     assert not era.mic_effective_active()
 
 
-def test_hint_mentions_fallback_without_vosk(era):
+def test_a_voice_mute_points_at_the_mic_button_not_at_a_phrase(era):
+    """A voice mute cannot be undone by voice (2026-11-11), so the hint says so."""
     era.mute_microphone("voice")
+    assert any("mic button" in line for line in era.ui.logs)
+
+
+def test_a_ui_mute_offers_the_phrase_and_flags_a_missing_vosk_model(era):
+    era.mute_microphone("ui")
     assert any("Vosk model missing" in line for line in era.ui.logs)

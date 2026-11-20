@@ -9,8 +9,10 @@ import type {
   Source,
   TimelineItem,
   ToolRun,
+  WidgetLayout,
 } from './types';
 import { cue } from './sounds';
+import { focusView, setPanelVisibility } from './views';
 import { STATE_HUE } from './format';
 import { noticeFromEvent, resolve } from './notifications';
 
@@ -46,7 +48,7 @@ let failedHandshakes = 0;
 
 // ── REST ─────────────────────────────────────────────────────────────────
 
-export async function api<T = unknown>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
+export async function api<T = unknown>(path: string, init?: { method?: string; body?: unknown; signal?: AbortSignal }): Promise<T> {
   const res = await fetch(origin + path, {
     method: init?.method ?? 'GET',
     headers: {
@@ -55,6 +57,7 @@ export async function api<T = unknown>(path: string, init?: { method?: string; b
     },
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     cache: 'no-store',
+    signal: init?.signal,
   });
   const text = await res.text();
   let data: Record<string, unknown> = {};
@@ -94,6 +97,9 @@ export function connect(): void {
     failedHandshakes = 0;
     retry = 0;
     setState({ link: 'online' });
+    void api<WidgetLayout>('/api/layout').then(layout => {
+      if (layout.revision >= (getState().widgetLayout?.revision ?? -1)) setState({ widgetLayout: layout });
+    }).catch(() => {});
     window.clearInterval(pingTimer);
     const ping = () => send({ type: 'ping', t: performance.now() });
     ping();
@@ -111,6 +117,7 @@ export function connect(): void {
     // (History — tool runs, conversation, sources — is a record and stays.)
     setState({
       link: 'reconnecting',
+      listeningMode: 'unavailable',
       rttMs: null,
       metrics: EMPTY.metrics,
       connection: { kind: 'unknown', label: 'Unknown', status: '' },
@@ -229,6 +236,7 @@ function applySnapshot(d: Record<string, any>): void {
       response: typeof d.transcript?.response === 'string' ? d.transcript.response : '',
       userFinal: Boolean(d.transcript?.userFinal), responding: Boolean(d.transcript?.responding),
       userAt: Number(d.transcript?.userAt) || undefined, respAt: Number(d.transcript?.respAt) || undefined,
+      caption: d.transcript?.caption,
     },
     tools: Array.isArray(d.tools) ? d.tools.filter((t: any) => t && typeof t.id === "string" && typeof t.activity === "string" && typeof t.status === "string") : [],
     cards: Array.isArray(d.cards) ? d.cards.filter((c: any) => c && typeof c.id === "string" && typeof c.title === "string" && typeof c.subtitle === "string") : [],
@@ -238,6 +246,15 @@ function applySnapshot(d: Record<string, any>): void {
     memory: d.memory || getState().memory,
     backendStartedAt: Number(d.startedAt) || null,
     approval: (d.approval as Approval) || null,
+    telegramCall: d.telegramCall || null,
+    widgetLayout: d.widgetLayout || null,
+    mediaObservation: d.mediaObservation || null,
+    foregroundObservation: d.foregroundObservation || null,
+    processObservation: d.processObservation || null,
+    networkObservation: d.networkObservation || null,
+    fileObservation: d.fileObservation || null,
+    deviceObservation: d.deviceObservation || null,
+    browserMediaObservation: d.browserMediaObservation || null,
     ...(d.model ? { model: mapModel(d.model) } : {}),
     ...(d.catalog ? { catalog: mapCatalog(d.catalog.models), selectedModel: String(d.catalog.selected || '') } : {}),
   });
@@ -250,9 +267,119 @@ function applySnapshot(d: Record<string, any>): void {
 }
 
 function onEvent(e: AgentEvent): void {
+  if (e.type.startsWith('codemode.') && !['codemode.text', 'codemode.text_silent'].includes(e.type)) {
+    window.dispatchEvent(new Event('era:codemode'));
+  }
   const md = (e.metadata || {}) as Record<string, any>;
+    if (e.type === 'hud.layout.updated' && [1, 2, 3].includes(md.layout?.schemaVersion) && md.layout.revision >= (getState().widgetLayout?.revision ?? -1)) {
+    setState({ widgetLayout: md.layout });
+    return;
+  }
   noticeFromEvent(e);
   switch (e.type) {
+    case 'hud.panel.visibility':
+      setPanelVisibility(md.drawer, md.visible);
+      break;
+    case 'hud.view.focus':
+      focusView(md.view);
+      break;
+    case 'telegram.call.status': {
+      const call = md.call;
+      if (!call || typeof call.instanceId !== 'string' || typeof call.revision !== 'number') break;
+      const previous = getState().telegramCall;
+      if (previous && previous.instanceId === call.instanceId && previous.revision >= call.revision) break;
+      setState({ telegramCall: call });
+      break;
+    }
+    case 'system.browser.media.observed':
+      if (md.media && typeof md.media.revision === 'number' && Array.isArray(md.media.sessions)) {
+        if (md.media.revision <= (getState().browserMediaObservation?.revision ?? -1)) break;
+        setState({ browserMediaObservation: md.media });
+        if (md.changed) {
+          pushTimeline({ ts: e.ts, kind: 'media', label: `Browser media · ${
+            md.media.sessions.map((s: { source: string; status: string }) => `${s.source}: ${s.status}`).join(', ').slice(0, 160) || 'no observed tabs'}`,
+            tone: 'info' });
+        }
+      }
+      break;
+    case 'system.files.observed':
+      if (md.files && typeof md.files.revision === 'number' && Array.isArray(md.files.changes)) {
+        const observation = md.files;
+        if (observation.revision <= (getState().fileObservation?.revision ?? -1)) break;
+        setState({ fileObservation: observation });
+        if (md.changed) {
+          const change = observation.changes.at(-1);
+          const name = change ? String(change.destination || change.path).split(/[\\/]/).pop() : '';
+          pushTimeline({ ts: e.ts, kind: 'system',
+            label: `Files · ${String(observation.health)}${change ? ` · ${String(change.kind)}: ${name}` : ''}`.slice(0, 160),
+            tone: observation.health === 'ready' ? 'info' : 'warn' });
+        }
+      }
+      break;
+    case 'system.devices.observed':
+      if (md.devices && typeof md.devices.revision === 'number' && Array.isArray(md.devices.endpoints)) {
+        const observation = md.devices;
+        if (observation.revision <= (getState().deviceObservation?.revision ?? -1)) break;
+        setState({ deviceObservation: observation });
+        if (md.changed) {
+          pushTimeline({ ts: e.ts, kind: 'system',
+            label: `Audio devices · ${observation.endpoints.length} active endpoints · ${String(observation.health)}`,
+            tone: observation.health === 'ready' ? 'info' : 'warn' });
+        }
+      }
+      break;
+    case 'system.network.observed':
+      if (md.network && typeof md.network.revision === 'number' && Array.isArray(md.network.interfaces)) {
+        const observation = md.network;
+        if (observation.revision <= (getState().networkObservation?.revision ?? -1)) break;
+        setState({ networkObservation: observation });
+        if (md.changed) {
+          pushTimeline({ ts: e.ts, kind: 'system',
+            label: `Local network · ${observation.interfaces.filter((i: { isUp: boolean }) => i.isUp).length} links up · ${String(observation.health)}`,
+            tone: observation.health === 'ready' ? 'info' : 'warn' });
+        }
+      }
+      break;
+    case 'system.processes.observed':
+      if (md.processes && typeof md.processes.revision === 'number' && Array.isArray(md.processes.processes)) {
+        const observation = md.processes;
+        if (observation.revision <= (getState().processObservation?.revision ?? -1)) break;
+        setState({ processObservation: observation });
+        if (md.changed) {
+          pushTimeline({ ts: e.ts, kind: 'system',
+            label: `Process inventory · ${observation.processes.length} instances · ${String(observation.health)} · ${String(observation.coverage)}`,
+            tone: observation.health === 'ready' ? 'info' : 'warn' });
+        }
+      }
+      break;
+    case 'system.foreground.observed':
+      if (md.foreground && typeof md.foreground.revision === 'number') {
+        const observation = md.foreground;
+        if (observation.revision <= (getState().foregroundObservation?.revision ?? -1)) break;
+        setState({ foregroundObservation: observation });
+        if (md.changed) {
+          pushTimeline({ ts: e.ts, kind: 'system',
+            label: observation.health === 'ready'
+              ? `Foreground app · ${String(observation.foreground?.app || 'no observed window').slice(0, 100)}`
+              : `Foreground observation · ${String(observation.health)}`,
+            tone: observation.health === 'ready' ? 'info' : 'warn' });
+        }
+      }
+      break;
+    case 'system.media.observed':
+      if (md.media && typeof md.media.revision === 'number' && Array.isArray(md.media.sessions)) {
+        if (md.media.revision <= (getState().mediaObservation?.revision ?? -1)) break;
+        setState({ mediaObservation: md.media });
+        if (md.changed) {
+          const sessions = md.media.sessions as { app: string; status: string }[];
+          pushTimeline({ ts: e.ts, kind: 'media',
+            label: md.media.health === 'ready'
+              ? `Media observed · ${sessions.map(s => `${s.app}: ${s.status}`).join(', ').slice(0, 160) || 'no sessions'}`
+              : `Media observation · ${String(md.media.health)}`,
+            tone: md.media.health === 'ready' ? 'info' : 'warn' });
+        }
+      }
+      break;
     case 'visual.changed':
       window.dispatchEvent(new Event('era:visual'));
       break;
@@ -333,7 +460,7 @@ function onEvent(e: AgentEvent): void {
           ...s.transcript,
           responding: true,
           respAt: s.transcript.respAt ?? e.ts,
-          response: `${s.transcript.response} ${e.message || ''}`.trim().slice(-MAX_RESPONSE),
+            response: (md.verbatim ? s.transcript.response + (e.message || '') : `${s.transcript.response} ${e.message || ''}`.trim()).slice(-MAX_RESPONSE),
         },
       }));
       break;
@@ -344,11 +471,22 @@ function onEvent(e: AgentEvent): void {
       if (!md.interrupted && e.message) cue('ready');
       break;
     case 'tts.interrupted':
+      setState(s => ({ transcript: { ...s.transcript, caption: undefined } }));
       pushTimeline({ ts: e.ts, kind: 'interrupt', label: 'Interrupted', detail: String(md.source || ''), tone: 'warn' });
+      break;
+    case 'tts.phrase.started':
+    case 'tts.phrase.completed':
+    case 'tts.phrase.failed':
+    case 'tts.phrase.interrupted':
+      setState(s => ({ transcript: { ...s.transcript, caption: {
+        id: String(md.id || ''), text: String(md.text || ''), engine: String(md.engine || ''),
+        state: String(md.state || ''), at: Number(md.at) || e.ts,
+      } } }));
       break;
     case 'tool.started':
       upsertTool(md as unknown as ToolRun);
       setState(s => ({ toolPulse: { seq: s.toolPulse.seq + 1, category: String(md.category || '') } }));
+      if (!md.background) cue('toolStart');
       break;
     case 'tool.completed':
     case 'tool.failed':
@@ -398,6 +536,16 @@ function onEvent(e: AgentEvent): void {
 
 function handle(msg: Record<string, any>): void {
   switch (msg.type) {
+    case 'listening_mode':
+      {
+        const mode = typeof msg.mode === 'string' ? msg.mode : 'unavailable';
+        const previous = getState().listeningMode;
+        setState({ listeningMode: mode });
+        // Live transitions alone produce the cue. Snapshot hydration and
+        // reconnects cannot replay it.
+        if (previous === 'active' && mode === 'inactive') cue('inactivity');
+      }
+      break;
     case 'event':
       onEvent(msg.event as AgentEvent);
       break;
@@ -416,6 +564,7 @@ function handle(msg: Record<string, any>): void {
     }
     case 'voice_level':
       live.micLevel = Math.max(0, Math.min(1, Number(msg.level) || 0));
+      live.micLevelAt = performance.now();
       if (Boolean(msg.active) !== getState().voiceActive) setState({ voiceActive: Boolean(msg.active) });
       break;
     case 'state':
@@ -454,6 +603,9 @@ function handle(msg: Record<string, any>): void {
 // ── Actions (every one is a real backend operation) ─────────────────────
 
 export const actions = {
+  async answerApproval(id: string, createdAt: number, decision: 'approve' | 'cancel'): Promise<void> {
+    await api('/api/approval', { method: 'POST', body: { id, createdAt, decision } });
+  },
   sendCommand(text: string): boolean {
     return send({ type: 'command', text });
   },
@@ -477,6 +629,9 @@ export const actions = {
   },
   setStandby(on: boolean): void {
     void api('/api/standby', { method: 'POST', body: { on } }).catch(() => {});
+  },
+  setInactivity(on: boolean): void {
+    void api('/api/inactivity', { method: 'POST', body: { on } }).catch(() => {});
   },
   selectModel(alias: string): void {
     send({ type: 'model_select', alias });

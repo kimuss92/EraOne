@@ -15,6 +15,71 @@ PATH = ROOT / "runtime" / "visual_scene.json"
 _lock = threading.RLock()
 _ID = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 _KINDS = {"text", "metric", "progress", "chart", "button", "field"}
+# Built-in HUD panels are not custom scene widgets. Their semantic IDs resolve
+# here, beside the real dispatcher, so voice adapters cannot invent a protocol.
+PANELS = {
+    "hud.live_activity": {
+        "label": "Live activity",
+        "widget": "activity",
+        "aliases": ("live activity", "activity", "live tasks", "active tasks"),
+    },
+    "hud.context": {
+        "label": "Context",
+        "widget": "context",
+        "aliases": ("context", "intelligence"),
+    },
+    "hud.memory": {"label": "Memory", "widget": "memory", "aliases": ("memory",)},
+    "hud.schedule": {"label": "Schedule", "widget": "schedule", "aliases": ("schedule",)},
+    "hud.system": {
+        "label": "System",
+        "widget": "system",
+        "aliases": ("system", "system telemetry", "telemetry", "system metrics"),
+    },
+    "hud.awareness": {
+        "label": "System awareness",
+        "widget": "awareness",
+        "aliases": ("system awareness", "awareness"),
+    },
+    "hud.sources": {"label": "Sources", "widget": "sources", "aliases": ("sources",)},
+    "hud.weather": {
+        "label": "Weather",
+        "widget": "weather",
+        "aliases": ("weather", "time and weather"),
+    },
+    "hud.calls": {
+        "label": "Telegram calls",
+        "widget": "calls",
+        "aliases": ("telegram calls", "calls"),
+    },
+    "hud.diagnostics": {
+        "label": "Diagnostics",
+        "drawer": "diagnostics",
+        "aliases": ("diagnostics", "diagnostic", "health checks"),
+    },
+    "hud.settings": {
+        "label": "Settings",
+        "drawer": "settings",
+        "aliases": ("settings", "preferences"),
+    },
+    "hud.development": {
+        "label": "Development",
+        "drawer": "development",
+        "aliases": ("development", "developer"),
+    },
+    "hud.capabilities": {
+        "label": "Capabilities",
+        "drawer": "capabilities",
+        "aliases": ("capabilities", "capability", "tools"),
+    },
+    "hud.conversation": {
+        "label": "Conversation",
+        "drawer": "conversation",
+        "aliases": ("conversation", "conversation history", "chat history"),
+    },
+    "hud.telegram": {"label": "Telegram", "drawer": "telegram", "aliases": ("telegram",)},
+    "hud.left": {"label": "Left sidebar", "side": "left", "aliases": ("left", "left sidebar")},
+    "hud.right": {"label": "Right sidebar", "side": "right", "aliases": ("right", "right sidebar")},
+}
 _DEFAULT = {
     "revision": 0,
     "layout": {
@@ -136,7 +201,90 @@ def _widget(raw) -> dict:
     return result
 
 
+def panel_catalog() -> list[dict]:
+    return [{"id": key, **copy.deepcopy(value)} for key, value in PANELS.items()]
+
+
+def _resolve_panel_id(raw) -> str | None:
+    """Map a spoken/model-written panel name onto a real PANELS id.
+
+    Live 2026-11-20: Era sent ``hud.telemetry`` (the HUD's own word for the
+    System panel) and it was rejected although "telemetry" is a declared alias.
+    Exact ids still win; then aliases, with or without the ``hud.`` prefix.
+    """
+    if not isinstance(raw, str):
+        return None
+    if raw in PANELS:
+        return raw
+    word = raw.strip().lower().replace("_", " ").replace("-", " ")
+    if word.startswith(("hud.", "hud ")):
+        word = word[4:]
+    word = " ".join(word.split())
+    for key, spec in PANELS.items():
+        names = {key[4:].replace("_", " "), spec["label"].lower(), *spec.get("aliases", ())}
+        if word in names:
+            return key
+    return None
+
+
+def _panel(command: dict) -> dict:
+    if set(command) != {"action", "panel_id", "visible"}:
+        raise ValueError("Panel requires only action, panel_id and visible")
+    panel_id, visible = _resolve_panel_id(command["panel_id"]), command["visible"]
+    if panel_id is None:
+        raise ValueError("Unknown HUD panel; use action panels for supported semantic IDs")
+    if type(visible) is not bool:
+        raise ValueError("Panel visibility must be boolean")
+    spec = PANELS[panel_id]
+    if "widget" in spec:
+        from app.hud.layout import get_widget_layout
+
+        layout = get_widget_layout()
+        state = layout.apply(layout.snapshot()["revision"], widget=spec["widget"], visible=visible)
+        return {
+            "success": True,
+            "panel_id": panel_id,
+            "visible": visible,
+            "layout": state,
+            "message": f"{spec['label']} panel visibility saved: {'shown' if visible else 'hidden'}.",
+        }
+    if "side" in spec:
+        state = apply({"action": "layout", "layout": {spec["side"]: visible}})
+        return {
+            "success": True,
+            "panel_id": panel_id,
+            "visible": visible,
+            "revision": state["revision"],
+            "message": f"{spec['label']} visibility saved: {'shown' if visible else 'hidden'}.",
+        }
+    from app.hud.events import hud
+
+    hud._emit(
+        "hud.panel.visibility",
+        metadata={"panel_id": panel_id, "drawer": spec["drawer"], "visible": visible},
+    )
+    return {
+        "success": True,
+        "panel_id": panel_id,
+        "visible": visible,
+        "message": f"{'Show' if visible else 'Hide'} request sent to connected HUDs for {spec['label']}.",
+    }
+
+
 def apply(command: dict) -> dict:
+    if isinstance(command, dict) and command.get("action") == "panels":
+        if set(command) != {"action"}:
+            raise ValueError("Panels requires only action")
+        return {"panels": panel_catalog()}
+    if isinstance(command, dict) and command.get("action") == "panel":
+        return _panel(command)
+    # Navigation is ephemeral: no scene write, layout mutation or machine action.
+    if isinstance(command, dict) and command.get("action") == "focus":
+        if set(command) != {"action", "view"}:
+            raise ValueError("Focus requires only action and view")
+        from app.hud.events import hud
+
+        return hud.focus_view(command["view"])
     if not isinstance(command, dict) or set(command) - {
         "action",
         "widget",

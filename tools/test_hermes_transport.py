@@ -20,6 +20,7 @@ from crew.hermes_transport import (
     DEFAULT_BASE,
     KEY_ENTRY,
     RECHECK_S,
+    REPLY_REMINDER,
     HermesAgentTransport,
     HermesKeyMissing,
     read_key,
@@ -191,6 +192,36 @@ def test_read_key_raises_without_echoing_anything(tmp_path):
     assert "k.json" not in str(err.value) and KEY not in str(err.value)
 
 
+def test_protected_key_is_decoded_before_authentication(keyfile, monkeypatch):
+    from core import protected_config
+
+    monkeypatch.setattr(protected_config, "_unprotect", lambda value: KEY)
+    keyfile.write_text(
+        json.dumps({KEY_ENTRY: {protected_config.MARKER: "synthetic"}}), encoding="utf-8"
+    )
+    t, http = make(keyfile)
+    t.dispatch("tester", Turn(task="t"))
+    assert http.calls
+    assert all(h["Authorization"] == f"Bearer {KEY}" for _, _, h, _ in http.calls)
+
+
+def test_unreadable_protected_key_fails_without_sending_or_exposing_it(keyfile, monkeypatch):
+    from core import protected_config
+
+    def unreadable(value):
+        raise protected_config.ProtectedConfigError("synthetic decryption failure")
+
+    monkeypatch.setattr(protected_config, "_unprotect", unreadable)
+    keyfile.write_text(
+        json.dumps({KEY_ENTRY: {protected_config.MARKER: "synthetic"}}), encoding="utf-8"
+    )
+    t, http = make(keyfile)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "MissingCredential"
+    assert http.calls == []
+    assert "synthetic" not in str(out)
+
+
 def test_the_key_is_read_at_call_time_so_rotating_it_needs_no_restart(keyfile):
     t, http = make(keyfile, recheck_s=0)
     t.dispatch("tester", Turn(task="one"))
@@ -326,10 +357,77 @@ def test_the_request_is_text_in_with_no_tools_and_no_session(keyfile):
     method, url, headers, body = next(c for c in http.calls if c[1].endswith("/chat/completions"))
     sent = json.loads(body)
     assert method == "POST" and sent["stream"] is False
-    assert [m["role"] for m in sent["messages"]] == ["system", "user"]
-    assert "what are the rules" in sent["messages"][1]["content"]
+    # PF-048: one user turn that carries the crew protocol AND the request.
+    assert [m["role"] for m in sent["messages"]] == ["user"]
+    assert "what are the rules" in sent["messages"][0]["content"]
     assert set(sent) == {"messages", "stream"}, "no tools, no model, no session fields"
     assert "X-Hermes-Session-Id" not in headers and "X-Hermes-Session-Key" not in headers
+
+
+def test_the_crew_protocol_rides_in_the_user_message_not_a_system_one(keyfile):
+    """PF-048: Hermes ranks its own persona above a caller's system message; with the
+    protocol there its model answered prose and every crew turn was BadModelOutput."""
+    from crew.runtime import _FORMAT
+
+    t, http = make(keyfile)
+    t.dispatch("tester", Turn(task="say hello"))
+    chats = [json.loads(c[3]) for c in http.calls if c[1].endswith("/chat/completions")]
+    assert chats, "a chat request was sent"
+    for sent in chats:
+        assert all(m["role"] != "system" for m in sent["messages"])
+        (only,) = sent["messages"]
+        content = only["content"]
+        assert _FORMAT.strip()[:60] in content, "the JSON reply protocol is in the user turn"
+        assert content.index(_FORMAT.strip()[:60]) < content.index("say hello"), (
+            "instructions come before the request"
+        )
+        assert content.endswith(REPLY_REMINDER), "the reply shape is the last thing read"
+
+
+def test_a_stalled_chat_call_is_not_retried(keyfile, monkeypatch):
+    """PF-051: a 90 s stall retried = 180 s gone; the local loop needs that time."""
+    from crew import hermes_transport as ht
+
+    clock = [1000.0]
+    monkeypatch.setattr(ht.time, "monotonic", lambda: clock[0])
+    http = FakeHttp()
+    http.chats = [TimeoutError("stalled"), (200, chat(json.dumps(final("late"))))]
+    t, _ = make(keyfile, http)
+    real = t._http
+
+    def slow(method, url, headers, body, timeout):
+        if url.endswith("/chat/completions"):
+            clock[0] += ht.CHAT_STALL_S + 1  # the call waited, then failed
+        return real(method, url, headers, body, timeout)
+
+    t._http = slow
+    out = t.dispatch("tester", Turn(task="t", deadline=clock[0] + 240))
+    assert not out.success and out.error_type == "LLMUnavailable"
+    chats = [c for c in http.calls if c[1].endswith("/chat/completions")]
+    assert len(chats) == 1, "no second attempt after a stall"
+    assert out.data["safe_local_handoff"] is True  # nothing ran: the local loop may take it
+
+
+def test_source_reads_count_as_reads_for_a_hand_off():
+    from crew.runtime import _READ_CAPS
+
+    assert {"source.read", "source.inspect"} <= _READ_CAPS
+    assert not {"source.stage", "crew.handoff"} & _READ_CAPS
+
+
+def test_a_prose_reply_failure_says_what_came_back(keyfile):
+    """PF-049: "gave no usable reply" alone hid the cause; a bot then invented one."""
+    http = FakeHttp()
+    http.chats = [
+        (200, chat("DeepSeek here. Connected and standing by.")),
+        (200, chat("Hello from Laura, I'm connected.")),
+    ]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="say hello"))
+    assert out.error_type == "BadModelOutput"
+    assert "prose, not JSON" in out.message and "Hello from Laura" in out.message
+    assert out.data["bad_output_sample"] == "Hello from Laura, I'm connected."
+    assert out.data["safe_local_handoff"] is True  # PF-046's proof is unchanged
 
 
 # ── the quality hint ────────────────────────────────────────────────────────
@@ -388,6 +486,40 @@ def test_hermes_own_reason_reaches_the_failure_detail(keyfile):
     out = t.dispatch("tester", Turn(task="t"))
     assert out.error_type == "LLMUnavailable"
     assert "HTTP 500" in out.data["detail"] and "not logged into Nous Portal" in out.data["detail"]
+
+
+def test_a_200_that_carries_hermes_own_provider_failure_is_llm_unavailable(keyfile):
+    # 2026-11-06 live: MoA re-enabled with a keyless anthropic provider. Hermes answered
+    # HTTP 200, finish_reason "error", the reason in the text — Era said "gave no usable
+    # reply" twice and the user never learned the model was misconfigured.
+    body = chat("Mixture of Agents didn't answer after 3 attempts.", prompt=0, completion=0)
+    body["choices"][0]["finish_reason"] = "error"
+    body["hermes"] = {"failed": True, "error": "Provider 'anthropic' has no API key."}
+    http = FakeHttp()
+    http.chats = [(200, body)]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "LLMUnavailable"
+    assert "no API key" in out.data["detail"]
+    assert len(_chat_posts(http)) == 1  # not retried as a "format" problem
+
+
+def test_an_expired_login_reply_with_zero_usage_is_llm_unavailable(keyfile):
+    # The expired-Nous-login reply is a plain "stop" with 0/0 tokens: no model ran.
+    text = "⚠️ Provider authentication failed: No access token found for Nous Portal."
+    http = FakeHttp()
+    http.chats = [(200, chat(text, prompt=0, completion=0))]
+    t, _ = make(keyfile, http)
+    out = t.dispatch("tester", Turn(task="t"))
+    assert out.error_type == "LLMUnavailable"
+    assert "Nous Portal" in out.data["detail"] and "⚠" not in out.data["detail"]
+
+
+def test_a_real_model_reply_that_is_not_json_is_still_a_format_problem(keyfile):
+    http = FakeHttp()
+    http.chats = [(200, chat("sure, here you go")), (200, chat("still prose"))]
+    t, _ = make(keyfile, http)
+    assert t.dispatch("tester", Turn(task="t")).error_type == "BadModelOutput"
 
 
 def test_a_turn_runs_and_logs_the_required_line_with_hermes_usage(keyfile, rec):
@@ -503,7 +635,7 @@ def test_note_text_reaches_hermes_fenced_as_untrusted_data(keyfile, vault):
     assert t.dispatch("tester", Turn(task="read the rules")).success
     followup = json.loads([b for _, u, _, b in http.calls if u.endswith("/chat/completions")][1])[
         "messages"
-    ][1]["content"]
+    ][0]["content"]  # PF-048: one user turn carries protocol + request
     assert '<untrusted id="obs1" capability="vault.read">' in followup
 
 

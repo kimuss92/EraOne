@@ -52,10 +52,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from core.logger import log_event
+from core.protected_config import ProtectedConfigError, decode
 from core.tool_result import ToolResult
 from core.utils import CONFIG_PATH
 from crew import router as crew_router
-from crew.nabar import parse_json_object
+from crew.nabar import parse_crew_reply
 from crew.runtime import InProcessTransport, runtime_logger
 from crew.transport import BotSpec, HealthStatus, Turn, fail
 
@@ -67,6 +68,8 @@ CHAT_TIMEOUT_S = 90.0
 # Skipped when less than this much of the crew call's deadline remains.
 CHAT_RETRIES = 1
 CHAT_RETRY_MIN_ROOM_S = 20.0
+# A failure after this long is a stall, not a blip: no retry (PF-051).
+CHAT_STALL_S = 30.0
 PROBE_TIMEOUT_S = 5.0
 # A single transient probe failure — the gateway still binding 8642 right after
 # login, a provider cold start, a GC pause — must not refuse a whole crew turn.
@@ -88,8 +91,8 @@ def read_key(config_path: Path | None = None) -> str:
     """The era_one key, read from disk NOW. Raises HermesKeyMissing without echoing anything."""
     try:
         data = json.loads(Path(config_path or CONFIG_PATH).read_text(encoding="utf-8-sig"))
-        value = data.get(KEY_ENTRY) if isinstance(data, dict) else None
-    except (OSError, ValueError):
+        value = decode(data.get(KEY_ENTRY)) if isinstance(data, dict) else None
+    except (OSError, ValueError, ProtectedConfigError):
         value = None
     key = value.strip() if isinstance(value, str) else ""
     if not key or key.lower() == "placeholder":
@@ -318,12 +321,30 @@ class HermesAgentTransport(InProcessTransport):
         body = json.dumps(payload).encode("utf-8")
         url = f"{self._base}/v1/chat/completions"
         for attempt in range(1 + CHAT_RETRIES):
+            from core.cancel_registry import raise_if_cancelled, sleep_cancellable
+
+            raise_if_cancelled()
+            room = turn.deadline - time.monotonic() if turn.deadline else CHAT_TIMEOUT_S
+            if room <= 0:
+                raise TimeoutError("Crew call deadline exceeded before the model request")
+            started = time.monotonic()
             try:
-                return self._http("POST", url, self._headers(key), body, CHAT_TIMEOUT_S)
+                return self._http("POST", url, self._headers(key), body, min(CHAT_TIMEOUT_S, room))
             except Exception as exc:  # noqa: BLE001 - retried once, then re-raised
                 room = turn.deadline - time.monotonic() if turn.deadline else float("inf")
                 if attempt >= CHAT_RETRIES or room < CHAT_RETRY_MIN_ROOM_S:
                     raise
+                # PF-051: a call that STALLED for its whole wait is not retried. Live
+                # 2026-11-19 Hermes's free model hung 90 s twice on one Cody step (180 s,
+                # turn lost). The unfinished read-only work now moves to local Qwen
+                # (crew/fallback.py), which needs that time. A fast failure (reset,
+                # refused, cold start) is still worth one more try.
+                if time.monotonic() - started >= CHAT_STALL_S:
+                    raise
+                if not isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+                    raise
+                if not sleep_cancellable(min(4.0, 0.25 * 2**attempt)):
+                    raise_if_cancelled()
                 log_event(
                     runtime_logger,
                     "crew.hermes.chat_retry",
@@ -336,10 +357,12 @@ class HermesAgentTransport(InProcessTransport):
     def _ask(self, spec: BotSpec, turn: Turn, system: str, user: str) -> dict:
         tier, _ = crew_router.choose_tier(spec, turn, system, user)
         payload: dict = {
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            # PF-048: the crew protocol travels INSIDE the user message. Hermes puts
+            # its own agent persona ahead of a caller's system message, so with the
+            # protocol there the model answered in prose ("DeepSeek here...") and
+            # every Hermes crew turn ended in BadModelOutput (live 2026-11-19: 0/3
+            # JSON replies as system, 3/3 inside the user message).
+            "messages": [{"role": "user", "content": _crew_message(system, user)}],
             "stream": False,
         }
         if f"era-{tier}" in self._tier_aliases:  # the hint: Hermes picks the provider behind it
@@ -366,5 +389,62 @@ class HermesAgentTransport(InProcessTransport):
         tin = int(usage.get("prompt_tokens") or crew_router.estimate_tokens(system + user))
         tout = int(usage.get("completion_tokens") or crew_router.estimate_tokens(text))
         crew_router.log_turn(spec.id, tier, "hermes", tin, tout, False)
-        obj = parse_json_object(text)
-        return obj if obj else {"__bad_output__": text[:200]}
+        obj = parse_crew_reply(text)  # PF-053: code may follow in =====BEGIN blocks
+        if obj:
+            return obj
+        provider_error = _provider_error(body, text)
+        if provider_error:
+            # Hermes answers HTTP 200 even when ITS provider failed (expired Nous login,
+            # a provider with no key, MoA turned back on) and puts the reason in the
+            # message text. That is not a bot that misbehaved: report the real reason
+            # so the user hears "the model login expired", not "gave no usable reply".
+            self._toolsets_ok_until = 0.0
+            log_event(
+                runtime_logger,
+                "crew.hermes.provider_failed",
+                "WARNING",
+                bot=spec.id,
+                detail=provider_error,
+            )
+            return {"__unavailable__": f"Hermes could not reach its model: {provider_error}"}
+        return {"__bad_output__": text[:200]}
+
+
+# The last thing the model reads (PF-048): the reply shape, restated after the request.
+REPLY_REMINDER = (
+    'REPLY NOW WITH ONLY ONE JSON OBJECT: {"call": {"capability": "<name>", "args": {...}}} '
+    'or {"final": "<your answer>"}. No prose outside the JSON. Code is never written inside '
+    'a JSON string: put "@name" there and the code after the JSON between a line '
+    "=====BEGIN name===== and a line =====END name=====."
+)
+
+
+def _crew_message(system: str, user: str) -> str:
+    """The bot's crew instructions, this step's request, then the reply shape: ONE user turn."""
+    return f"{system}\n\n---\n\n{user}\n\n---\n\n{REPLY_REMINDER}"
+
+
+def _provider_error(body: dict, text: str) -> str:
+    """Hermes's own failure reason when a 200 reply carries no model output; else "".
+
+    Signals (2026-11-06 live): `hermes.failed: true` / `finish_reason: "error"` (MoA with
+    a keyless provider) and — for an expired Nous login — a plain "stop" reply whose
+    usage reports ZERO prompt and completion tokens. A real model call always bills
+    prompt tokens, so an explicit 0/0 means no model ever ran.
+    """
+    meta = body.get("hermes") if isinstance(body.get("hermes"), dict) else {}
+    try:
+        finish = body["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        finish = None
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    no_model_ran = (
+        "prompt_tokens" in usage
+        and not usage.get("prompt_tokens")
+        and not usage.get("completion_tokens")
+    )
+    if not (meta.get("failed") or finish == "error" or no_model_ran):
+        return ""
+    reason = meta.get("error") if isinstance(meta.get("error"), str) else ""
+    reason = (reason or text).strip().lstrip("⚠️").strip()
+    return reason[:200] or "the gateway returned no model output"

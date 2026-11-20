@@ -40,6 +40,14 @@ EVERY TIER ALSO RUNS THE CHEAP INVARIANTS
   ruff, the manifest freshness check, and era_doctor together cost a few
   seconds and catch a different class of breakage than any test does.
 
+EVERY TIER ALSO RUNS EVERY PROTECTED-FIX GUARD (docs/PROTECTED_FIXES.md)
+  Whatever changed. Several coding agents work on Era, and a fix in one tool
+  kept being broken by work on another: the import graph cannot see that a
+  YouTube edit broke Spotify through shared media plumbing, so the guards for
+  every protected fix run on every gate (~15 s). A red guard means the change
+  broke a fixed feature; the gate also prints the rules for any changed file
+  that a protected fix covers.
+
 USAGE
   python tools/era_gate.py                      # fast tier
   python tools/era_gate.py --changed a.py b.py  # only what those reach
@@ -170,6 +178,30 @@ def select_tests(
     return sorted(selected), sorted(set(uncovered))
 
 
+def _protected_fixes():
+    # Run as a script, sys.path[0] is tools/, so `tools.` is not importable.
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from tools import protected_fixes
+
+    return protected_fixes
+
+
+def guard_command() -> list[str]:
+    """pytest over every protected-fix guard test (docs/PROTECTED_FIXES.md)."""
+    py = sys.executable
+    return [py, "-m", "pytest", "-q", "--tb=short", "-p", "no:cacheprovider"] + (
+        _protected_fixes().all_guards()
+    )
+
+
+def _protected_notice(changed: list[str]) -> list[str]:
+    try:
+        return [e.describe() for e in _protected_fixes().for_files(changed)]
+    except Exception as exc:  # the notice is advisory; the guard run is the check
+        return [f"(could not read docs/PROTECTED_FIXES.md: {type(exc).__name__}: {exc})"]
+
+
 def run(label: str, cmd: list[str]) -> tuple[bool, float]:
     print(f"\n=== {label} " + "=" * max(0, 60 - len(label)))
     started = time.perf_counter()
@@ -260,8 +292,15 @@ def main(argv: list[str] | None = None) -> int:
             print("\nNO TEST REACHES THESE — the gate cannot vouch for them:")
             for path in uncovered:
                 print(f"  ! {path}")
+        notices = _protected_notice(args.changed)
+        if notices:
+            print("\nPROTECTED FIXES COVER THESE FILES — the rules below must stay true:")
+            for text in notices:
+                print(text)
     if args.list:
         print("\nWould run: " + " ".join(pytest_cmd[3:]))
+        if not args.all:
+            print("Plus every protected-fix guard: python tools/protected_fixes.py run")
         return 0
 
     results: list[tuple[str, bool, float]] = []
@@ -273,6 +312,10 @@ def main(argv: list[str] | None = None) -> int:
         pass
     elif "NOTHING REACHES" not in tier:
         results.append(("tests", *run("tests", pytest_cmd)))
+
+    # --all already runs every test, guards included; every other tier adds them.
+    if not args.all:
+        results.append(("protected fixes", *run("protected fixes", guard_command())))
 
     total = sum(elapsed for _, _, elapsed in results)
     failed = [label for label, ok, _ in results if not ok]

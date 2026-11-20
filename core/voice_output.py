@@ -43,6 +43,9 @@ PREF_KEY = "voice_output_device"
 
 _lock = threading.Lock()
 _generation = 0
+_reenum_generation = -1
+_reenum_attempts = 0
+_reenum_retry_at = 0.0
 
 
 # ── live re-route signal ─────────────────────────────────────────────────────
@@ -74,7 +77,9 @@ def _bump() -> int:
 _active: dict | None = None
 
 
-def note_active_route(device_index, *, fallback: bool = False, name: str = "") -> None:
+def note_active_route(
+    device_index, *, fallback: bool = False, name: str = "", route_generation: int | None = None
+) -> None:
     """Called by the playback layer each time it opens an output stream."""
     global _active
     with _lock:
@@ -82,8 +87,16 @@ def note_active_route(device_index, *, fallback: bool = False, name: str = "") -
             "index": device_index,
             "fallback": bool(fallback),
             "name": name,
+            "generation": _generation if route_generation is None else route_generation,
             "at": datetime.now().isoformat(timespec="seconds"),
         }
+
+
+def clear_active_route() -> None:
+    """Invalidate playback evidence when its stream closes or fails."""
+    global _active
+    with _lock:
+        _active = None
 
 
 def active_route() -> dict | None:
@@ -92,18 +105,29 @@ def active_route() -> dict | None:
         return dict(_active) if _active else None
 
 
+def route_matches_pin(pin: dict | None) -> bool | None:
+    """Return unknown until a current stream acknowledges the requested route."""
+    route = active_route()
+    if pin is None or route is None or route.get("generation") != generation():
+        return None
+    expected = sd_index_for_name(pin.get("name") or "")
+    return bool(
+        not route.get("fallback")
+        and expected is not None
+        and route.get("index") == expected
+        and _name_score(route.get("name") or "", pin.get("name") or "")
+    )
+
+
 def _route_disagrees_with_pin(pin: dict | None) -> str:
     """A sentence naming the divergence, or '' when the route matches intent."""
     route = active_route()
-    if pin is None or route is None:
-        return ""
-    if not route.get("fallback") and route.get("index") is not None:
+    if route is None or route_matches_pin(pin) is not False:
         return ""
     where = route.get("name") or "the system default output"
     return (
         f" I have to be straight with you though: my voice is actually coming out of "
-        f"{where} right now, not {pin.get('name')} - my audio engine opened the "
-        "fallback. It should reclaim the device on my next reconnect."
+        f"{where} right now, not {pin.get('name')}. The requested route has not applied."
     )
 
 
@@ -297,7 +321,7 @@ def refresh_devices() -> bool:
         return False
 
 
-def refresh_between_sessions() -> bool:
+def refresh_between_sessions(*, force: bool = False, before_refresh=None) -> bool:
     """Pick up a device the audio engine has never seen. Returns True if it did.
 
     Call ONLY from the reconnect loop, after the old TaskGroup has unwound and
@@ -307,6 +331,8 @@ def refresh_between_sessions() -> bool:
     Does nothing unless it is actually needed: there must be a pin, the device
     must be connected according to Core Audio, and PortAudio must be unable to
     see it. A device that is merely unplugged is not a reason to re-enumerate.
+    ``force`` also handles a listed index rejected as invalid by the driver;
+    callers must still wait for all old streams to close. The pin must be live.
     """
     try:
         pin = get_pin()
@@ -315,11 +341,13 @@ def refresh_between_sessions() -> bool:
         ep = _live_endpoint(pin)
         if ep is None:
             return False  # genuinely disconnected - nothing to find
-        if _lookup(ep.name) is not None:
+        if not force and _lookup(ep.name) is not None:
             return False  # the engine can already see it
+        if before_refresh is not None and before_refresh() is False:
+            return False  # a live capture lease must never be invalidated
         print(
-            f"[VoiceOutput] {ep.name} is connected but missing from the audio "
-            "engine's device list; re-enumerating."
+            f"[VoiceOutput] {ep.name} is connected but its audio-engine device "
+            "is missing or rejected as invalid; re-enumerating."
         )
         return refresh_devices()
     except Exception as e:  # degrade, never raise: a session must still start
@@ -393,9 +421,9 @@ def _live_endpoint(pin: dict):
                 return ep
     pin_name = _norm(pin.get("name") or "")
     if pin_name:
-        for ep in eps:
-            if _norm(ep.name) == pin_name:
-                return ep
+        matches = [ep for ep in eps if _norm(ep.name) == pin_name]
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -469,6 +497,26 @@ def needs_reenumeration() -> bool:
     if pin is None or _live_endpoint(pin) is None:
         return False
     return resolve_output_index() is None
+
+
+def claim_reenumeration_retry() -> bool:
+    """Bound full-session resets for one routing request across reconnects.
+
+    Three attempts use increasing cooldowns. A new explicit route request
+    resets the budget; an invisible device must not reconnect the model forever.
+    """
+    global _reenum_generation, _reenum_attempts, _reenum_retry_at
+    with _lock:
+        if _reenum_generation != _generation:
+            _reenum_generation = _generation
+            _reenum_attempts = 0
+            _reenum_retry_at = 0.0
+        now = time.monotonic()
+        if _reenum_attempts >= 3 or now < _reenum_retry_at:
+            return False
+        _reenum_retry_at = now + 60.0 * (2**_reenum_attempts)
+        _reenum_attempts += 1
+        return True
 
 
 def reassert_after_media_change() -> bool:
@@ -555,7 +603,15 @@ def set_pin(device: str) -> AudioResult:
     }
     if not _store(pin):
         return AudioResult(False, "I couldn't save that voice-output choice, sir.")
-    _bump()
+    requested_generation = _bump()
+    data = {
+        "device": {"id": ep.id, "name": ep.name},
+        "sd_index": index,
+        "changed": True,
+        "routing_verified": False,
+        "route_status": "pending",
+        "generation": requested_generation,
+    }
     if index is None:
         # Pinned, but the audio engine still cannot see the device. Say so
         # plainly rather than promising sound that will not arrive.
@@ -563,14 +619,14 @@ def set_pin(device: str) -> AudioResult:
             True,
             f"My voice is pinned to {ep.name}, sir. My audio engine can't see it yet "
             "even though Windows can - I'll take it the moment it appears, and use "
-            "the laptop until then.",
-            {"device": {"id": ep.id, "name": ep.name}, "sd_index": None, "changed": True},
+            "the system default until then. Playback is not yet verified.",
+            data,
         )
     return AudioResult(
         True,
-        f"My voice now plays on {ep.name}, sir - from this sentence on, and after a "
-        "restart. Your media routing is unchanged.",
-        {"device": {"id": ep.id, "name": ep.name}, "sd_index": index, "changed": True},
+        f"I've saved {ep.name} as my voice output, sir. The switch is pending "
+        "playback verification. Your media routing is unchanged.",
+        data,
     )
 
 
@@ -599,46 +655,54 @@ def status() -> AudioResult:
     """What Era's voice is doing right now, and why."""
     pin = get_pin()
     if pin is None:
-        try:
-            from core import audio_devices
-
-            st = audio_devices.probe_glass()
-        except Exception:
-            st = {"connected": False, "name": ""}
-        where = (
-            f"the {st.get('name') or 'Star Glasses'} (auto-routed while they're connected)"
-            if st.get("connected")
-            else "the system default output"
+        route = active_route()
+        observed = (
+            f"The open stream reports {route['name']}."
+            if route and route.get("name") and route.get("generation") == generation()
+            else "The playback output is not yet verified."
         )
         return AudioResult(
             True,
-            f"My voice isn't pinned, sir - it's on {where}. Name a device and I'll pin it.",
-            {"pinned": None, "auto": True},
+            f"My voice isn't pinned, sir. {observed} Name a device and I'll pin it.",
+            {"pinned": None, "auto": True, "active_route": route},
         )
 
     ep = _live_endpoint(pin)
     lock = " Voice recognition was on when you set it." if pin.get("voice_lock") else ""
     if ep is None:
+        route = active_route()
+        observed = (
+            f"The open stream reports {route['name']}."
+            if route and route.get("name") and route.get("generation") == generation()
+            else "The playback output is not yet verified."
+        )
         return AudioResult(
             True,
             f"My voice is pinned to {pin.get('name')}, sir, but it isn't connected - "
-            f"I'm on the system default until it's back.{lock}",
-            {"pinned": pin, "connected": False},
+            f"The system default is the fallback policy. {observed}{lock}",
+            {"pinned": pin, "connected": False, "active_route": route, "routed_as_pinned": None},
         )
     # The pin says where the voice SHOULD go; active_route() is where the stream
     # actually opened. Reporting the pin alone is what made a silent fallback to
     # the laptop read as "pinned to your glasses, sir".
     mismatch = _route_disagrees_with_pin(pin)
+    verified = route_matches_pin(pin)
+    description = (
+        f"My voice plays on {ep.name}, sir - pinned, so media routing doesn't move it."
+        if verified is True
+        else f"My voice is pinned to {ep.name}, sir."
+    )
+    if verified is None:
+        description += " Playback on that output is not yet verified."
     return AudioResult(
         True,
-        f"My voice plays on {ep.name}, sir - pinned, so media routing "
-        f"doesn't move it.{lock}{mismatch}",
+        f"{description}{lock}{mismatch}",
         {
             "pinned": pin,
             "connected": True,
             "device": {"id": ep.id, "name": ep.name},
             "active_route": active_route(),
-            "routed_as_pinned": not mismatch,
+            "routed_as_pinned": verified,
         },
     )
 
@@ -649,10 +713,11 @@ def summary_line() -> str:
     if pin is None:
         return ""
     name = pin.get("name") or "a chosen device"
-    connected = _live_endpoint(pin) is not None
-    where = name if connected else f"{name} (not connected - on the system default meanwhile)"
+    verified = route_matches_pin(pin)
+    evidence = "stream verified" if verified is True else "playback unverified"
+    mismatch = _route_disagrees_with_pin(pin)
     return (
-        f"VOICE OUTPUT PINNED - your spoken voice plays on {where}, chosen by the user "
+        f"VOICE OUTPUT PINNED - requested output: {name}; {evidence}.{mismatch} Chosen by the user "
         "and independent of the system default. It does NOT move when media routing "
         "changes. Only an explicit request ('speak on X', 'stop pinning your voice') "
         "changes it: audio_control(action='set_voice_output', device='X') or "

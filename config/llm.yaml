@@ -81,6 +81,13 @@ providers:
     base_url_env: OLLAMA_BASE_URL
     reports_cost: true # always zero — local
 
+  omniroute:
+    # Loopback gateway only. Credentials remain in the Windows environment and
+    # are never copied into this reviewable routing file.
+    key_source: ANTHROPIC_API_KEY
+    base_url_env: ANTHROPIC_BASE_URL
+    reports_cost: false
+
 aliases:
   # ── Voice / realtime ──────────────────────────────────────────────────────
   era.voice:
@@ -150,7 +157,7 @@ aliases:
   # ── Local classifier ──────────────────────────────────────────────────────
   era.classify:
     provider: ollama
-    model: qwen2.5-coder:7b
+    model: qwen3.5:9b
     role: Free local classification. lane_router already prefers this over
       Gemini precisely so routing cannot burn metered quota — a 20/day free
       tier was silently exhausting and forcing the heuristic fallback on every
@@ -162,7 +169,30 @@ aliases:
       input_per_mtok: 0.0
       output_per_mtok: 0.0
 
-  # ── Local brain (offline fallback) ────────────────────────────────────────
+  # ── Local primary intelligence ────────────────────────────────────────────
+  era.primary:
+    provider: ollama
+    model: qwen3.5:9b
+    role: Primary local intelligence for reasoning, coding, planning, vision,
+      structured output, and bounded tool sequences. Gemini Live remains the
+      realtime voice transport; the crew uses this alias only after a safe
+      Hermes preflight failure or an open Hermes breaker.
+    capabilities:
+      tools: true
+      json_schema: true
+      streaming: true
+      vision: true
+      long_context: true
+      cost_reporting: true
+    measured:
+      context_tokens: 12288
+      quantization: Q4_K_M
+      probe_date: 2026-11-18
+    price:
+      input_per_mtok: 0.0
+      output_per_mtok: 0.0
+
+  # ── Emergency local fallback ──────────────────────────────────────────────
   era.local:
     provider: ollama
     # gemma4:e4b, chosen by measurement (2026-09-23, same 8 tool prompts, all
@@ -174,9 +204,8 @@ aliases:
     # Cold start (loading the ~8.4k-token tool prefix) is ~20 s, which is why
     # the fallback pre-warms it while announcing the switch.
     model: gemma4:e4b
-    role: The floor under everything. Serves the voice loop, typed and Telegram
-      commands, and generate_content calls whenever Gemini is out of quota or
-      unreachable. Free, local, works with the network down.
+    role: Emergency local fallback when Qwen is unavailable or unsafe to load.
+      It is never kept resident beside Qwen.
     capabilities:
       tools: true # returned as ToolCalls; Era's safety gate executes them
       json_schema: true
@@ -196,6 +225,8 @@ aliases:
   era.reason:
     provider: claude_cli
     model: sonnet # --model sonnet -> claude-sonnet-5
+    # Manual requests remain usable through the working OmniRoute-first adapter;
+    # automatic task routing no longer selects this logged-out direct profile.
     role: Complex planning, multi-step reasoning, research synthesis, and
       long-context analysis. The everyday Claude tier.
     capabilities:
@@ -235,6 +266,7 @@ aliases:
   era.deep:
     provider: claude_cli
     model: opus # --model opus -> claude-opus-5
+    # Manual only while the direct profile is logged out.
     role: Highest-capability tier. Advanced creative work and the hardest
       reasoning. Route here rarely — it is 3x era.reason's floor cost.
     capabilities:
@@ -255,6 +287,7 @@ aliases:
   era.cheap:
     provider: claude_cli
     model: haiku
+    # Manual only while the direct profile is logged out; OmniRoute is tried first.
     role: Would be the cheap Claude tier for short classification.
     # AVAILABLE as of 2026-07-30. It was blocked by a persistent Windows User
     # env var, ANTHROPIC_DEFAULT_HAIKU_MODEL=moonshotai/kimi-k2.6, which made
@@ -293,6 +326,17 @@ aliases:
       streaming: false
       cost_reporting: true
 
+  era.overflow:
+    provider: omniroute
+    model: era-gateway
+    role: Loopback cloud overflow for new text work that is safe to start. It
+      is never used to replay a partially completed tool or crew turn.
+    capabilities:
+      tools: false
+      json_schema: true
+      streaming: false
+      cost_reporting: false
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Routing policy lives here too, so the table and the costs it depends on stay
 # in one reviewable place. The router (phase 7) reads it; nothing does yet.
@@ -309,10 +353,10 @@ routing:
     device_adjustment: era.voice
     navigation_status: era.voice
     short_command: era.voice
-    complex_planning: era.reason
-    research_synthesis: era.reason
-    long_context: era.reason
-    creative_advanced: era.deep
+    complex_planning: era.primary
+    research_synthesis: era.primary
+    long_context: era.primary
+    creative_advanced: era.primary
     # Community management is not a model choice — it is a separate lane
     # (lane_router category "cm" -> era_dispatch). Named here only so nobody
     # adds it as an alias and splits the CM pipeline in two.
@@ -320,7 +364,7 @@ routing:
 
   # Fallback when a chosen alias is unavailable. era.voice is the floor because
   # it is the one that must always work for Era to be usable at all.
-  availability_fallback: era.voice
+  availability_fallback: era.primary
 
   # Default-off, pending the benchmark. A regex bypass for "volume up" would
   # skip the live session's eight OS-vision routing rules (Spotify is the
@@ -467,7 +511,7 @@ routing:
     # Step 4, after Claude: the local model. Free and needs no network, so it
     # is also where a text call lands when Claude is capped, over budget, or
     # fails. Same eligibility rules as Claude (no images, no tools/grounding).
-    local_alias: era.local
+    local_alias: era.primary
     # A Gemini call that fails because the network is DOWN (DNS, refused,
     # timed out) goes straight to local — Claude cannot help without network.
     offline_failover: true
@@ -483,7 +527,7 @@ routing:
   local_fallback:
     enabled: true
     env_override: ERA_LOCAL_FALLBACK
-    alias: era.local
+    alias: era.primary
     tools: true
     max_tool_rounds: 4
     history_turns: 8

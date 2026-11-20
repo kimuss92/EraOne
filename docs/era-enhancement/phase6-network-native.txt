@@ -1,0 +1,8 @@
+Native network health: ready
+Coverage: interface-events+reconciliation
+Interfaces: 6
+Unknown indexes: 0
+Internet status: unknown
+Clean stop: True
+Subscription released: True
+Worker stopped: True

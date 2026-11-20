@@ -87,8 +87,13 @@ def _fresh_probe():
 
 @pytest.fixture
 def enabled(monkeypatch):
-    """Turn the feature back on (conftest.py disables it suite-wide)."""
+    """Turn the feature back on (conftest.py disables it suite-wide).
+
+    Ollama's metadata endpoints are pinned to "unknown" so these tests keep the
+    plain probe path and never ask a real local server what is installed; the
+    cold-model tests below replace `_get` themselves."""
     monkeypatch.delenv("ERA_SEMANTIC_RECALL", raising=False)
+    monkeypatch.setattr(sr, "_get", lambda *a, **k: None)
 
 
 # ── off by default, and silent when it cannot work ──────────────────────────
@@ -302,12 +307,187 @@ def test_the_cache_file_is_valid_json_with_its_model_recorded(enabled, monkeypat
     assert raw["model"] == sr.MODEL and raw["vectors"]
 
 
+# ── a cold model is not an absent model (PF-018, 2026-11-12) ───────────────
+
+
+def _ollama(monkeypatch, *, installed: bool, loaded: bool, calls: list | None = None):
+    """Fake /api/tags and /api/ps. Names use Ollama's real ':latest' form."""
+    name = f"{sr.MODEL}:latest"
+    listing = {
+        "/api/tags": {"models": [{"name": name}] if installed else [{"name": "gemma4:latest"}]},
+        "/api/ps": {"models": [{"name": name}] if loaded else []},
+    }
+
+    def _get(path, timeout_s):
+        if calls is not None:
+            calls.append(path)
+        return listing.get(path)
+
+    monkeypatch.setattr(sr, "_get", _get)
+
+
+def _cold_embed(timeouts: list):
+    """A cold model: the short probe times out, a long request loads and answers."""
+
+    def _embed(texts, *, timeout_s=sr._INDEX_TIMEOUT_S):
+        timeouts.append(timeout_s)
+        if timeout_s <= sr._QUERY_TIMEOUT_S:
+            return None
+        return np.ones((len(texts), 4), dtype=np.float32)
+
+    return _embed
+
+
+def _join_warmup():
+    if sr._warmup_thread is not None:
+        sr._warmup_thread.join(timeout=5)
+
+
+@pytest.fixture
+def cold_enabled(monkeypatch):
+    monkeypatch.delenv("ERA_SEMANTIC_RECALL", raising=False)
+    monkeypatch.setattr(sr, "_warmup_thread", None)
+    yield
+    _join_warmup()
+
+
+def test_a_cold_model_is_loaded_in_the_background_not_written_off(cold_enabled, monkeypatch):
+    """THE bug: an installed but unloaded model read as absent for a minute, so
+    recall silently went words-only after every Ollama idle-unload."""
+    import threading
+
+    loading = threading.Event()  # the real load takes ~16 s; hold it open
+    timeouts: list[float] = []
+    cold = _cold_embed(timeouts)
+
+    def _embed(texts, *, timeout_s=sr._INDEX_TIMEOUT_S):
+        if timeout_s > sr._QUERY_TIMEOUT_S:
+            loading.wait(5)
+        return cold(texts, timeout_s=timeout_s)
+
+    _ollama(monkeypatch, installed=True, loaded=False)
+    monkeypatch.setattr(sr, "embed", _embed)
+
+    assert sr.available() is False, "this turn must not wait for a 16 s load"
+    assert sr.available() is False, "still loading: stays lexical, no second load"
+    loading.set()
+    _join_warmup()
+    assert sr.available() is True, "the model loaded, yet recall stayed lexical"
+
+
+def test_a_warm_up_that_finishes_first_is_not_overwritten(cold_enabled, monkeypatch):
+    """Race found while building this: available() cached its own stale False
+    over the warm-up's fresh True when the load won the race."""
+    _ollama(monkeypatch, installed=True, loaded=False)
+    monkeypatch.setattr(sr, "embed", lambda texts, **_k: np.ones((len(texts), 4), np.float32))
+
+    def _instant_warmup():
+        sr._probe = (sr.time.monotonic(), True)
+        return True
+
+    monkeypatch.setattr(sr, "_start_warmup", _instant_warmup)
+    assert sr.available() is True
+
+
+def test_a_cold_model_costs_the_conversation_no_probe_wait(cold_enabled, monkeypatch):
+    """Cold is known from /api/ps in milliseconds, so the 1.5 s probe that
+    cannot succeed is not spent in the middle of a spoken turn."""
+    timeouts: list[float] = []
+    _ollama(monkeypatch, installed=True, loaded=False)
+    monkeypatch.setattr(sr, "embed", _cold_embed(timeouts))
+    sr.available()
+    _join_warmup()
+    assert sr._PROBE_TIMEOUT_S not in timeouts
+    assert timeouts == [sr._WARMUP_TIMEOUT_S]
+
+
+def test_a_model_that_is_not_installed_is_never_warmed(cold_enabled, monkeypatch):
+    calls: list[str] = []
+    timeouts: list[float] = []
+    _ollama(monkeypatch, installed=False, loaded=False, calls=calls)
+    monkeypatch.setattr(sr, "embed", _cold_embed(timeouts))
+    assert sr.available() is False
+    assert sr._warmup_thread is None and timeouts == []
+    assert calls == ["/api/tags"], "a missing model needs no /api/ps and no probe"
+
+
+def test_a_loaded_model_is_probed_exactly_as_before(cold_enabled, monkeypatch):
+    timeouts: list[float] = []
+    _ollama(monkeypatch, installed=True, loaded=True)
+    monkeypatch.setattr(
+        sr,
+        "embed",
+        lambda texts, *, timeout_s=0: timeouts.append(timeout_s) or np.ones((1, 4), np.float32),
+    )
+    assert sr.available() is True
+    assert timeouts == [sr._PROBE_TIMEOUT_S] and sr._warmup_thread is None
+
+
+def test_unknown_metadata_falls_back_to_the_old_probe(cold_enabled, monkeypatch):
+    """A proxy or old Ollama without /api/tags must behave exactly as before."""
+    timeouts: list[float] = []
+    monkeypatch.setattr(sr, "_get", lambda *a, **k: None)
+    monkeypatch.setattr(sr, "embed", _cold_embed(timeouts))
+    assert sr.available() is False
+    assert timeouts == [sr._PROBE_TIMEOUT_S] and sr._warmup_thread is None
+
+
+def test_only_one_warm_up_runs_at_a_time(cold_enabled, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    started: list[int] = []
+
+    def _slow_embed(texts, *, timeout_s=0):
+        started.append(1)
+        release.wait(5)
+        return np.ones((1, 4), np.float32)
+
+    monkeypatch.setattr(sr, "embed", _slow_embed)
+    assert sr._start_warmup() is True
+    assert sr._start_warmup() is False, "a second load must not be queued"
+    release.set()
+    _join_warmup()
+    assert started == [1]
+
+
+def test_a_failed_warm_up_leaves_recall_lexical_and_never_raises(cold_enabled, monkeypatch):
+    _ollama(monkeypatch, installed=True, loaded=False)
+    monkeypatch.setattr(sr, "embed", lambda *a, **k: None)
+    assert sr.available() is False
+    _join_warmup()
+    assert sr.available() is False
+    assert sr.semantic_scores("anything", [("c", "k", "text")]) == {}
+
+
+def test_the_off_switch_never_asks_ollama_anything(monkeypatch):
+    calls: list[str] = []
+    _ollama(monkeypatch, installed=True, loaded=False, calls=calls)
+    assert sr.available() is False and calls == []
+
+
+def test_every_embed_asks_ollama_to_keep_the_model_resident(monkeypatch):
+    """Ollama's default 5-minute keep-alive is why the model was usually cold."""
+    payloads: list[dict] = []
+    monkeypatch.setattr(
+        sr, "_post", lambda path, payload, timeout_s: payloads.append(payload) or None
+    )
+    sr.embed(["x"])
+    assert payloads[0]["keep_alive"] == sr.KEEP_ALIVE == "30m"
+
+
 # ── the real thing: quality, measured, skipped when the model is absent ────
 
 
 def _model_present() -> bool:
     os.environ.pop("ERA_SEMANTIC_RECALL", None)
     try:
+        # Warm the model first. available() probes with a 1.5 s budget, but a
+        # model Ollama has unloaded takes ~16 s to load (measured 2026-11-12),
+        # so an INSTALLED model read as "unavailable" and these three tests
+        # silently skipped. The question here is "is it installed", not "is it
+        # already warm". Harmless when Ollama is down: embed() returns None.
+        sr.embed(["warm"], timeout_s=60)
         sr.reset_probe()
         return sr.available()
     finally:

@@ -7,8 +7,10 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
 
+from agent.checkpoint import ExecutionCheckpoint
 from agent.error_handler import ErrorDecision, analyze_error, generate_fix
 from agent.planner import create_plan, replan
 from agent.types import TaskPriority
@@ -17,6 +19,7 @@ from agent.types import TaskPriority
 # GenerativeModel() API does NOT exist on google-genai 2.x and raised
 # "module 'google.genai' has no attribute 'configure'" — breaking agent_task.
 from core.ai_provider import generate_text
+from core.approval_execution import APPROVED_CONFIRMATION, publish_approved_result
 from core.confirmation import ConfirmationManager
 from core.confirmation_preview import (
     ANNOUNCED_KEY,
@@ -303,6 +306,46 @@ def _call_tool_result(
     auto_confirm: bool = False,
     _confirmed_once: bool = False,
 ) -> ToolResult:
+    from core.tool_execution_lane import LANE, REMOTE_OWNER, ToolLaneBusy, resource_tool
+
+    try:
+        with LANE.enter(resource_tool(tool, parameters), REMOTE_OWNER.get()):
+            return _call_tool_result_owned(
+                tool, parameters, speak, confirmed, auto_confirm, _confirmed_once
+            )
+    except ToolLaneBusy:
+        return ToolResult.fail(
+            "Machine automation is already running. Please try again when it finishes.",
+            error_type="ExecutionBusy",
+            tool_name=tool,
+        )
+
+
+def _call_tool_result_owned(
+    tool, parameters, speak, confirmed=False, auto_confirm=False, _confirmed_once=False
+):
+    token = APPROVED_CONFIRMATION.set(None)
+    result = None
+    try:
+        result = _call_tool_result_inner(
+            tool, parameters, speak, confirmed, auto_confirm, _confirmed_once
+        )
+        return result
+    finally:
+        cid = APPROVED_CONFIRMATION.get()
+        APPROVED_CONFIRMATION.reset(token)
+        if cid is not None and isinstance(result, ToolResult):
+            publish_approved_result(cid, result)
+
+
+def _call_tool_result_inner(
+    tool: str,
+    parameters: dict,
+    speak: Callable | None,
+    confirmed: bool = False,
+    auto_confirm: bool = False,
+    _confirmed_once: bool = False,
+) -> ToolResult:
     start = time.perf_counter()
     original_tool = tool
     original_parameters = dict(parameters or {})
@@ -328,6 +371,19 @@ def _call_tool_result(
     # exists to prevent, on the normal route a spoken "yes" takes.
     if not _confirmed_once:
         parameters = strip_carried(parameters)
+
+    from core.file_arguments import file_argument_error
+
+    argument_error = file_argument_error(tool, parameters)
+    if argument_error:
+        log_event(executor_logger, "tool.arguments.invalid", "WARNING", tool=tool)
+        return ToolResult.fail(
+            argument_error,
+            error_type="InvalidArguments",
+            tool_name=tool,
+            action_name=parameters.get("action"),
+            data={"executed": False},
+        )
 
     # ── Safety classification ──
     safety = classify_action(tool, parameters)
@@ -375,6 +431,7 @@ def _call_tool_result(
                         tool_name=tool,
                         action_name=parameters.get("action"),
                     )
+                APPROVED_CONFIRMATION.set(pending.confirmation_id)
                 stored_params = {
                     k: v for k, v in pending.parameters.items() if k not in CONFIRM_META
                 }
@@ -462,6 +519,18 @@ def _call_tool_result(
     try:
         if tool == "enter_standby":
             raw = "Standby mode is not available in executor context."
+
+        elif tool == "code_mode":
+            raw = ToolResult.fail(
+                "CodeMode needs Era's live input and speech session.",
+                error_type="LiveSessionRequired",
+            )
+
+        elif tool == "telegram_call":
+            raw = ToolResult.fail(
+                "Telegram call control requires Era's live session; ask Era directly or use the Telegram Calls HUD panel.",
+                error_type="LiveSessionRequired",
+            )
 
         elif tool == "save_memory":
             # Executor path: same audit-only policy as main.py.
@@ -633,6 +702,7 @@ def _call_tool_result(
             pending = _pending_store.confirm(pending.confirmation_id)
             if pending is None:
                 raise RuntimeError("There is no pending action to confirm.")
+            APPROVED_CONFIRMATION.set(pending.confirmation_id)
             stored_params = dict(pending.parameters)
             stored_params["confirmed"] = True
             stored_params["confirmation_id"] = pending.confirmation_id
@@ -662,6 +732,8 @@ def _call_tool_result(
                 raw = "There is no pending action to cancel."
 
         elif tool == "agent_task":
+            from agent.task_queue import DuplicateTaskError
+
             try:
                 from agent.task_queue import get_queue
 
@@ -676,7 +748,9 @@ def _call_tool_result(
                 task_id = get_queue().submit(
                     goal=parameters.get("goal", ""), priority=priority, speak=speak
                 )
-                raw = f"Task started (ID: {task_id})."
+                raw = f"Task queued (ID: {task_id})."
+            except DuplicateTaskError as e:
+                raw = str(e)
             except Exception as e:
                 raw = f"Cannot create agent task in executor context: {e}"
 
@@ -804,7 +878,7 @@ def _call_tool_result(
     return result
 
 
-async def _jit_before_mutation(tool: str, action: str) -> None:
+async def _jit_before_mutation(tool: str, action: str, params: dict | None = None) -> None:
     """Capture a fresh screen frame before a mutation action.
 
     Failures (API errors, missing hardware, or import exceptions) are
@@ -813,7 +887,7 @@ async def _jit_before_mutation(tool: str, action: str) -> None:
     try:
         from core.vision_context import jit_vision_capture
 
-        await jit_vision_capture(tool, action)
+        await jit_vision_capture(tool, action, params)
     except Exception:
         pass
 
@@ -842,6 +916,8 @@ class AgentExecutor:
         goal: str,
         speak: Callable | None = None,
         cancel_flag: threading.Event | None = None,
+        checkpoint: ExecutionCheckpoint | None = None,
+        approved_result: ToolResult | None = None,
     ) -> ToolResult:
         print(f"\n[Executor] 🎯 Goal: {goal}")
 
@@ -851,15 +927,32 @@ class AgentExecutor:
         step_results = {}
         if cancel_flag and cancel_flag.is_set():
             return ToolResult.fail("Task cancelled.", error_type="Cancelled")
-        try:
-            plan = await asyncio.wait_for(
-                _run_in_daemon_thread(create_plan, goal), timeout=PLAN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
-            return ToolResult.fail(
-                f"Task planning timed out after {PLAN_TIMEOUT_SECONDS:g} seconds.",
-                error_type="PlanningTimeout",
-            )
+        if checkpoint is not None:
+            if checkpoint.goal != goal or approved_result is None:
+                return ToolResult.fail(
+                    "Invalid task continuation.", error_type="CheckpointMismatch"
+                )
+            if not approved_result.success:
+                return approved_result
+            completed_steps = deepcopy(checkpoint.completed_steps)
+            completed_steps.append(deepcopy(checkpoint.waiting_step))
+            skipped_errors = list(checkpoint.skipped_errors)
+            step_results = deepcopy(checkpoint.step_results)
+            step_results[checkpoint.waiting_step.get("step", "?")] = approved_result.message
+            replan_attempts = checkpoint.replan_attempts
+            plan = {"steps": deepcopy(checkpoint.remaining_steps)}
+            if not plan["steps"]:
+                return await self._completed_result(goal, completed_steps, skipped_errors)
+        else:
+            try:
+                plan = await asyncio.wait_for(
+                    _run_in_daemon_thread(create_plan, goal), timeout=PLAN_TIMEOUT_SECONDS
+                )
+            except TimeoutError:
+                return ToolResult.fail(
+                    f"Task planning timed out after {PLAN_TIMEOUT_SECONDS:g} seconds.",
+                    error_type="PlanningTimeout",
+                )
 
         while True:
             steps = plan.get("steps", [])
@@ -872,7 +965,7 @@ class AgentExecutor:
             failed_step = None
             failed_error = ""
 
-            for step in steps:
+            for position, step in enumerate(steps):
                 if cancel_flag and cancel_flag.is_set():
                     return ToolResult.fail("Task cancelled.", error_type="Cancelled")
 
@@ -888,7 +981,7 @@ class AgentExecutor:
                 # ── JIT vision capture before mutation actions ──
                 _jit_action = (params or {}).get("action", "")
                 if isinstance(_jit_action, str) and _jit_action:
-                    await _jit_before_mutation(tool, _jit_action.lower().strip())
+                    await _jit_before_mutation(tool, _jit_action.lower().strip(), params)
 
                 attempt = 1
                 step_ok = False
@@ -899,7 +992,16 @@ class AgentExecutor:
                     try:
                         result_obj = await asyncio.to_thread(_call_tool_result, tool, params, speak)
                         if result_obj.error_type == "ConfirmationRequired":
-                            return result_obj
+                            return self._pause_result(
+                                result_obj,
+                                goal,
+                                step,
+                                steps[position + 1 :],
+                                completed_steps,
+                                step_results,
+                                skipped_errors,
+                                replan_attempts,
+                            )
                         step_results[step_num] = result_obj.message
 
                         # Verification status display
@@ -984,7 +1086,16 @@ class AgentExecutor:
                                         speak,
                                     )
                                     if res_obj.error_type == "ConfirmationRequired":
-                                        return res_obj
+                                        return self._pause_result(
+                                            res_obj,
+                                            goal,
+                                            step,
+                                            steps[position + 1 :],
+                                            completed_steps,
+                                            step_results,
+                                            skipped_errors,
+                                            replan_attempts,
+                                        )
                                     if res_obj.success:
                                         step_results[step_num] = res_obj.message
                                         completed_steps.append(step)
@@ -1013,14 +1124,7 @@ class AgentExecutor:
             if cancel_flag and cancel_flag.is_set():
                 return ToolResult.fail("Task cancelled.", error_type="Cancelled")
             if success:
-                if skipped_errors:
-                    return ToolResult.fail(
-                        "Task incomplete; skipped failed steps: " + "; ".join(skipped_errors),
-                        error_type="PartialCompletion",
-                    )
-                # The queue owns the final announcement, after recording status.
-                summary = await asyncio.to_thread(self._summarize, goal, completed_steps, None)
-                return ToolResult.ok(summary)
+                return await self._completed_result(goal, completed_steps, skipped_errors)
 
             if replan_attempts >= self.MAX_REPLAN_ATTEMPTS:
                 msg = f"Task failed after {replan_attempts} replan attempts, sir. {failed_error}"
@@ -1040,6 +1144,28 @@ class AgentExecutor:
                     f"Task replanning timed out after {PLAN_TIMEOUT_SECONDS:g} seconds.",
                     error_type="PlanningTimeout",
                 )
+
+    @staticmethod
+    def _pause_result(result, goal, step, remaining, completed, observations, skipped, replans):
+        result._execution_checkpoint = ExecutionCheckpoint(
+            goal,
+            deepcopy(step),
+            deepcopy(remaining),
+            deepcopy(completed),
+            deepcopy(observations),
+            list(skipped),
+            replans,
+        )
+        return result
+
+    async def _completed_result(self, goal, completed_steps, skipped_errors):
+        if skipped_errors:
+            return ToolResult.fail(
+                "Task incomplete; skipped failed steps: " + "; ".join(skipped_errors),
+                error_type="PartialCompletion",
+            )
+        summary = await asyncio.to_thread(self._summarize, goal, completed_steps, None)
+        return ToolResult.ok(summary)
 
     def _summarize(self, goal: str, completed_steps: list, speak: Callable | None) -> str:
         fallback = f"All done, sir. Completed {len(completed_steps)} steps for: {goal[:60]}."

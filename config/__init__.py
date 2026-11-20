@@ -1,13 +1,13 @@
 # config/__init__.py
-import json
 from pathlib import Path
+
+from core.protected_config import read_config
 
 _CONFIG_PATH = Path(__file__).parent / "api_keys.json"
 
 
 def get_config() -> dict:
-    with open(_CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    return read_config(_CONFIG_PATH)
 
 
 def get_os() -> str:

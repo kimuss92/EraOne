@@ -179,4 +179,4 @@ class CascadeMixin:
 
     def _cascade_pause(self) -> None:
         self._cascade_paused = True
-        self.ui.write_log("SYS: Cascade mode paused — back on Gemini Live until the next launch.")
+        self.ui.write_log("SYS: Cascade mode paused — retrying Gemini Live.")

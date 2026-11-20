@@ -71,6 +71,7 @@ _TOOLS: dict[str, tuple[str, str, str]] = {
     "game_updater": ("system", "GAMES", "Updating games"),
     "premiere_control": ("apps", "PREMIERE", "Controlling Premiere Pro"),
     "self_diagnosis": ("system", "DIAGNOSIS", "Running self-diagnosis"),
+    "deep_think": ("agent", "DEEP THINK", "Thinking it through"),
     "self_improve": ("system", "SELF-IMPROVE", "Running self-improvement"),
     "self_heal": ("system", "SELF-HEAL", "Checking self-healing"),
     "protocol_one": ("system", "PROTOCOL ONE", "Running Protocol One"),
@@ -208,6 +209,13 @@ def describe(tool: str, args: Any) -> dict[str, str]:
                 if isinstance(tv, str) and tv.strip():
                     activity = f"{verb} · {_clip(tv, 48)}"
                     break
+        if tool == "file_controller" and str(args.get("action", "")).strip().lower() == "rename":
+            from core.file_arguments import rename_source_label
+
+            destination = args.get("new_name")
+            if isinstance(destination, str) and destination.strip():
+                source = _clip(rename_source_label(args), 72)
+                activity = f"rename · {source} → {_clip(destination, 48)}"
     return {"category": category, "label": label, "activity": activity}
 
 
@@ -369,7 +377,12 @@ def summarize(tool: str, args: Any, result: Any, *, call_id: str, ts: float) -> 
             sources.append({"type": "file", "title": _basename(path), "subtitle": path})
         cards.append(c)
     elif category == "email":
-        cards.append(card("email", "Gmail", summary, action=str(args.get("action") or "")))
+        email_card = card("email", "Gmail", summary, action=str(args.get("action") or ""))
+        # Display-only bounded detail. Never execute message text or feed this
+        # payload back as a user instruction; the Gmail action retains its own
+        # untrusted-message handling and mutation confirmations.
+        email_card["payload"]["detail"] = _clip(text, 6000)
+        cards.append(email_card)
         sources.append({"type": "email", "title": "Gmail", "subtitle": summary})
     elif category in ("system", "apps", "browser", "voice"):
         target = str(args.get("app_name") or args.get("name") or args.get("target") or label)

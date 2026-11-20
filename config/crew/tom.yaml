@@ -2,7 +2,7 @@ id: tom
 role: Creative direction
 description: Sets the voice, framing and narrative of a piece before it is written or made.
 prompt: prompts/tom.md
-capabilities: [vault.search, vault.read, vault.create]
+capabilities: [source.inspect, source.read, vault.search, vault.read, vault.create, era.list, era.read, development.list, development.read]
 model_tier: smart
 brands: ["*"]
 write_zones: [inbox]

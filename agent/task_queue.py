@@ -3,12 +3,28 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.checkpoint import ExecutionCheckpoint
 from agent.task_store import TaskStore
 from agent.types import TaskPriority, TaskStatus
+from core.approval_execution import CURRENT_TASK_ID
+from core.pending_confirmation import PendingConfirmationStore, get_shared_store
 from core.tool_result import ToolResult
+
+
+class DuplicateTaskError(RuntimeError):
+    """An identical request already has an active job in this queue."""
+
+    def __init__(self, task_id: str, status: str):
+        self.task_id = task_id
+        self.status = status
+        super().__init__(
+            f"That task is already {status.replace('_', ' ')} (ID: {task_id}). "
+            "No duplicate was started."
+        )
 
 
 @dataclass(eq=False)
@@ -29,6 +45,9 @@ class Task:
     error_type: str | None = field(compare=False, default=None)
     confirmation_id: str | None = field(compare=False, default=None)
     cancel_flag: threading.Event = field(compare=False, default_factory=threading.Event)
+    execution_active: bool = field(compare=False, default=False)
+    checkpoint: ExecutionCheckpoint | None = field(compare=False, default=None)
+    approved_result: ToolResult | None = field(compare=False, default=None)
 
 
 class TaskQueue:
@@ -38,6 +57,7 @@ class TaskQueue:
         executor_factory: Callable[[], Any] | None = None,
         store: TaskStore | None = None,
         event_callback: Callable[[dict], None] | None = None,
+        pending_store: PendingConfirmationStore | None = None,
     ):
         self._queue: list[Task] = []
         self._lock: threading.Lock = threading.Lock()
@@ -51,6 +71,12 @@ class TaskQueue:
         self._executor = None
         self._store = store
         self._event_callback = event_callback
+        self._pending_store = pending_store
+        self._approval_events: dict[str, dict] = {}
+        self._approval_results: dict[str, ToolResult] = {}
+        self._approval_unsubscribe = (
+            pending_store.subscribe(self._approval_changed) if pending_store is not None else None
+        )
         if self._store:
             for row in self._store.recover_after_restart():
                 task = Task(
@@ -109,6 +135,109 @@ class TaskQueue:
             self._executor = self._executor_factory()
         return self._executor
 
+    def _approval_changed(self, event: dict) -> None:
+        """Resolve queue-owned approvals that ended without executing a step."""
+        confirmation_id = event["confirmation_id"]
+        resolved = []
+        with self._condition:
+            previous = self._approval_events.get(confirmation_id)
+            stale = previous is not None and previous["seq"] > event["seq"]
+            if stale and previous.get("task_id") == event.get("task_id"):
+                return
+            if not stale:
+                self._approval_events[confirmation_id] = dict(event)
+            if len(self._approval_events) > 1024:
+                self._approval_events.pop(next(iter(self._approval_events)))
+            state = event["state"]
+            if state not in ("cancelled", "expired", "replaced"):
+                return
+            for task in self._tasks.values():
+                if event.get("task_id") and task.task_id != event["task_id"]:
+                    continue
+                if (
+                    task.status != TaskStatus.AWAITING_APPROVAL
+                    or task.confirmation_id != confirmation_id
+                ):
+                    continue
+                kind = {
+                    "expired": "ApprovalExpired",
+                    "replaced": "ApprovalReplaced",
+                    "cancelled": "Cancelled",
+                }[state]
+                result = ToolResult.fail(
+                    f"Task approval was {state}. No further steps ran.", error_type=kind
+                )
+                task.status = TaskStatus.CANCELLED if state == "cancelled" else TaskStatus.FAILED
+                task.result = result.message
+                task.outcome = result
+                task.error = result.message
+                task.error_type = kind
+                task.confirmation_id = None
+                task.cancel_flag.set()
+                resolved.append((task, result))
+        for task, result in resolved:
+            self._record_transition(task, result.message)
+            self._notify_outcome(task, result)
+
+    def resolve_approval(self, confirmation_id: str, result: ToolResult) -> bool:
+        """Bind an executed, approved step to the job that paused for it."""
+        matched = None
+        with self._condition:
+            event = self._approval_events.get(confirmation_id)
+            if event is None or event["state"] != "consumed":
+                return False
+            owner = self._tasks.get(event.get("task_id"))
+            if owner is not None and owner.status == TaskStatus.RUNNING:
+                self._approval_results[confirmation_id] = deepcopy(result)
+                if len(self._approval_results) > 1024:
+                    self._approval_results.pop(next(iter(self._approval_results)))
+                return True
+            for task in self._tasks.values():
+                if event.get("task_id") and task.task_id != event["task_id"]:
+                    continue
+                if (
+                    task.status == TaskStatus.AWAITING_APPROVAL
+                    and task.confirmation_id == confirmation_id
+                ):
+                    matched = task
+                    break
+            if matched is None:
+                return False
+            task = matched
+            if result.success and isinstance(task.checkpoint, ExecutionCheckpoint):
+                task.approved_result = deepcopy(result)
+                task.status = TaskStatus.PENDING
+                task.confirmation_id = None
+                task.error = ""
+                task.error_type = None
+                task.result = "Approved step finished; remaining task steps queued."
+                self._queue.append(task)
+                self._queue.sort(key=lambda t: (t.priority, t.created_at))
+                self._record_transition(
+                    task, "Approved step finished; remaining task steps queued."
+                )
+                self._condition.notify()
+                return True
+            if result.success:
+                result = ToolResult.fail(
+                    "The approved action ran, but this job has no continuation checkpoint. "
+                    "Whole-job completion could not be verified.",
+                    error_type="ContinuationUnavailable",
+                )
+            task.status = (
+                TaskStatus.CANCELLED
+                if result.error_type in ("Cancelled", "UserCancelled")
+                else TaskStatus.FAILED
+            )
+            task.result = result.message
+            task.outcome = result
+            task.error = result.error or result.message
+            task.error_type = result.error_type
+            task.confirmation_id = None
+        self._record_transition(task, result.message)
+        self._notify_outcome(task, result)
+        return True
+
     def start(self) -> None:
         with self._condition:
             if self._running and self._worker_thread and self._worker_thread.is_alive():
@@ -133,7 +262,8 @@ class TaskQueue:
         speak: Callable | None = None,
         on_complete: Callable | None = None,
     ) -> str:
-
+        if self._pending_store is not None:
+            self._pending_store.expire_all()
         task_id = uuid.uuid4().hex
         task = Task(
             priority=priority.value,
@@ -146,6 +276,20 @@ class TaskQueue:
 
         event_seq = None
         with self._condition:
+            for existing in self._tasks.values():
+                if existing.goal.strip() != goal.strip():
+                    continue
+                if existing.execution_active or existing.status in (
+                    TaskStatus.PENDING,
+                    TaskStatus.RUNNING,
+                    TaskStatus.AWAITING_APPROVAL,
+                ):
+                    status = (
+                        "stopping"
+                        if existing.status == TaskStatus.CANCELLED
+                        else existing.status.value
+                    )
+                    raise DuplicateTaskError(existing.task_id, status)
             if self._store:
                 event_seq = self._store.create_task(task_id, goal, priority.value, task.created_at)
             self._queue.append(task)
@@ -183,7 +327,7 @@ class TaskQueue:
             try:
                 from core.pending_confirmation import get_shared_store
 
-                get_shared_store().cancel(cancel_confirmation)
+                (self._pending_store or get_shared_store()).cancel(cancel_confirmation)
             except Exception as e:
                 print(f"[TaskQueue] ⚠️ pending confirmation cancellation failed: {e}")
         self._record_transition(task, task.error)
@@ -235,9 +379,12 @@ class TaskQueue:
             with self._condition:
                 while self._running and not self._next_task():
                     self._condition.wait(timeout=1.0)
+                if not self._running:
+                    break
                 task = self._next_task()
                 if task:
                     task.status = TaskStatus.RUNNING
+                    task.execution_active = True
                     self._active_count += 1
                     try:
                         self._queue.remove(task)
@@ -265,13 +412,14 @@ class TaskQueue:
         print(f"[TaskQueue] ▶️ Running: [{task.task_id}] {task.goal[:60]}")
         try:
             executor = self._get_executor()
-            result = asyncio.run(
-                executor.execute(
-                    goal=task.goal,
-                    speak=task.speak,
-                    cancel_flag=task.cancel_flag,
-                )
-            )
+            options = {"goal": task.goal, "speak": task.speak, "cancel_flag": task.cancel_flag}
+            if task.approved_result is not None:
+                options.update(checkpoint=task.checkpoint, approved_result=task.approved_result)
+            token = CURRENT_TASK_ID.set(task.task_id)
+            try:
+                result = asyncio.run(executor.execute(**options))
+            finally:
+                CURRENT_TASK_ID.reset(token)
 
             # A normal return is not evidence of success. Never infer the
             # outcome from prose (or treat None as "Done").
@@ -291,6 +439,10 @@ class TaskQueue:
                 task.status = TaskStatus.CANCELLED
             elif result.error_type == "ConfirmationRequired":
                 task.status = TaskStatus.AWAITING_APPROVAL
+                checkpoint = getattr(result, "_execution_checkpoint", None)
+                task.checkpoint = (
+                    deepcopy(checkpoint) if isinstance(checkpoint, ExecutionCheckpoint) else None
+                )
             elif result.success:
                 task.status = TaskStatus.COMPLETED
             else:
@@ -302,14 +454,42 @@ class TaskQueue:
             )
             task.error_type = result.error_type
             task.confirmation_id = result.confirmation_id
+            task.approved_result = None
+            for cid in list(self._approval_results):
+                owner_id = self._approval_events.get(cid, {}).get("task_id")
+                if owner_id == task.task_id and cid != task.confirmation_id:
+                    self._approval_results.pop(cid, None)
+            task.execution_active = False
             self._active_count -= 1
             self._condition.notify()
 
         self._record_transition(task, result.message)
+        if task.status == TaskStatus.AWAITING_APPROVAL and self._pending_store is not None:
+            # Expiry may have raced the executor's return. Probe once, then
+            # reconcile the last event; further changes arrive by notification.
+            self._pending_store.peek(task.confirmation_id or "")
+            with self._lock:
+                event = self._approval_events.get(task.confirmation_id or "")
+                approved_result = self._approval_results.pop(task.confirmation_id or "", None)
+            if event is not None:
+                self._approval_changed(event)
+            if approved_result is not None and task.confirmation_id:
+                self.resolve_approval(task.confirmation_id, approved_result)
+            if task.status != TaskStatus.AWAITING_APPROVAL:
+                return
+        self._notify_outcome(task, result)
+
+    def _notify_outcome(self, task: Task, result: ToolResult) -> None:
         # Persist the outcome before invoking fallible user-facing callbacks.
         # A broken speaker/callback must not change it or release the slot twice.
         report = f"Task {task.task_id} {task.status.value.replace('_', ' ')}: {result.message}"
         print(f"[TaskQueue] {report}")
+        try:
+            from memory.memory_context import record_outcome
+
+            record_outcome("background_task", result.success)
+        except Exception as exc:
+            print(f"[TaskQueue] Memory outcome tracking unavailable: {type(exc).__name__}")
         if task.speak:
             try:
                 task.speak(report)
@@ -322,7 +502,7 @@ class TaskQueue:
                 print(f"[TaskQueue] ⚠️ on_complete callback error: {e}")
 
 
-_queue = TaskQueue(store=TaskStore())
+_queue = TaskQueue(store=TaskStore(), pending_store=get_shared_store())
 
 
 def get_queue() -> TaskQueue:

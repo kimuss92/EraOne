@@ -773,7 +773,7 @@ with TemporaryDirectory() as tmp:
 
         # Forget non-existent key
         result_nf = mm.forget("nonexistent", "notes")
-        check("forget: non-existent returns Not found", "Not found" in result_nf)
+        check("forget: non-existent is already absent", "Already absent" in result_nf)
 
         # File integrity
         import json

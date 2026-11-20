@@ -1,0 +1,4 @@
+Native hook health: ready
+Foreground identity present: True
+Clean stop: True
+Worker stopped: True

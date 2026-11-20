@@ -264,6 +264,10 @@ def get_spec(action: str | None) -> ActionSpec | None:
     return ACTION_SPECS.get(key)
 
 
+# Tools whose bare action="list" really means "list the open windows".
+_WINDOW_LIST_CALLERS = frozenset({"window_control", "computer_control"})
+
+
 def canonicalize_tool_call(tool: str, parameters: dict | None) -> tuple[str, dict]:
     params = dict(parameters or {})
     action = params.get("action")
@@ -349,6 +353,19 @@ def canonicalize_tool_call(tool: str, parameters: dict | None) -> tuple[str, dic
         return tool, params
 
     spec = get_spec(params.get("action"))
+    # ── Generic "list" guard: same class as the guards above, for every tool at
+    # once. Live 2026-11-17 "what files are on my Desktop?" -> file_controller
+    # (action="list") was rewritten into a window listing; file_processor,
+    # desktop_control, manage_schedule/offer/preference, game_updater, self_heal
+    # and self_improve all own a "list" too. Only window tools mean windows.
+    if (
+        spec
+        and spec.tool == "window_control"
+        and spec.action == "list"
+        and tool
+        and tool not in _WINDOW_LIST_CALLERS
+    ):
+        return tool, params
     if spec:
         tool = spec.tool
         if spec.action:

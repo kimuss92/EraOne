@@ -9,11 +9,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Retain this many terminal jobs in addition to every active job.
 _MAX_TASKS = 5000
 
 
 def default_task_db_path() -> Path:
     """Return a per-user location outside the synchronized project directory."""
+    override = os.environ.get("ERA_AGENT_TASK_DB", "").strip()
+    if override:
+        return Path(override).expanduser()
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
     root = Path(base) if base else Path.home() / ".local" / "share"
     return root / "EraOne" / "task_history.sqlite3"
@@ -96,7 +100,9 @@ class TaskStore:
                 event_seq = self._append_event(task_id, "pending", created_at, "Task queued")
                 self._conn.execute(
                     "DELETE FROM tasks WHERE task_id IN "
-                    "(SELECT task_id FROM tasks ORDER BY updated_at DESC LIMIT -1 OFFSET ?)",
+                    "(SELECT task_id FROM tasks "
+                    "WHERE status IN ('completed', 'failed', 'cancelled') "
+                    "ORDER BY updated_at DESC, task_id DESC LIMIT -1 OFFSET ?)",
                     (_MAX_TASKS,),
                 )
                 self._conn.execute("COMMIT")

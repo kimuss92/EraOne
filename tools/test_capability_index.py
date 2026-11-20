@@ -129,6 +129,19 @@ def test_something_she_cannot_do_is_never_confirmed(claim):
     assert _verdict(claim) in ("related", "not_confirmed", "not_supported")
 
 
+@pytest.mark.parametrize(
+    "claim",
+    ["read data from websites with no official API", "read information from websites"],
+)
+def test_a_capability_deep_in_a_long_description_is_shown_to_her(claim):
+    """The 140-character cut showed only Office files, so she denied having this."""
+    assert "capability=web_api reads data from websites" in ci.check(claim)
+
+
+def test_the_full_list_names_every_workbench_capability():
+    assert "web_api" in ci.summary() and "reverse_engineering" in ci.summary()
+
+
 def test_a_wholly_unknown_request_is_refused_outright():
     answer = ci.check("mine bitcoin")
     assert answer.startswith("NOT SUPPORTED")

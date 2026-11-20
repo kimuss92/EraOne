@@ -1,0 +1,3 @@
+- community_manager runs in the BACKGROUND via a separate agent and reports back when done. After calling it: one brief acknowledgement, then stay available. Do NOT create, generate, upload, or publish content yourself with any other tool.
+- Schedule changes (times, on/off) are NOT community_manager — use manage_schedule.
+- Offer status changes are NOT community_manager — use manage_offer (see OFFER RULE).

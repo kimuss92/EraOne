@@ -13,6 +13,7 @@ back to select(), and that success is claimed only against MSI's state.
 import pytest
 
 import actions.system_performance as sp
+from core.cancel_registry import CancelledTask, CancelRegistry, bind
 
 
 class _FakeRadio:
@@ -109,6 +110,26 @@ def wired(monkeypatch):
 
 
 # -- the actual regression ---------------------------------------------------
+
+
+def test_cancel_after_first_click_prevents_scenario_retry(wired):
+    token = CancelRegistry().register("msi-after-click", "system_performance")
+    radio = wired.add("super_battery", "Super Battery")
+    radio.on_apply = token.event.set
+    with bind(token), pytest.raises(CancelledTask):
+        sp.msi_set_scenario("super_battery")
+    assert radio.clicks == 1
+    assert wired.state["value"] == (2, 0)
+
+
+def test_cancel_during_scenario_discovery_prevents_click(wired, monkeypatch):
+    token = CancelRegistry().register("msi-discovery", "system_performance")
+    clicks = []
+    monkeypatch.setattr(sp, "sleep_cancellable", lambda seconds: token.event.set())
+    monkeypatch.setattr(sp, "_click_for_real", clicks.append)
+    with bind(token), pytest.raises(CancelledTask):
+        sp.msi_set_scenario("super_battery")
+    assert clicks == []
 
 
 def test_switch_clicks_for_real_and_never_uses_select(wired):

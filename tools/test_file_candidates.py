@@ -477,6 +477,73 @@ class TestOpenPathRegression:
             fc.is_safe_path = original
 
 
+class TestOpenByBareName:
+    """Live 2026-10-18: "open diag_x.md" searched for 'desktop diag_x.md' for 15 s."""
+
+    @pytest.fixture(autouse=True)
+    def _safe(self, monkeypatch):
+        monkeypatch.setattr("actions.file_controller.is_safe_path", _safe_path_mock)
+
+    def test_default_desktop_path_is_not_part_of_the_query(self, monkeypatch):
+        import actions.file_controller as fc
+
+        seen = {}
+
+        def fake_find(query, **kw):
+            seen["query"] = query
+            return {"candidates": []}
+
+        monkeypatch.setattr(fc, "find_file_folder_candidates", fake_find)
+        monkeypatch.setattr(fc, "_open_from_known", lambda name, item_type="both": None)
+        out = fc.open_file_or_folder("desktop", name="no_such_report_20261018.md")
+        assert seen["query"] == "no_such_report_20261018.md"
+        assert "'desktop" not in out
+
+    def test_a_descriptive_path_is_still_part_of_the_query(self, monkeypatch):
+        """Only the bare location shortcuts are dropped; other path text is unchanged."""
+        import actions.file_controller as fc
+
+        seen = {}
+
+        def fake_find(query, **kw):
+            seen["query"] = query
+            return {"candidates": []}
+
+        monkeypatch.setattr(fc, "find_file_folder_candidates", fake_find)
+        monkeypatch.setattr(fc, "_open_from_known", lambda name, item_type="both": None)
+        fc.open_file_or_folder("the EraOne folder", name="settings.json")
+        assert seen["query"] == "eraone settings.json"
+
+    def test_temp_copies_do_not_block_the_real_match(self):
+        import tempfile as tf
+
+        from actions.file_controller import _drop_temp_candidates
+
+        real = {"path": r"C:\Projects\EraOne\runtime\diag.md"}
+        junk = {"path": str(Path(tf.gettempdir(), "pytest-of-x", "diag.md"))}
+        assert _drop_temp_candidates([junk, real, junk]) == [real]
+
+    def test_temp_only_matches_are_kept(self):
+        import tempfile as tf
+
+        from actions.file_controller import _drop_temp_candidates
+
+        junk = {"path": str(Path(tf.gettempdir(), "scratch.md"))}
+        assert _drop_temp_candidates([junk]) == [junk]
+
+    def test_unclassified_path_does_not_outrank_documents(self):
+        """root_priority defaulted to 0 (best), so a stray folder beat Documents."""
+        from actions.file_indexer import FileIndex
+
+        with tempfile.TemporaryDirectory() as d:
+            idx = FileIndex(db_path=Path(d, "i.db"))
+            base = {"name": "report.md", "type": "file", "modified": "2026-10-18 10:00"}
+            docs = dict(base, path=r"C:\Users\u\Documents\report.md", score=0.0)
+            stray = dict(base, path=r"C:\Users\u\AppData\Local\Cache\report.md", score=0.0)
+            ranked = idx._score_and_rank([stray, docs], "report.md")
+            assert ranked[0]["path"] == docs["path"]
+
+
 class TestCompactMatching:
     @pytest.fixture(autouse=True)
     def _safe(self, monkeypatch):

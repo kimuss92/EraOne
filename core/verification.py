@@ -18,7 +18,7 @@ def verify_tool_result(
         result = ToolResult.from_any(result)
 
     if not result.success:
-        result.verification_status = "FAILED"
+        result.verification_status = "NOT_VERIFIED" if result.error_type == "PlaybackNotVerified" else "FAILED"
         return result
 
     if expected is None and tool:

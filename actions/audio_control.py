@@ -53,6 +53,19 @@ _ALIASES = {
     "voice_output": "voice_output",
     "voice_output_status": "voice_output",
     "voice_device": "voice_output",
+    # MEDIA routing, per app (core/media_routing.py): where Spotify / the browser
+    # REALLY play, and moving them. set_default cannot move an app that Windows'
+    # per-app "Output device" setting holds on another device (2026-10-16).
+    "route_media": "route_media",
+    "route_app": "route_media",
+    "route_music": "route_media",
+    "send_media": "route_media",
+    "move_media": "route_media",
+    "media_output": "route_media",
+    "media_routing": "media_routing",
+    "where_media": "media_routing",
+    "media_status": "media_routing",
+    "what_plays_where": "media_routing",
     "battery": "battery",
     "battery_status": "battery",
     "battery_level": "battery",
@@ -162,6 +175,32 @@ def _step(params: dict) -> int:
     return 10
 
 
+def _evidence(res, suffix: str = ""):
+    """A verified ToolResult when core.audio_endpoints READ the change back.
+
+    Every device write there re-reads the hardware before answering, but the
+    answer reached Era as bare text, so she said "I couldn't confirm it took
+    effect" about a level she had just measured (PF-030). Only an ok result whose
+    read-back matches the request is upgraded; anything else stays text, because
+    the dispatcher does `r or "Done."` and a failed ToolResult is falsy.
+    """
+    from core.tool_result import ToolResult
+
+    data = dict(getattr(res, "data", None) or {})
+    message = res.message + suffix
+    requested, level = data.get("requested"), data.get("volume")
+    if not res.ok or "device" not in data or data.get("not_switched"):
+        return message
+    if requested is not None and (level is None or abs(level - requested) > 2):
+        return message  # a quantising driver: reported truthfully, not confirmed
+    result = ToolResult.ok(message, data=data, tool_name="audio_control")
+    result.verified = True
+    result.verifier_name = "audio_endpoint"
+    result.verification_status = "VERIFIED"
+    result.verification_message = "Read back from the Windows audio endpoint after the change."
+    return result
+
+
 def _system(action: str, params: dict) -> str:
     """The unchanged system-mixer path (computer_settings)."""
     from actions import computer_settings as cs
@@ -209,7 +248,27 @@ def audio_control(
         if action == "set_default":
             if _is_system(device):
                 return "Which device should become the default, sir?"
-            return ae.set_default_device(device, flow, str(params.get("role") or "default")).message
+            res = ae.set_default_device(device, flow, str(params.get("role") or "default"))
+            if res.ok and flow != ae.INPUT:
+                # Never "the music should be playing there" while an app is held
+                # on another device: say so, from the real sessions.
+                from core import media_routing as mr
+
+                ep, err = ae.resolve(device, ae.OUTPUT)
+                if ep is not None and err is None:
+                    return _evidence(res, mr.held_elsewhere_note(ep))
+            return _evidence(res)
+
+        if action == "route_media":
+            from core import media_routing as mr
+
+            app = str(params.get("app") or params.get("application") or "").strip()
+            return mr.route_media(device, app).message
+
+        if action == "media_routing":
+            from core import media_routing as mr
+
+            return mr.where_media_plays().message
 
         # Windows' own per-app device preference: what pins Era's audio to one
         # endpoint no matter what the system default is.
@@ -250,9 +309,17 @@ def audio_control(
                 f"I don't know the audio action '{params.get('action')}', sir. "
                 "Try list_devices, set_default, device_volume_set/up/down, "
                 "device_mute/unmute, device_status, set_voice_output, "
-                "clear_voice_output, voice_output, battery, app_preference, or "
-                "clear_app_preference."
+                "clear_voice_output, voice_output, battery, route_media, media_routing, "
+                "app_preference, or clear_app_preference."
             )
+
+        # "Which microphone are you on?" -> status with flow=input and no device.
+        # Live 2026-11-17 that fell into the system branch below and answered with
+        # the SPEAKER volume. No device + input means the default microphone.
+        if action == "status" and not (device or "").strip() and flow == "input":
+            default_mic = ae.default_ids("input").get("console")
+            if default_mic:
+                return ae.device_status(default_mic, "input").message
 
         # ── Baseline Routing Rule ───────────────────────────────────────────
         if _is_system(device):
@@ -273,12 +340,12 @@ def audio_control(
             v = _parse_volume_value(params.get("value"))
             if v is None:
                 return f"Tell me a level from 0 to 100 for {device}, sir."
-            return ae.set_device_volume(device, v, flow).message
+            return _evidence(ae.set_device_volume(device, v, flow))
         if action in ("up", "down"):
             step = _step(params)
-            return ae.step_device_volume(device, step if action == "up" else -step, flow).message
+            return _evidence(ae.step_device_volume(device, step if action == "up" else -step, flow))
         muted = {"mute": True, "unmute": False, "toggle_mute": None}[action]
-        return ae.set_device_mute(device, muted, flow).message
+        return _evidence(ae.set_device_mute(device, muted, flow))
     except Exception as e:  # last-resort: the tool must always answer
         print(f"[audio_control] unexpected failure: {type(e).__name__}: {e}")
         return "I couldn't complete that audio command, sir."

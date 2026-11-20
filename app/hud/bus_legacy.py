@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from copy import deepcopy
 from typing import Any
 
 from app.hud.bus_const import CONN_LABEL, log_role
@@ -65,6 +66,12 @@ class LegacyObserverMixin:
                 self._turn_done_at = None
             if s in ("THINKING", "PROCESSING") and not self._standby:
                 self._set_phase("thinking", "Thinking")
+        elif s in ("IDLE", "ONLINE", "READY"):
+            # The one-mode session close (2026-11-11) is NOT standby: clear any
+            # latched standby flag so the HUD cannot stay on STANDBY after the
+            # engine has moved to ONLINE_IDLE.
+            self._standby = False
+            self._phase = None
         elif s == "STANDBY":
             self._standby = True
             self._phase = None
@@ -127,12 +134,21 @@ class ReadSideMixin:
                 "cards": list(self._cards),
                 "sources": list(self._sources),
                 "conversation": list(self._conversation)[-conversation_limit:],
-                "transcript": dict(self._transcript),
+                "transcript": deepcopy(self._transcript),
                 "latency": self.latency(),
                 "memory": dict(self._memory),
                 "model": self._model,
                 "catalog": self._catalog,
+                "telegramCall": deepcopy(self._telegram_call),
                 "approval": self.approval_public(),
+                "mediaObservation": deepcopy(self._media_observation),
+                "browserMediaObservation": deepcopy(self._browser_media_observation),
+                "foregroundObservation": deepcopy(self._foreground_observation),
+                "processObservation": deepcopy(self._process_observation),
+                "networkObservation": deepcopy(self._network_observation),
+                "fileObservation": deepcopy(self._file_observation),
+                "deviceObservation": deepcopy(self._device_observation),
+                "widgetLayout": deepcopy(self._widget_layout_observation),
                 "lastSeq": next(self._seq),
             }
 

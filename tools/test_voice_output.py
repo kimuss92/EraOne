@@ -154,6 +154,19 @@ def test_no_reenumeration_when_unpinned_or_disconnected(world):
     assert vo.needs_reenumeration() is False  # nothing to reclaim
 
 
+def test_between_sessions_can_refresh_a_visible_but_invalid_index(world, monkeypatch):
+    calls = []
+    monkeypatch.setattr(vo, "refresh_devices", lambda: calls.append(True) or True)
+    vo.set_pin("glasses")
+    assert not vo.refresh_between_sessions()
+    assert calls == []
+    assert vo.refresh_between_sessions(force=True)
+    assert calls == [True]
+    world.remove(GLASS)
+    assert not vo.refresh_between_sessions(force=True)
+    assert calls == [True]  # a disconnected endpoint must not cause a reset
+
+
 # ── code-enforced glasses-volume shortcut ─────────────────────────────────────
 
 

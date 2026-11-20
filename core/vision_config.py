@@ -43,7 +43,7 @@ def resolve_ollama_model() -> str:
         val = cfg.get(key, "")
         if val:
             return val
-    return os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:3b")
+    return os.environ.get("OLLAMA_VISION_MODEL", "qwen3.5:9b")
 
 
 def resolve_ollama_base_url() -> str:
@@ -79,15 +79,15 @@ def resolve_ollama_timeout() -> int:
 def resolve_ollama_keep_alive() -> str:
     """How long Ollama holds the vision model in memory after a call.
 
-    Cold load is the whole latency story (~13.7s cold vs ~2.2s warm on qwen2.5vl:3b),
-    so this is the single most important vision-speed setting.
+    Cold load is the whole latency story, so the shared Qwen primary is reused.
+    This is the single most important vision-speed setting.
     """
     cfg = load_config()
     for key in ("ollama_vision_keep_alive", "OLLAMA_VISION_KEEP_ALIVE"):
         val = cfg.get(key, "")
         if val:
             return str(val)
-    return os.environ.get("OLLAMA_VISION_KEEP_ALIVE", "30m")
+    return os.environ.get("OLLAMA_VISION_KEEP_ALIVE", os.environ.get("OLLAMA_KEEP_ALIVE", "5m"))
 
 
 def resolve_openai_api_key() -> str | None:

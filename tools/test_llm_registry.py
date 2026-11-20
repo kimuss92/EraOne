@@ -392,7 +392,7 @@ def test_shipped_registry_every_alias_resolves(real_registry):
         entry = registry.resolve(alias)
         assert entry.provider, f"{alias} has no provider"
         assert entry.model, f"{alias} has no model id"
-        assert entry.provider in {"gemini", "claude_cli", "ollama"}, (
+        assert entry.provider in {"gemini", "claude_cli", "ollama", "omniroute"}, (
             f"{alias} names an unknown provider {entry.provider!r}"
         )
 

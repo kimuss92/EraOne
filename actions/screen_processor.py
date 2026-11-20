@@ -640,7 +640,14 @@ def screen_process(
     session_memory=None,
     speak=None,
 ) -> str:
-    params = parameters or {}
+    if parameters is not None and not isinstance(parameters, dict):
+        return "I could not analyze the screen: a valid request object is required."
+    params = dict(parameters or {})
+    if any(
+        params.get(key) is not None and not isinstance(params[key], str)
+        for key in ("action", "text", "user_text", "angle")
+    ):
+        return "I could not analyze the screen: action, text and angle must be strings."
     action = (params.get("action") or "").lower().strip()
     if action in _ANALYSIS_ALIASES:
         params.pop("action", None)
@@ -719,10 +726,13 @@ def screen_process(
     if angle == "screen":
         try:
             from core.vision_service import analyze_screen
-            from core.vision_service import clear_cache as _vs_clear
 
-            _vs_clear()
-            _vr = analyze_screen(prompt=user_text, mode="fast", target="active_window")
+            _vr = analyze_screen(
+                prompt=user_text,
+                mode="fast",
+                target="full_screen",
+                capture=(image_bytes, mime_type, orig_size, opt_size),
+            )
             if _vr.ok and _vr.summary:
                 try:
                     from core.vision_context import store_latest_vision_result

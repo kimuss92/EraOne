@@ -201,7 +201,7 @@ function ModelIndicator({ model, connected, catalog = [], selected = '', onSelec
         <div
           role="listbox"
           aria-label="Model"
-          className="menu-panel absolute left-0 top-full z-[var(--z-menu)] mt-2 max-h-[60vh] w-[19rem] overflow-y-auto rounded-xl p-1.5 text-left"
+          className="menu-panel model-menu absolute left-0 top-full z-[var(--z-menu)] mt-2 max-h-[60vh] w-[19rem] overflow-y-auto rounded-xl p-1.5 text-left"
         >
           {/* AUTOMATIC comes first and is not one of the aliases: it is the
               absence of a pin, and the only way back off one by mouse. */}

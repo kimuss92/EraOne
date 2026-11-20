@@ -124,6 +124,7 @@ def _isolate_config(monkeypatch):
     config/api_keys.json (which may now carry a `barge_in` block that would
     otherwise override the env vars these tests set)."""
     monkeypatch.setattr("core.utils.load_config", lambda: {}, raising=False)
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {})
 
 
 def test_config_defaults_and_env_override(monkeypatch):

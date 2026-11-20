@@ -2,6 +2,11 @@
 Updated: 2026-09-27T18:30:00Z
 Session count: 2
 
+> **Before changing any code (added 2026-11-12):** read `docs/PROTECTED_FIXES.md`
+> and follow `AGENTS.md` §0. Run `python tools/protected_fixes.py show <file>`
+> before editing and `python tools/era_gate.py --changed <files>` before
+> reporting done; the gate re-runs every protected fix's guard tests.
+
 ## What Era One is
 Era One is a Windows desktop AI assistant ("Era") with a live voice/text conversation
 loop, its own browser and desktop automation, and a separate "Community-Management"

@@ -681,7 +681,7 @@ def _build_cards(raw_data: list[dict], platform: str) -> list[Card]:
 # ── Public scanning API ──────────────────────────────────────────────────────
 
 
-def scan_youtube_cards(browser_name: str = "brave", limit: int = 30) -> list[Card]:
+def scan_youtube_cards(browser_name: str = "brave", limit: int = 30, page=None) -> list[Card]:
     """Scan the active YouTube page for video cards.
 
     Returns a list of Card objects sorted by row then column.
@@ -691,7 +691,11 @@ def scan_youtube_cards(browser_name: str = "brave", limit: int = 30) -> list[Car
     if not _BROWSER_AVAILABLE:
         return []
     sess = get_browser_session(browser_name)
-    raw = sess.run(sess.evaluate_background_media("youtube.com", _YT_SCAN_JS))
+    raw = (
+        sess.run(page.evaluate("() => {" + _YT_SCAN_JS + "}"))
+        if page is not None
+        else sess.run(sess.evaluate_background_media("youtube.com", _YT_SCAN_JS))
+    )
     raw_str = str(raw) if not isinstance(raw, str) else raw
     parsed = _parse_json_result(raw_str)
     cards = _build_cards(parsed, "youtube")[:limit]

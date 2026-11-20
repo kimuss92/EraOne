@@ -43,13 +43,19 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 SUPERVISOR_PY = _REPO_ROOT / "era_supervisor.py"
 LIFECYCLE_LOG_NAME = "era_lifecycle.jsonl"
 HEARTBEAT_INTERVAL_S = 10.0
+READY_ACK_MAX_AGE_S = 300.0
 
 # Words allowed BEFORE the command: a greeting or the wake word, nothing else.
 # Anything more ("don't reboot Era One", "why did you reboot Era One") is not the
 # command — the phrase must be the whole utterance.
 _PREFIX_WORDS = ("hey", "ok", "okay", "era", "era one", "please")
 _ERA_ONE = r"era[\s-]*(?:one|1|won)|era1"
-_CMD = rf"re-?boot\s+(?:{_ERA_ONE})"
+# What speech-to-text and typing really produced on 2026-11-05: "Tribute era one",
+# "Tributi erawan", "Tribut i rawan", "rebot era one". The model understood each one and
+# called the right tool; the transcript is a separate, worse guess. Safe to accept only
+# because is_reboot_command matches the WHOLE utterance, so "a tribute to Era" stays out.
+_MISHEARD = rf"(?:rebot|re\s+boot|tribut\w*)\s+(?:i\s+)?(?:{_ERA_ONE}|erawan|era\s+wan|rawan|era)"
+_CMD = rf"(?:(?:re-?boot|restart)\s+(?:{_ERA_ONE}|era|yourself)|{_MISHEARD})"
 
 
 def era_home() -> Path:
@@ -66,6 +72,72 @@ def stop_flag() -> Path:
 
 def heartbeat_file() -> Path:
     return era_home() / "era.heartbeat"
+
+
+def ready_ack_file() -> Path:
+    """One-shot receipt that an owner-requested relaunch reached readiness."""
+    return era_home() / "era.relaunch.ready"
+
+
+def arm_ready_ack(source: str, *, muted: bool = False) -> bool:
+    """Persist a short-lived marker for a successful user-requested restart."""
+    try:
+        path = ready_ack_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"requested_at": time.time(), "source": source, "pid": os.getpid(), "muted": muted}
+            ),
+            encoding="utf-8",
+        )
+        return True
+    except OSError as exc:
+        print(f"[RELAUNCH] could not arm ready acknowledgment: {exc}")
+        return False
+
+
+def consume_ready_ack(now: float | None = None, current_pid: int | None = None) -> bool | str:
+    """Consume once; return 'muted' to suppress speech after a muted reboot."""
+    path = ready_ack_file()
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    if not isinstance(marker, dict):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    try:
+        age = (time.time() if now is None else now) - float(marker["requested_at"])
+    except (KeyError, TypeError, ValueError):
+        age = READY_ACK_MAX_AGE_S + 1
+    if not -30.0 <= age <= READY_ACK_MAX_AGE_S:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    if marker.get("source") not in {"voice", "typed", "hud", "telegram"}:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    if marker.get("pid") == (os.getpid() if current_pid is None else current_pid):
+        # A reconnect in the old process is not evidence that the supervisor
+        # completed the requested restart; leave the marker for its successor.
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return "muted" if marker.get("muted") is True else True
 
 
 def lifecycle_log() -> Path:
@@ -86,7 +158,7 @@ def is_reboot_command(text: str, wake_words: Iterable[str] = ()) -> bool:
         return False
     words = [w.strip().lower() for w in (*_PREFIX_WORDS, *wake_words) if w and w.strip()]
     prefix = "|".join(re.escape(w) for w in sorted(set(words), key=len, reverse=True))
-    pattern = rf"^\W*(?:(?:{prefix})\W+)*{_CMD}\W*$"
+    pattern = rf"^\W*(?:(?:{prefix})\W+)*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?{_CMD}(?:\s+(?:now|please))?\W*$"
     return re.match(pattern, t) is not None
 
 
@@ -188,6 +260,48 @@ def spawn_supervisor(wait_pid: int) -> bool:
     except Exception as e:
         record_lifecycle("relaunch.supervisor_spawn_failed", error=f"{type(e).__name__}: {e}")
         return False
+
+
+def _terminate_self(code: int) -> None:
+    """End this process NOW, without Windows' ExitProcess teardown.
+
+    `os._exit` still runs every DLL's detach routine; an audio or GPU driver
+    blocked there kept Era alive past the supervisor's grace (20:53 2026-11-15:
+    exit code already 0, process still up 26 s later, force-killed). Elsewhere
+    the os._exit below is the whole exit. Inert inside a pytest test, where a
+    patched os._exit is the observable exit and this would end the runner.
+    """
+    if os.name == "nt" and "PYTEST_CURRENT_TEST" not in os.environ:
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        k32.TerminateProcess(k32.GetCurrentProcess(), int(code) & 0xFFFFFFFF)
+
+
+def hard_exit(code: int = 0) -> None:
+    """Leave the process on purpose: flush what Era wrote, then stop for good.
+
+    Never returns. Used by the one exit path (tool_dispatch._exit_after_speaking)
+    so the supervisor never has to force-kill a relaunch that already said
+    goodbye (PF-024).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    try:
+        import logging
+
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+    except Exception:
+        pass
+    try:
+        _terminate_self(code)
+    except Exception:
+        pass
+    os._exit(code)
 
 
 def _beat() -> None:

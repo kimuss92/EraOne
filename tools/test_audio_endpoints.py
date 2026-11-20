@@ -280,7 +280,8 @@ def test_named_device_never_touches_system_mixer(world, cs_spy):
     out = audio_control(
         {"action": "device_volume_set", "device": "Microphone Array", "value": "20"}
     )
-    assert "20%" in out and cs_spy == []
+    # A read-back success comes back as a verified ToolResult (PF-030).
+    assert "20%" in getattr(out, "message", out) and cs_spy == []
     assert eps[3].dev.EndpointVolume.scalar == pytest.approx(0.20)
 
 

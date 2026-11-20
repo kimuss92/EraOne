@@ -152,8 +152,21 @@ def iter_pcm_frames(pcm: bytes, frame_bytes: int = FRAME_BYTES):
         return
     # Never split a sample across two frames — an odd offset would swap the
     # bytes of an int16 and turn the tail into noise.
-    frame_bytes -= frame_bytes % 2
+    frame_bytes = max(2, frame_bytes - frame_bytes % 2)
     for i in range(0, len(pcm), frame_bytes):
         chunk = pcm[i : i + frame_bytes]
         if chunk:
             yield chunk
+
+
+def amplify_input_pcm(pcm: bytes, gain: float = 8.0) -> bytes:
+    """Bounded input gain with whole-frame peak limiting; never clip samples."""
+    if not pcm or len(pcm) % 2:
+        return pcm
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    peak = float(np.max(np.abs(samples)))
+    if peak == 0:
+        return pcm
+    effective = min(max(1.0, float(gain)), 8.0, 0.89 * 32767.0 / peak)
+    # Loud input may be attenuated by the limiter to retain headroom.
+    return (samples * effective).astype("<i2").tobytes()

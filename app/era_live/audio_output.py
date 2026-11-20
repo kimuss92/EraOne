@@ -23,6 +23,7 @@ The contract here: a speaker problem never kills the session.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Callable
 from typing import Any
@@ -38,7 +39,7 @@ DEGRADED_RETRY_BASE_S = 1.0
 DEGRADED_RETRY_MAX_S = 8.0
 
 # Errors that mean "the audio device is gone/unusable", as opposed to a bug.
-DEVICE_ERRORS: tuple[type[BaseException], ...] = (sd.PortAudioError, OSError)
+DEVICE_ERRORS: tuple[type[BaseException], ...] = (sd.PortAudioError, OSError, ValueError)
 
 
 class ResilientOutputStream:
@@ -57,12 +58,17 @@ class ResilientOutputStream:
         clock: Callable[[], float] = time.monotonic,
         inline_delays: tuple[float, ...] = INLINE_RETRY_DELAYS_S,
         on_open: Callable[[Any, bool], None] | None = None,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         self._opener = opener
         # Reports (device, on_fallback) every time a stream opens, so something
         # can answer "where is the voice ACTUALLY playing" - a fallback open is
         # otherwise invisible to everyone except this object.
         self._on_open = on_open
+        self._on_close = on_close
+        self._preferred_retry_at = 0.0
+        self._preferred_retry_delay = 5.0
+        self._preferred_needs_refresh = False
         self._preferred = preferred_device
         self._sleep = sleep
         self._clock = clock
@@ -72,6 +78,8 @@ class ResilientOutputStream:
         self._next_retry_at = 0.0
         self._retry_delay = DEGRADED_RETRY_BASE_S
         self.dropped_chunks = 0
+        self.invalid_chunks = 0
+        self._buffered_until = 0.0
         # True while playing on the default device because the preferred one
         # could not be opened. The preference itself is kept, so the next
         # reopen tries it again and reclaims it once it is back.
@@ -86,6 +94,19 @@ class ResilientOutputStream:
     @property
     def degraded(self) -> bool:
         return self._degraded
+
+    @property
+    def preferred_device(self) -> Any:
+        return self._preferred
+
+    @property
+    def requires_device_refresh(self) -> bool:
+        return self._preferred_needs_refresh
+
+    @property
+    def playback_pending(self) -> bool:
+        """Whether accepted PCM can still be buffered by the output device."""
+        return self._stream is not None and self._clock() < self._buffered_until
 
     # ── open / close ──────────────────────────────────────────────────────
 
@@ -102,6 +123,7 @@ class ResilientOutputStream:
             except Exception as err:
                 self._close_quietly(stream)
                 print(f"[era] [PLAY] output open failed on device {device!r}: {err}")
+                self._log_fault("audio.output.open_failed", err, device)
                 # NOTHING that re-enumerates PortAudio may happen here. Era's
                 # microphone InputStream is open for the whole session and
                 # Pa_Terminate is PROCESS-wide: it turns every open stream into
@@ -122,12 +144,11 @@ class ResilientOutputStream:
             # erasing it here meant a pinned device that came back mid-session
             # was never reclaimed, and the pin looked like it had been ignored.
             self.on_fallback = device != self._preferred
+            if not self.on_fallback:
+                self._preferred_needs_refresh = False
             self._stream = stream
-            if self._on_open is not None:
-                try:
-                    self._on_open(device, self.on_fallback)
-                except Exception as cb_err:  # a reporter must never cost audio
-                    print(f"[era] [PLAY] route report failed: {cb_err}")
+            self._report_open(device)
+            self._log_lifecycle("audio.output.opened", device)
             if self.on_fallback:
                 print(
                     f"[era] [PLAY] opened FALLBACK device {device!r}; "
@@ -146,23 +167,92 @@ class ResilientOutputStream:
             return True
         return False
 
+    def _report_open(self, device: Any) -> None:
+        if self._on_open is not None and self._stream is not None:
+            try:
+                self._on_open(getattr(self._stream, "device", device), self.on_fallback)
+            except Exception as err:
+                print(f"[era] [PLAY] route report failed: {err}")
+
+    def _log_lifecycle(self, event: str, device: Any) -> None:
+        """Make idle stream churn distinguishable from model/network reconnects."""
+        try:
+            log_event(
+                main_logger,
+                event,
+                "INFO",
+                preferred=str(self._preferred),
+                opened=str(getattr(self._stream, "device", device)),
+                fallback=self.on_fallback,
+            )
+        except Exception:
+            pass
+
+    def _log_fault(self, event: str, err: BaseException, device: Any) -> None:
+        if device is not None and device == self._preferred and isinstance(err, sd.PortAudioError):
+            args = err.args
+            invalid = len(args) > 1 and args[1] == sd._lib.paInvalidDevice
+            if len(args) > 2 and isinstance(args[2], tuple) and len(args[2]) >= 2:
+                host, code = args[2][:2]
+                try:
+                    invalid = invalid or (code == 2 and sd.query_hostapis(host)["name"] == "MME")
+                except Exception:
+                    pass
+            self._preferred_needs_refresh |= invalid
+        try:
+            log_event(
+                main_logger,
+                event,
+                "WARNING",
+                preferred=str(self._preferred),
+                attempted=str(device),
+                error_type=type(err).__name__,
+                reason=str(err),
+            )
+        except Exception:
+            pass
+
+    def reclaim_resolved(self, device: Any) -> None:
+        """Adopt a newly available index while retaining the working fallback."""
+        if device is None:
+            return  # an inconclusive probe must not disturb usable output
+        if device != self._preferred:
+            self._preferred = device
+            self._preferred_retry_at = 0.0
+            self._preferred_retry_delay = 5.0
+            self._preferred_needs_refresh = False
+            self.on_fallback = True
+        self.reclaim_preferred()
+
     def reclaim_preferred(self) -> None:
         """Go back to the chosen device, which has just reappeared.
 
-        Only meaningful while on the fallback. Dropping the stream sends the
-        next write through ``_try_open``, whose candidate list still starts with
-        the preferred device. Without this, a Bluetooth device that reconnected
-        mid-session was never taken back: nothing FAILS while the fallback plays
-        happily, so no reopen was ever triggered.
-
-        Called between chunks, so no audio is in flight and nothing is lost.
+        Keep the working fallback until the preferred stream starts. Failed
+        attempts back off even when Windows continues to report it connected.
+        Called between chunks, so no write is in flight.
         """
         if not self.on_fallback or self._preferred is None:
             return
-        print(f"[era] [PLAY] chosen device {self._preferred!r} is back; reclaiming")
+        if self._clock() < self._preferred_retry_at:
+            return
+        candidate = None
+        try:
+            candidate = self._opener(self._preferred)
+            candidate.start()
+        except Exception as err:
+            self._close_quietly(candidate)
+            self._log_fault("audio.output.reclaim_failed", err, self._preferred)
+            self._preferred_retry_at = self._clock() + self._preferred_retry_delay
+            self._preferred_retry_delay = min(60.0, self._preferred_retry_delay * 2)
+            return
         self._drop_stream()
-        self._next_retry_at = 0.0
-        self._retry_delay = DEGRADED_RETRY_BASE_S
+        self._stream = candidate
+        self.on_fallback = False
+        self._preferred_needs_refresh = False
+        self._preferred_retry_at = 0.0
+        self._preferred_retry_delay = 5.0
+        self._report_open(self._preferred)
+        self._log_lifecycle("audio.output.reclaimed", self._preferred)
 
     def set_preferred_device(self, device: Any) -> None:
         """Re-route an OPEN stream to a different device, now.
@@ -172,9 +262,13 @@ class ResilientOutputStream:
         no-op when the device is unchanged, so polling this is free.
         """
         if device == self._preferred and not self.on_fallback:
+            self._report_open(device)
             return
         print(f"[era] [PLAY] re-routing voice to device {device!r}")
         self._preferred = device
+        self._preferred_needs_refresh = False
+        self._preferred_retry_at = 0.0
+        self._preferred_retry_delay = 5.0
         self._drop_stream()
         # A pending backoff belongs to the OLD device; a deliberate re-route
         # must not have to wait it out.
@@ -193,8 +287,16 @@ class ResilientOutputStream:
                 pass
 
     def _drop_stream(self) -> None:
+        if self._stream is not None:
+            self._log_lifecycle("audio.output.closed", self._preferred)
         self._close_quietly(self._stream)
         self._stream = None
+        self._buffered_until = 0.0
+        if self._on_close is not None:
+            try:
+                self._on_close()
+            except Exception as err:
+                print(f"[era] [PLAY] route invalidation failed: {err}")
 
     def open(self) -> bool:
         """Open at session start. On failure, degrade rather than raise."""
@@ -213,6 +315,12 @@ class ResilientOutputStream:
             self._degraded = True
             self._retry_delay = DEGRADED_RETRY_BASE_S
             print(f"[era] [PLAY] speaker unavailable ({reason}); voice muted until it returns.")
+            from app.hud.events import hud
+
+            hud.error(
+                "Audio output is unavailable. Replies remain visible in the HUD; retrying the speaker automatically.",
+                where="audio",
+            )
             try:
                 log_event(main_logger, "audio.output.lost", "WARNING", reason=reason[:200])
             except Exception:
@@ -240,10 +348,30 @@ class ResilientOutputStream:
 
     async def _write_once(self, chunk: bytes) -> None:
         await asyncio.to_thread(self._stream.write, chunk)
+        # A blocking write accepts PCM into the driver's buffer; it does not
+        # establish that the last sample has already reached the listener.
+        # Keep the turn alive only for the reported latency, without inserting
+        # a fixed sleep into the audio/command path.
+        try:
+            latency = float(getattr(self._stream, "latency", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            latency = 0.0
+        if math.isfinite(latency) and latency > 0:
+            self._buffered_until = self._clock() + min(latency, 2.0)
 
     async def write(self, chunk: bytes) -> bool:
         """Play `chunk`. Returns True if it reached the speaker. Never raises
         for device faults; cancellation still propagates."""
+        if not isinstance(chunk, (bytes, bytearray, memoryview)) or not chunk or len(chunk) % 2:
+            self.invalid_chunks += 1
+            self.dropped_chunks += 1
+            if self.invalid_chunks == 1:
+                self._log_fault(
+                    "audio.output.invalid_frame",
+                    ValueError("Expected complete mono int16 PCM"),
+                    self._preferred,
+                )
+            return False
         if self._stream is None:
             # Degraded: only probe the device when the backoff window has passed,
             # so a missing speaker costs nothing on the hot path.
@@ -270,6 +398,7 @@ class ResilientOutputStream:
             if not self._lost_logged:
                 self._lost_logged = True
                 print(f"[era] [PLAY] output device lost ({err}); reopening.")
+                self._log_fault("audio.output.write_failed", err, self._preferred)
             self._drop_stream()
             last_err: BaseException = err
 

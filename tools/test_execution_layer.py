@@ -107,3 +107,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+    raise SystemExit(1 if failed else 0)

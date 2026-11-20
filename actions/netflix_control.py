@@ -2618,9 +2618,9 @@ def _open_netflix_native_search(page, sess, query: str) -> bool:
     launcher_js = """
     (() => {
         var el = document.querySelector('[data-uia="search-box-launcher"]')
-            || document.querySelector('button[aria-label*="Search"]')
-            || document.querySelector('[aria-label*="Search"][role="button"]')
-            || document.querySelector('input[aria-label*="Search"]');
+            || document.querySelector('button[aria-label*="search" i], button[aria-label*="rechercher" i]')
+            || document.querySelector('[aria-label*="search" i][role="button"], [aria-label*="rechercher" i][role="button"]')
+            || document.querySelector('input[aria-label*="search" i], input[aria-label*="titres" i]');
         if (el) { el.click(); return 'clicked'; }
         return 'not_found';
     })()
@@ -2638,12 +2638,11 @@ def _open_netflix_native_search(page, sess, query: str) -> bool:
     input_js = """
     (() => {
         var input = document.querySelector('input[data-uia*="search"]')
-            || document.querySelector('input[aria-label*="Search"]')
-            || document.querySelector('input[placeholder*="Search"]')
+            || document.querySelector('input[aria-label*="search" i], input[aria-label*="titres" i]')
+            || document.querySelector('input[placeholder*="search" i], input[placeholder*="titres" i]')
             || document.querySelector('input[type="search"]');
         if (input) {
             input.focus();
-            input.value = '';
             return 'found';
         }
         return 'not_found';
@@ -2658,16 +2657,13 @@ def _open_netflix_native_search(page, sess, query: str) -> bool:
 
     time.sleep(0.2)
 
-    # Type the query character by character via keyboard
+    # Clear through real keyboard events so React's controlled input sees the
+    # replacement. Assigning input.value directly left the previous query live.
     try:
-        for ch in query:
-            sess.run(page.keyboard.type(ch, delay=30))
-            time.sleep(0.02)
+        sess.run(page.keyboard.press("ControlOrMeta+A"))
+        sess.run(page.keyboard.type(query, delay=30))
     except Exception:
-        try:
-            sess.run(page.keyboard.type(query, delay=30))
-        except Exception:
-            pass
+        return False
 
     return True
 
@@ -4417,6 +4413,9 @@ def _handle_fullscreen_real_click(sess, page) -> str:
             except Exception:
                 pass
             print("[Netflix] Exited fullscreen via CDP window state")
+            after, _ = _window_state(cdp)
+            if after != "fullscreen":
+                return _browser_window_proof("Netflix left fullscreen.", after)
             return "Exited fullscreen."
 
         # Some window managers reject a direct →fullscreen unless the window
@@ -4447,7 +4446,7 @@ def _handle_fullscreen_real_click(sess, page) -> str:
         confirmed = sess.run(cdp.send("Browser.getWindowBounds", {"windowId": window_id}))
         if (confirmed.get("bounds") or {}).get("windowState") == "fullscreen":
             print("[Netflix] Fullscreen via CDP window state")
-            return "Fullscreen toggled."
+            return _browser_window_proof("Netflix is fullscreen.", "fullscreen")
         print("[Netflix] CDP window fullscreen not confirmed — trying F11 fallback")
     except Exception as exc:
         print(f"[Netflix] CDP window fullscreen failed: {exc}")
@@ -4464,6 +4463,27 @@ def _handle_fullscreen_real_click(sess, page) -> str:
         return "Fullscreen toggled."
     except Exception as exc:
         return f"Fullscreen error: {exc}"
+
+
+def _browser_window_proof(message: str, window_state: str, url: str = ""):
+    """PF-030: a change the browser itself reported, as a verified result.
+
+    Fullscreen: CDP `Browser.getWindowBounds`. Open: the tab's own address read
+    after navigation. The blind F11 fallback keeps returning plain text.
+    """
+    from core.tool_result import ToolResult
+
+    data = {"window_state": window_state, **({"url": url} if url else {})}
+    result = ToolResult.ok(message, data=data, tool_name="netflix_control")
+    result.verified = True
+    result.verifier_name = "browser_window"
+    result.verification_status = "VERIFIED"
+    result.verification_message = (
+        f"The Netflix tab's address read back: {url}."
+        if url
+        else f"Browser.getWindowBounds read back windowState={window_state}."
+    )
+    return result
 
 
 def _handle_cdp_action(action: str, sess, page, player=None) -> str:
@@ -4617,6 +4637,20 @@ def _handle_player_action(action: str, params: dict, sess, page, state: str) -> 
 
     if action in ("next_episode", "skip_credits"):
         result = _finish_next_episode(result, sess, page, start_url)
+        from actions._netflix.player_api import NEXT_EPISODE_OK, resume_after_skip_script
+
+        if result == NEXT_EPISODE_OK:
+            print("[Netflix] playback state: SKIPPING -> RESUMING")
+            try:
+                playing = sess.run(
+                    sess.evaluate_background_media("netflix.com", resume_after_skip_script())
+                )
+            except Exception as exc:
+                print(f"[Netflix] post-skip playback validation failed: {exc}")
+                playing = False
+            if playing is not True:
+                return "The next episode opened, but Netflix did not confirm playback. Please press Play."
+            print("[Netflix] playback state: RESUMING -> PLAYING")
 
     missed = any(
         token in result.lower()
@@ -4736,8 +4770,19 @@ def _handle_open(sess, page, player=None, params: dict | None = None) -> str:
     outcome = _clear_profile_gate(sess, page, wait=True, profile=name, ordinal=ordinal)
 
     if outcome["status"] == "selected":
-        return f"Netflix is open on the {outcome['profile']} profile."
-    return _profile_outcome_text(outcome, prefix="Netflix is open. ") or "Netflix is open."
+        message = f"Netflix is open on the {outcome['profile']} profile."
+    else:
+        message = _profile_outcome_text(outcome, prefix="Netflix is open. ") or "Netflix is open."
+    # PF-030: a visible browser does not prove Netflix loaded; the tab's own
+    # address, read AFTER navigation, does. An unsettled profile stays unconfirmed.
+    if outcome["status"] in ("selected", "no-gate") and page is not None:
+        try:
+            url = str(sess.run(page.evaluate("window.location.href")) or "")
+        except Exception:
+            url = ""
+        if "netflix.com" in url.lower():
+            return _browser_window_proof(message, "netflix_page", url=url)
+    return message
 
 
 def _handle_scroll(params: dict) -> str:
@@ -4782,7 +4827,15 @@ def _handle_status(state_info: dict) -> str:
     signals = state_info.get("signals", {})
     title = signals.get("page_title", "")
     signals.get("current_url", "")
-    parts = [f"Netflix state: {state}"]
+    # A plain sentence first, telemetry after (PF-027). Live 2026-11-17 "is anything
+    # playing on Netflix?" was spoken as "Netflix state: browse | title: Netflix".
+    sentence = {
+        _STATE_PLAYER: "Netflix has a video open in the player.",
+        _STATE_BROWSE: "Nothing is playing on Netflix; it is on the browse page.",
+        _STATE_SEARCH_RESULTS: "Nothing is playing on Netflix; it is showing search results.",
+        _STATE_DETAILS: "Nothing is playing on Netflix; a title's details page is open.",
+    }.get(state, "I can't tell what Netflix is showing right now.")
+    parts = [f"{sentence} Netflix state: {state}"]
     if signals["has_video"]:
         parts.append("video present")
     if signals["url_contains_watch"]:

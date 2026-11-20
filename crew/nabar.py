@@ -142,6 +142,56 @@ class NabarReport:
 
 
 # ── parsing what the model said ─────────────────────────────────────────────
+_BLOCK = re.compile(
+    r"^=====BEGIN ([A-Za-z0-9_-]{1,24})=====[ \t]*\r?\n(.*?)\r?\n=====END \1=====[ \t]*$",
+    re.MULTILINE | re.DOTALL,
+)
+_PLACEHOLDER = re.compile(r"@([A-Za-z0-9_-]{1,24})")
+
+
+def parse_crew_reply(text: str) -> dict | None:
+    """PF-053: the reply's JSON object, with "@name" strings filled from text blocks.
+
+    Code inside a JSON string must be escaped, and Hermes's model over-escapes it
+    (`\\\\"` for `\\"`, `\\\\n` for a newline), so every source.stage call it wrote was
+    unparseable (live 2026-11-19). A block written AFTER the JSON needs no escaping:
+
+        {"call": {..., "edits": [{"old": "@old1", "new": "@new1"}]}}
+        =====BEGIN new1=====
+        print(f"[TTS] ... {exc}")
+        =====END new1=====
+
+    A string that is exactly "@name" is replaced by that block's text. A placeholder
+    with no block makes the whole reply unusable (None), so the bot is asked again
+    rather than staging a literal "@name".
+    """
+    obj = parse_json_object(text)
+    if obj is None or not isinstance(text, str):
+        return obj
+    blocks = {m.group(1): m.group(2) for m in _BLOCK.finditer(text)}
+    missing: list[str] = []
+
+    def fill(value):
+        if isinstance(value, str):
+            match = _PLACEHOLDER.fullmatch(value)
+            if not match:
+                return value
+            if match.group(1) not in blocks:
+                missing.append(match.group(1))
+                return value
+            return blocks[match.group(1)]
+        if isinstance(value, list):
+            return [fill(v) for v in value]
+        if isinstance(value, dict):
+            return {k: fill(v) for k, v in value.items()}
+        return value
+
+    filled = fill(obj)
+    if missing and blocks:
+        return None  # a referenced block is absent: unusable, ask again
+    return filled if not missing else obj
+
+
 def parse_json_object(text: str) -> dict | None:
     """Pull one JSON object out of model text (fenced or bare). None if there isn't one."""
     if not isinstance(text, str):
@@ -153,7 +203,13 @@ def parse_json_object(text: str) -> dict | None:
     try:
         obj = json.loads(cleaned[start : end + 1])
     except ValueError:
-        return None
+        # PF-053: the first COMPLETE object, ignoring what trails it. Live 2026-11-19
+        # Hermes's model sent valid calls with a stray "]}" after them
+        # ('{"call": {...}}]}'); first-to-last-brace parsing threw each one away.
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(cleaned, start)
+        except ValueError:
+            return None
     return obj if isinstance(obj, dict) else None
 
 

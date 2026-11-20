@@ -47,6 +47,7 @@ import ctypes
 import subprocess
 import time
 
+from core.cancel_registry import CancelledTask, raise_if_cancelled, sleep_cancellable
 from core.utils import is_windows, log
 from core.win_subprocess import NO_WINDOW
 
@@ -57,6 +58,13 @@ except ImportError:  # pragma: no cover - non-Windows
 
 _MSI_CENTER_AUMID = r"shell:appsFolder\9426MICRO-STARINTERNATION.MSICenter_kzh8wxbdkxb8p!App"
 _PC_MANAGER_URI = "ms-pcmanager:"
+
+
+def _cancel_wait(seconds: float) -> None:
+    """Wait without allowing a cancelled worker to proceed to its next action."""
+    sleep_cancellable(seconds)
+    raise_if_cancelled()
+
 
 # canonical scenario -> (automation_id regex tokens, localized name tokens)
 _SCENARIOS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -428,13 +436,14 @@ def _await_scenario(canonical: str, before: tuple[int, int] | None, timeout: flo
     known = canonical == "ai_engine" or _SCENARIO_MODE_CODES.get(canonical) is not None
     deadline = time.time() + timeout
     while time.time() < deadline:
+        raise_if_cancelled()
         state = _scenario_state()
         if known:
             if _state_matches(canonical, state):
                 return True
         elif state is not None and state != before:
             return True
-        time.sleep(0.5)
+        _cancel_wait(0.5)
     return False
 
 
@@ -525,6 +534,7 @@ def _click_for_real(target) -> str | None:
     None if the click went out. Nothing cheaper works: select(),
     DoDefaultAction() and posted mouse messages all flip the checkmark and
     leave MSI Center's apply handler unrun."""
+    raise_if_cancelled()
     try:
         rect = target.rectangle()
     except Exception as e:
@@ -542,10 +552,15 @@ def _click_for_real(target) -> str | None:
             target.set_focus()
             # Let the foreground transition finish: a click that lands mid-switch
             # only activates the window and is swallowed, costing us a retry.
-            time.sleep(0.4)
+            _cancel_wait(0.4)
+        except CancelledTask:
+            raise
         except Exception:
             pass
+        raise_if_cancelled()
         target.click_input()
+    except CancelledTask:
+        raise
     except Exception as e:
         return f"the click failed ({e})"
     finally:
@@ -589,8 +604,10 @@ def _find_windows(
 
     deadline = time.time() + timeout
     while True:
+        raise_if_cancelled()
         matches = []
         for win in Desktop(backend="uia").windows():
+            raise_if_cancelled()
             try:
                 if title_fragment not in (win.window_text() or ""):
                     continue
@@ -603,7 +620,7 @@ def _find_windows(
             matches.append(win)
         if matches or time.time() >= deadline:
             return matches
-        time.sleep(1.0)
+        sleep_cancellable(1.0)
 
 
 def _normalize_scenario(value) -> str | None:
@@ -697,11 +714,13 @@ def _wake_window(win) -> None:
     content in the UIA tree. A minimized MSI Center window gets suspended after
     a while and then exposes only its frame — restoring/showing it resumes the
     app so the User Scenario radios re-enter the tree."""
+    raise_if_cancelled()
     try:
         if win.is_minimized():
             win.restore()
     except Exception:
         pass
+    raise_if_cancelled()
     try:
         win.set_focus()  # nudges a suspended UWP/WPF frame to render its content
     except Exception:
@@ -743,6 +762,7 @@ def _restore_window(win, should_minimize: bool) -> None:
 def msi_set_scenario(scenario) -> str:
     """Switch the MSI Center user scenario (Extreme Performance / Balanced /
     Silent / Super Battery / AI Engine) via its sidebar radio group."""
+    raise_if_cancelled()
     if not is_windows():
         return "MSI Center control is Windows-only."
 
@@ -777,6 +797,7 @@ def msi_set_scenario(scenario) -> str:
     wins = _find_windows("MSI Center", _MSI_PROCS, timeout=3.0)
     launched_here = False
     if not wins:
+        raise_if_cancelled()
         try:
             subprocess.Popen(["explorer.exe", _MSI_CENTER_AUMID], creationflags=NO_WINDOW)
         except Exception as e:
@@ -796,7 +817,9 @@ def msi_set_scenario(scenario) -> str:
     last_inventory: dict = {}
     deadline = time.time() + _SCENARIO_SCAN_TIMEOUT
     while time.time() < deadline and target is None:
+        raise_if_cancelled()
         for candidate in wins:
+            raise_if_cancelled()
             try:
                 was_min = candidate.is_minimized()
             except Exception:
@@ -822,7 +845,7 @@ def msi_set_scenario(scenario) -> str:
                 pre_minimized = was_min
                 break
         if target is None:
-            time.sleep(2.0)
+            _cancel_wait(2.0)
 
     if target is None:
         _log_radio_inventory(wins)
@@ -857,6 +880,7 @@ def msi_set_scenario(scenario) -> str:
     error = None
     applied = False
     for attempt in attempts:
+        raise_if_cancelled()
         fresh = _reacquire_control(win, canonical)
         # First attempt: the control was found moments ago, so a failed re-scan
         # (a transient UIA error) falls back to it. After a click that did not
@@ -874,7 +898,7 @@ def msi_set_scenario(scenario) -> str:
         error = _click_for_real(target)
         if error:
             log("SystemPerformance", f"UI click attempt {attempt} failed: {error}")
-            time.sleep(1.0)
+            _cancel_wait(1.0)
             continue
         if before is None:
             break  # nothing to verify against; fall through to the UI check
@@ -887,7 +911,7 @@ def msi_set_scenario(scenario) -> str:
         )
         # The app may have re-rendered or the focus may have landed elsewhere;
         # the next iteration re-scans before trying again.
-        time.sleep(1.0)
+        _cancel_wait(1.0)
 
     if applied:
         result = f"MSI scenario switched to '{label}', sir."
@@ -897,7 +921,7 @@ def msi_set_scenario(scenario) -> str:
     elif before is None:
         # We clicked for real but can't read MSI's state on this machine, so
         # we fall back to the UI and say only what we actually know.
-        time.sleep(1.5)  # let the radio settle before reading it back
+        _cancel_wait(1.5)  # let the radio settle before reading it back
         try:
             confirmed = target.is_selected()
         except Exception:
@@ -942,9 +966,12 @@ def _reacquire_control(win, canonical: str):
     the full-tree fallback — before each attempt is what makes the switch
     reliable instead of a one-shot that dies on the first re-render.
     """
+    raise_if_cancelled()
     try:
         _wake_window(win)
         buttons = win.descendants(control_type="RadioButton")
+    except CancelledTask:
+        raise
     except Exception:
         return None
     inventory = _scenario_inventory(buttons) or _scenario_inventory_any(win)
@@ -954,6 +981,7 @@ def _reacquire_control(win, canonical: str):
 def _wake_webview_a11y(main_hwnd: int) -> None:
     """Chromium keeps its accessibility tree off until a UIA client pokes the
     render widget with WM_GETOBJECT; without this the Boost button is invisible."""
+    raise_if_cancelled()
     import win32gui
 
     WM_GETOBJECT = 0x003D
@@ -970,6 +998,7 @@ def _wake_webview_a11y(main_hwnd: int) -> None:
     except Exception:
         pass
     for hwnd in targets:
+        raise_if_cancelled()
         try:
             ctypes.windll.user32.SendMessageTimeoutW(
                 hwnd,
@@ -989,11 +1018,13 @@ def pc_boost() -> str:
     if not is_windows():
         return "PC Manager control is Windows-only."
 
+    raise_if_cancelled()
     _co_init()
 
     wins = _find_windows("PC Manager", _PCM_PROCS, timeout=3.0)
     launched_here = False
     if not wins:
+        raise_if_cancelled()
         try:
             subprocess.Popen(["cmd", "/c", "start", "", _PC_MANAGER_URI], creationflags=NO_WINDOW)
         except Exception as e:
@@ -1007,31 +1038,38 @@ def pc_boost() -> str:
     boost_btn = None
     deadline = time.time() + 20.0
     while time.time() < deadline and boost_btn is None:
+        raise_if_cancelled()
         try:
             _wake_webview_a11y(win.handle)
             for btn in win.descendants(control_type="Button"):
+                raise_if_cancelled()
                 name = (btn.window_text() or "").strip().lower()
                 if name in ("boost", "booster") or name.startswith("boost "):
                     boost_btn = btn
                     break
+        except CancelledTask:
+            raise
         except Exception:
             pass
         if boost_btn is None:
-            time.sleep(2.0)
+            _cancel_wait(2.0)
 
     if boost_btn is None:
         return "PC Manager is open but I could not find the Boost button."
 
+    raise_if_cancelled()
     try:
         boost_btn.invoke()
     except Exception:
+        raise_if_cancelled()
         try:
             boost_btn.click_input()
         except Exception as e:
             return f"Failed to press Boost: {e}"
 
     if launched_here:
-        time.sleep(3.0)  # let the boost animation start before hiding the window
+        sleep_cancellable(3.0)  # let the animation start before hiding the window
+        raise_if_cancelled()
         try:
             win.minimize()
         except Exception:
@@ -1048,6 +1086,7 @@ def system_performance(
     player=None,
     session_memory=None,
 ) -> str:
+    raise_if_cancelled()
     params = parameters or {}
     action = str(params.get("action", "")).strip().lower().replace("-", "_").replace(" ", "_")
     value = params.get("value") or params.get("scenario") or params.get("mode")

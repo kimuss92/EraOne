@@ -154,13 +154,42 @@ def _fail(status: int, body: Any) -> LlmError:
     return LlmError(kind, f"OmniRoute HTTP {status} {str(detail)[:160]}".strip(), provider=NAME)
 
 
+HEALTH_COMPONENT = "gateway.omniroute"
+# LlmError.kind -> fault kind for the Era Fabric health registry.
+_FAULT_KIND = {
+    "timeout": "Timeout",
+    "transient": "Unavailable",
+    "rate_limit": "Exhausted",
+    "auth": "Unavailable",
+    "invalid_response": "BadOutput",
+}
+
+
+def _health():
+    try:
+        from core.fabric import health
+
+        return health
+    except Exception:  # noqa: BLE001 -- the fabric is optional
+        return None
+
+
 def try_first(request: LlmRequest) -> LlmResponse | None:
     """The gateway's answer, or None so the caller falls back (logged, never silent)."""
     if not enabled():
         return None
+    health = _health()
+    if health is not None and not health.allow(HEALTH_COMPONENT):
+        log_event(omniroute_logger, "llm.omniroute.skipped", "INFO", alias=request.alias)
+        return None  # breaker OPEN: straight to the subscription accounts, no timeout paid
     try:
-        return generate(request)
+        response = generate(request)
+        if health is not None:
+            health.note(HEALTH_COMPONENT)
+        return response
     except LlmError as exc:
+        if health is not None and exc.kind != "unsupported":
+            health.note(HEALTH_COMPONENT, _FAULT_KIND.get(exc.kind, "Unavailable"), exc.message)
         log_event(
             omniroute_logger,
             "llm.omniroute.fallback",

@@ -1,0 +1,92 @@
+
+[End-to-end] Running doctor via subprocess...
+  PASS: doctor exits with code 0 or 1
+  PASS: doctor produces stdout
+  PASS: doctor has no stderr (no crash)
+
+[Status validation] Checking status values...
+  PASS: status 'OK' is valid for 'Python version'
+  PASS: status 'OK' is valid for 'Required directories/files'
+  PASS: status 'OK' is valid for 'Core module imports'
+  PASS: status 'OK' is valid for 'API key config'
+  PASS: status 'OK' is valid for 'Voice verification readiness'
+  PASS: status 'OK' is valid for 'Cloudinary media host config'
+  PASS: status 'OK' is valid for 'Tool registry consistency'
+  PASS: status 'OK' is valid for 'LLM alias registry'
+  PASS: status 'OK' is valid for 'LLM provider reachability'
+  PASS: status 'OK' is valid for 'Existing test files'
+  PASS: status 'OK' is valid for 'Action module imports'
+  PASS: status 'OK' is valid for 'memory/long_term.json'
+  PASS: status 'OK' is valid for 'Memory backups'
+  PASS: status 'OK' is valid for 'Logs folder'
+  PASS: status 'OK' is valid for 'Root cleanliness'
+  PASS: status 'OK' is valid for 'memory/feedback_memory.jsonl'
+  PASS: status 'OK' is valid for 'Obsidian vault (CM context)'
+  PASS: status 'OK' is valid for 'Vault consistency (PARA/brand filing)'
+  PASS: status 'OK' is valid for 'Era day log (01 - Daily Notes)'
+  PASS: status 'OK' is valid for 'CM learned feedback'
+  PASS: status 'OK' is valid for 'logs/memory_audit.jsonl'
+  PASS: status 'OK' is valid for 'Optional packages'
+  PASS: status 'OK' is valid for 'Vosk model'
+  PASS: subprocess output has PASS/WARN/FAIL markers
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+
+[Secrets check] Verifying no API key leaked in output...
+  PASS: no Gemini API key string in output
+  PASS: no 'gemini_api_key:' leaked pattern
+  PASS: no 'api_key:' leaked pattern
+  PASS: no '"api_key"' leaked pattern
+
+[Config check] Testing invalid JSON detection...
+  PASS: invalid JSON returns ERROR
+  PASS: detail mentions invalid JSON
+
+[Optional packages] Checking soft failure...
+  PASS: optional packages returns OK or WARN (not ERROR)
+
+[Memory check] Verifying memory content not leaked...
+
+[Registry check] Testing registry consistency...
+  PASS: duplicate detection returns ERROR
+  PASS: detail mentions duplicate name
+  PASS: production registry has no ERROR issues
+  PASS: detail mentions issues
+
+[Summary check] Verifying READY/NOT READY...
+  PASS: output contains READY or NOT READY
+
+[Individual checks] Testing each function...
+  PASS: Python version check passes
+  PASS: core imports check passes
+  PASS: directories check passes
+  PASS: action modules check returns OK or WARN
+  PASS: long_term valid shows OK
+  PASS: feedback_memory check returns OK or WARN
+  PASS: vosk model check returns OK or WARN
+  PASS: test files check returns OK or WARN or ERROR
+
+==================================================
+Results: 70 passed, 0 failed
+All Era One doctor tests PASSED.

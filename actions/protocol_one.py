@@ -27,6 +27,7 @@ One maintenance cycle:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -49,7 +50,13 @@ BACKUP_ROOT = REPO_ROOT / "runtime" / "protocol_one" / "backups"
 # later must not apply fixes whose lines have since drifted — see the stale-lines
 # rule; every staged fix is also re-verified fresh before it is applied).
 PENDING_FIXES_PATH = REPO_ROOT / "runtime" / "protocol_one" / "pending_fixes.json"
+# What the previous cycle found and measured, so the next report can say what is
+# NEW, what is RESOLVED, and whether the test count moved — instead of leaving
+# the reader to diff two long files by eye.
+LAST_CYCLE_PATH = REPO_ROOT / "runtime" / "protocol_one" / "last_cycle.json"
 _PENDING_TTL_S = 3600  # one hour
+_REPORT_NAME = re.compile(r"^protocol_one_(\d{8})_(\d{6})\.md$")
+_MAX_LISTED = 60  # per report section; anything beyond is COUNTED, never silently dropped
 _MAX_MODEL_FIXES = 3
 _MAX_STAGED_FIXES = 12  # cap what one "yes" can apply in a single confirm pass
 _DEEP_MODEL_MAX_BYTES = 80_000  # larger files exceed a safe CLI output length
@@ -113,16 +120,18 @@ def diagnose(run_tests: bool = True, player=None) -> tuple[list[Finding], dict]:
     for line in doctor:
         sev = "high" if "[FAIL]" in line or "[ERROR]" in line else "low"
         findings.append(Finding(f"doctor:{line[:80]}", sev, "health", line[:200]))
+    meta["logs_as_of"] = datetime.now().isoformat(timespec="seconds")
     logs, meta["suppressed"] = sd.phase_logs()
     for item in logs:
         engine = item["sig"].startswith(("engine.", "memory."))
+        seen = f" (last seen {item['last_seen']})" if item.get("last_seen") else ""
         findings.append(
             Finding(
                 f"log:{item['sig']}",
                 "high" if engine and item["count"] >= 3 else "medium",
                 "runtime_error",
                 f"{item['count']}x {item['sig']}",
-                item["evidence"],
+                f"{item['evidence']}{seen}",
                 item["location"],
                 "review",
             )
@@ -135,6 +144,7 @@ def diagnose(run_tests: bool = True, player=None) -> tuple[list[Finding], dict]:
     if run_tests:
         log("PROTOCOL1", "diagnosis: full test suite (low priority)", player)
         failures, meta["tests"] = checks.check_tests()
+        meta["test_stats"] = checks.last_test_stats()
         findings += failures
 
     # Dedupe by signature; worst severity first.
@@ -170,6 +180,13 @@ def _backup(target: Path, stamp: str) -> Path:
     return dest
 
 
+def _annotate(findings: list[Finding], rel: str, note: str) -> None:
+    """Attach a reason to every autofix finding of one file, shown in the report."""
+    for f in findings:
+        if f.fix == "autofix" and _file_of(f) == rel and note not in f.evidence:
+            f.evidence = f"{f.evidence} ({note})".strip()
+
+
 def apply_autofixes(findings: list[Finding], stamp: str) -> list[str]:
     from actions.self_improve import _verify
 
@@ -181,6 +198,7 @@ def apply_autofixes(findings: list[Finding], stamp: str) -> list[str]:
     for rel in files:
         target, _why = _eligible(rel)
         if target is None:
+            _annotate(findings, rel, f"autofix skipped: {_why or 'not eligible'}")
             continue
         backup = _backup(target, stamp)
         subprocess.run(
@@ -193,8 +211,13 @@ def apply_autofixes(findings: list[Finding], stamp: str) -> list[str]:
         failures, _ = _verify(target)
         # _verify runs the FULL default rule set; pre-existing lint elsewhere in the
         # file is not our regression, so only a syntax or test failure rolls back.
-        if any(x.startswith(("syntax", "tests")) for x in failures):
+        blocking = [x for x in failures if x.startswith(("syntax", "tests"))]
+        if blocking:
             shutil.copy2(backup, target)
+            # Say so. A rollback used to be invisible: the report read "None
+            # applied" and the finding stayed open with no hint that a fix had
+            # been tried and what stopped it (here: the file's own tests were red).
+            _annotate(findings, rel, f"autofix tried and rolled back: {blocking[0][:200]}")
             continue
         # Claim only what a re-lint proves. Ruff refuses some "safe" rules as
         # unsafe in context (trailing whitespace inside a JS string literal), and
@@ -466,6 +489,17 @@ def _is_error_finding(f: Finding) -> bool:
     return hive.severity_rank(f.severity) <= hive.severity_rank("high")
 
 
+def _test_scope_line(meta: dict) -> str:
+    s = meta.get("test_stats") or {}
+    if not s:
+        return "- Test scope: not measured this cycle (tests skipped or pytest produced no XML)."
+    return (
+        f"- Test scope: pytest's own testpaths (`tools/` + repo root): {s.get('tests', 0)} run — "
+        f"{s.get('passed', 0)} passed, {s.get('failures', 0)} failed, {s.get('errors', 0)} "
+        f"errors, {s.get('skipped', 0)} skipped."
+    )
+
+
 def _state_line(
     applied_n: int, staged: list[Finding], errors: list[Finding], risks: list[Finding]
 ) -> str:
@@ -486,7 +520,69 @@ def _state_line(
 def _finding_line(f: Finding) -> str:
     where = f" `{f.location}`" if f.location else ""
     ev = f" — {f.evidence}" if f.evidence and f.evidence not in f.title else ""
-    return f"- **{f.severity}** [{f.category}]{where} {f.title}{ev}"
+    many = f" (x{f.count}: lines {f.location.split(':')[-1]}, {f.also_at})" if f.count > 1 else ""
+    return f"- **{f.severity}** [{f.category}]{where} {f.title}{many}{ev}"
+
+
+def _listed(findings: list[Finding]) -> list[str]:
+    """The lines of one report section. Capped, but the cap is stated: a report
+    that silently drops its 61st finding is not a report you can trust."""
+    lines = [_finding_line(f) for f in findings[:_MAX_LISTED]]
+    if len(findings) > _MAX_LISTED:
+        lines.append(f"- … and {len(findings) - _MAX_LISTED} more not listed here.")
+    return lines
+
+
+def _load_last_cycle() -> dict:
+    try:
+        data = json.loads(LAST_CYCLE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_last_cycle(stamp: str, findings: list[Finding], meta: dict) -> None:
+    """Best-effort: losing this only costs the next report its comparison."""
+    try:
+        LAST_CYCLE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LAST_CYCLE_PATH.write_text(
+            json.dumps(
+                {
+                    "stamp": stamp,
+                    "open": {f.signature: f.title for f in findings if not f.accepted},
+                    "tests": meta.get("test_stats") or {},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        log("PROTOCOL1", f"could not save last-cycle snapshot: {e}")
+
+
+def _changes_section(open_items: list[Finding], meta: dict) -> list[str]:
+    """New vs resolved since the previous cycle, and whether the test count moved."""
+    prev = meta.get("previous") or {}
+    if not prev.get("stamp"):
+        return ["- First recorded cycle: nothing earlier to compare against."]
+    before = prev.get("open") or {}
+    now = {f.signature: f for f in open_items}
+    new = [f for sig, f in now.items() if sig not in before]
+    gone = [title for sig, title in before.items() if sig not in now]
+    lines = [f"- Compared with the cycle of {prev['stamp']}:"]
+    lines.append(f"  - NEW since then ({len(new)}):" if new else "  - New since then: none.")
+    lines += [f"    - {f.title} ({f.location})" for f in new[:15]]
+    lines.append(f"  - RESOLVED since then ({len(gone)}):" if gone else "  - Resolved: none.")
+    lines += [f"    - {t}" for t in gone[:15]]
+    old_t, new_t = (
+        (prev.get("tests") or {}).get("tests"),
+        (meta.get("test_stats") or {}).get("tests"),
+    )
+    if old_t and new_t:
+        delta = new_t - old_t
+        flag = "  ⚠ FEWER tests than last cycle — confirm that was intended." if delta < 0 else ""
+        lines.append(f"  - Tests run: {new_t} (previous cycle {old_t}, {delta:+d}).{flag}")
+    return lines
 
 
 def _render(findings, meta, autofixed, model_results, started, staged=()) -> str:
@@ -512,6 +608,10 @@ def _render(findings, meta, autofixed, model_results, started, staged=()) -> str
         _state_line(len(autofixed) + len(fixed), list(staged), errors, risks),
         "",
         f"- Doctor: {meta.get('doctor')}  |  Tests: {meta.get('tests')}",
+        _test_scope_line(meta),
+        f"- Cycle started {started:%Y-%m-%d %H:%M:%S}; the 24 h runtime-log scan ran at "
+        f"{(meta.get('logs_as_of') or 'n/a').replace('T', ' ')}. Events after that moment "
+        "belong to the NEXT cycle, and a repair made after it is not reflected here.",
         f"- Hive insights on the map at launch (spies + Protocol Zero): {meta.get('spy_insights')}",
         f"- Protocol Zero last prompt sync: {meta.get('zero') or 'none recorded'}",
         f"- Duration: {int((datetime.now() - started).total_seconds())}s",
@@ -540,10 +640,13 @@ def _render(findings, meta, autofixed, model_results, started, staged=()) -> str
         lines.append("- None staged.")
 
     lines += ["", "## Detected errors — still open"]
-    lines += [_finding_line(f) for f in errors[:60]] or ["- None."]
+    lines += _listed(errors) or ["- None."]
 
     lines += ["", "## Potential risks — review only (not auto-fixed)"]
-    lines += [_finding_line(f) for f in risks[:60]] or ["- None."]
+    lines += _listed(risks) or ["- None."]
+
+    lines += ["", "## Since the previous cycle"]
+    lines += _changes_section(open_items, meta)
 
     lines += ["", "## Reviewed and accepted risks"]
     lines += [f"- `{f.location}` {f.title} — {f.accepted}" for f in findings if f.accepted] or [
@@ -564,8 +667,10 @@ def launch_protocol_one(parameters: dict | None = None, player=None, speak=None)
     try:
         # A fresh diagnosis supersedes any batch staged by the last cycle.
         clear_pending()
+        previous = _load_last_cycle()
         hive.set_status("protocol_one", "diagnosing", "deep diagnosis in progress")
         findings, meta = diagnose(run_tests=params.get("tests", True) is not False, player=player)
+        meta["previous"] = previous
 
         hive.set_status("protocol_one", "fixing", f"{len(findings)} finding(s) mapped")
         autofixed = apply_autofixes(findings, stamp)
@@ -598,6 +703,18 @@ def launch_protocol_one(parameters: dict | None = None, player=None, speak=None)
         report_path.write_text(
             _render(findings, meta, autofixed, model_results, started, staged), encoding="utf-8"
         )
+        fixed_sigs = {r["finding"].signature for r in model_results if r["verified"]}
+        if meta.get("tests") != "skipped":  # a test-less cycle must not erase the test baseline
+            _save_last_cycle(
+                stamp,
+                [
+                    f
+                    for f in findings
+                    if f.signature not in fixed_sigs
+                    and not (f.fix == "autofix" and _file_of(f) in autofixed)
+                ],
+                meta,
+            )
 
         counts = {s: 0 for s in hive.SEVERITIES}
         for f in findings:
@@ -669,5 +786,172 @@ def _log_to_vault(summary, autofixed, model_results, counts) -> None:
         log("PROTOCOL1", f"vault day-log skipped: {e}")
 
 
+# ── 6. reading the report back ───────────────────────────────────────────────
+# The report is the ground truth of a cycle. Era used to see only hive.briefing(),
+# which drops any detail over 120 characters — so "what did Protocol One find?"
+# could only be answered from memory or a guess. These two functions let her
+# (and anyone) read the real file, any time, with an honest age.
+_SECTIONS = {
+    "applied": "Applied fixes",
+    "staged": "Staged fixes",
+    "errors": "Detected errors",
+    "risks": "Potential risks",
+    "changes": "Since the previous cycle",
+    "accepted": "Reviewed and accepted risks",
+    "noise": "Log noise suppressed",
+}
+
+
+def latest_report_path() -> Path | None:
+    """Newest full-cycle report (a confirm report is a different, shorter file)."""
+    try:
+        names = [p for p in REPORT_DIR.iterdir() if _REPORT_NAME.match(p.name)]
+    except OSError:
+        return None
+    return max(names, key=lambda p: p.name, default=None)
+
+
+def _written_at(path: Path) -> datetime | None:
+    m = _REPORT_NAME.match(path.name)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def _age_text(then: datetime) -> str:
+    secs = max(0, int((datetime.now() - then).total_seconds()))
+    if secs < 90:
+        return "moments"
+    if secs < 5400:
+        return f"{secs // 60} min"
+    if secs < 172800:
+        return f"{secs // 3600} h"
+    return f"{secs // 86400} days"
+
+
+def _changed_since(then: datetime) -> int:
+    """How many source files were edited after the report was written. Every
+    finding stores a file:line; any edit above it moves the line (see the
+    stale-lines rule), so this is the honest 'is this still current?' signal."""
+    cutoff = then.timestamp()
+    count = 0
+    roots = [REPO_ROOT, *[REPO_ROOT / d for d in checks._CHECK_DIRS]]
+    for root in roots:
+        try:
+            files = root.glob("*.py") if root == REPO_ROOT else root.rglob("*.py")
+            for p in files:
+                if "__pycache__" in p.parts:
+                    continue
+                try:
+                    if p.stat().st_mtime > cutoff:
+                        count += 1
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    return count
+
+
+def _section(text: str, title: str) -> str:
+    """One '## <title…>' block of a report, heading included."""
+    out: list[str] = []
+    grabbing = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if grabbing:
+                break
+            grabbing = line[3:].startswith(title)
+        if grabbing:
+            out.append(line)
+    return "\n".join(out)
+
+
+def read_report(section: str | None = None, max_chars: int = 7000) -> str:
+    """The latest cycle report (or one section of it), prefixed with its age and
+    whether the code has changed since it was written."""
+    path = latest_report_path()
+    if path is None:
+        return "No Protocol One report exists yet. The user must say 'Launch Protocol One' first."
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return f"Protocol One's latest report ({path.name}) could not be read: {e}"
+    then = _written_at(path)
+    head = f"Protocol One report {path.name}"
+    if then:
+        changed = _changed_since(then)
+        head += f", written {then:%Y-%m-%d %H:%M} ({_age_text(then)} ago)."
+        head += (
+            f" {changed} source file(s) have been edited since, so file:line locations and some "
+            "findings may already be fixed — re-check before acting on one."
+            if changed
+            else " No source file has changed since, so it is still current."
+        )
+    key = (section or "").strip().lower()
+    if key:
+        title = _SECTIONS.get(key)
+        if title is None:
+            return f"{head}\nUnknown section '{section}'. Available: {', '.join(_SECTIONS)}."
+        body = _section(text, title) or f"(this report has no '{title}' section)"
+    else:
+        body = text
+    if len(body) > max_chars:
+        body = (
+            body[:max_chars]
+            + f"\n… [cut at {max_chars} characters; ask for one section: {', '.join(_SECTIONS)}]"
+        )
+    return f"{head}\n\n{body}"
+
+
+def report_digest() -> str:
+    """One spoken-friendly line about the latest report, for the status briefing."""
+    path = latest_report_path()
+    if path is None:
+        return "Protocol One has not produced a report yet."
+    try:
+        state = next(
+            (
+                line.strip("* ").strip()
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("**State:")
+            ),
+            "",
+        )
+    except OSError:
+        state = ""
+    then = _written_at(path)
+    when = f", written {_age_text(then)} ago" if then else ""
+    return (
+        f"Latest Protocol One report: {path.name}{when}. {state} "
+        "To read it, call protocol_one with action=report (optionally section: "
+        f"{', '.join(_SECTIONS)})."
+    ).replace("  ", " ")
+
+
+def read_recent(limit: int | str | None = None) -> str:
+    """What Era's last tool calls REALLY did: asked vs. ran, and the proof.
+
+    The truth source for "did you actually do it?". Her own recollection is the
+    model's reading of a tool reply; this is the runtime's record (task trace),
+    including calls that were detached and finished after the turn ended.
+    """
+    from core.task_trace import recent_tool_calls, render_recent_calls
+
+    try:
+        count = max(1, min(25, int(limit))) if limit not in (None, "") else 8
+    except (TypeError, ValueError):
+        count = 8
+    rows = recent_tool_calls(count)
+    return (
+        "Recent tool calls (oldest first). Only CONFIRMED means the effect was observed; "
+        "NOT CONFIRMED and FAILED mean the request did NOT demonstrably happen - never "
+        "tell the user it did. 'Era actually ran' marks a call the router swapped.\n"
+        + render_recent_calls(rows)
+    )
+
+
 def protocol_status() -> str:
-    return hive.briefing()
+    return f"{hive.briefing()} {report_digest()}"

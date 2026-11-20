@@ -704,48 +704,62 @@ class TestYoutubeVideoVerification:
             "actions.platform_tab.get_or_open_platform_tab", return_value=MagicMock(page=None)
         )
 
-    def test_verify_watch_url_returns_true(self):
+    # Contract since the 2026-11-11 media honesty repair: a YouTube URL in the
+    # address bar is NOT success. The verifier needs the owned page AND
+    # advancing-playback evidence from _start_and_observe on that same page.
+    def _mock_platform_tab(self, url):
+        return patch(
+            "actions.platform_tab.get_or_open_platform_tab",
+            return_value=MagicMock(page=MagicMock(url=url)),
+        )
+
+    def _verify(self, page_url, expected_url, evidence):
         from actions.youtube_video import _verify_youtube_navigation
 
         with (
-            self._mock_platform_tab_none(),
+            self._mock_platform_tab(page_url),
+            patch("actions.youtube_video._start_and_observe", MagicMock(return_value=None)),
             patch("actions.youtube_video.get_browser_session") as mock_get,
         ):
-            mock_sess = MagicMock()
-            mock_sess.run.return_value = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-            mock_get.return_value = mock_sess
-            ok, url = _verify_youtube_navigation(
-                "brave", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-            )
-            assert ok is True
-            assert "dQw4w9WgXcQ" in url
+            mock_get.return_value = MagicMock(run=MagicMock(return_value=evidence))
+            return _verify_youtube_navigation("brave", expected_url)
+
+    def test_verify_watch_url_returns_true(self):
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ok, seen = self._verify(url, url, {"playing": True, "progress": 1.0})
+        assert ok is True
+        assert "dQw4w9WgXcQ" in seen
+
+    def test_verify_watch_url_without_progress_returns_false(self):
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ok, _ = self._verify(url, url, {"playing": False, "reason": "stalled"})
+        assert ok is False
 
     def test_verify_chatgpt_url_returns_false(self):
-        from actions.youtube_video import _verify_youtube_navigation
-
-        with (
-            self._mock_platform_tab_none(),
-            patch("actions.youtube_video.get_browser_session") as mock_get,
-        ):
-            mock_sess = MagicMock()
-            mock_sess.run.return_value = "https://chatgpt.com"
-            mock_get.return_value = mock_sess
-            ok, url = _verify_youtube_navigation("brave", "https://chatgpt.com")
-            assert ok is False
-            assert "chatgpt.com" in url
+        ok, seen = self._verify(
+            "https://chatgpt.com",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            {"playing": False, "reason": "wrong_video"},
+        )
+        assert ok is False
+        assert "chatgpt.com" in seen
 
     def test_verify_youtu_be_returns_true(self):
+        ok, _ = self._verify(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            {"playing": True, "progress": 1.0},
+        )
+        assert ok is True
+
+    def test_verify_without_owned_page_returns_false(self):
         from actions.youtube_video import _verify_youtube_navigation
 
-        with (
-            self._mock_platform_tab_none(),
-            patch("actions.youtube_video.get_browser_session") as mock_get,
-        ):
-            mock_sess = MagicMock()
-            mock_sess.run.return_value = "https://youtu.be/dQw4w9WgXcQ"
-            mock_get.return_value = mock_sess
-            ok, url = _verify_youtube_navigation("brave", "https://youtu.be/dQw4w9WgXcQ")
-            assert ok is True
+        with self._mock_platform_tab_none():
+            ok, seen = _verify_youtube_navigation(
+                "brave", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            )
+        assert ok is False and seen == ""
 
     def test_verify_exception_returns_false_empty_url(self):
         from actions.youtube_video import _verify_youtube_navigation
@@ -1819,7 +1833,12 @@ class TestFrenchNetflixE2E:
 
 
 class TestNetflixEnterFallbackGuard:
-    """Verify router blocks bare Enter press during Netflix failure/cooldown."""
+    """Verify router blocks bare Enter on the Netflix page during failure/cooldown.
+
+    The Netflix tab is in front for every case here (same-app). The cross-app
+    cases, where the owner has moved to another app, are in
+    TestNetflixEnterOnlyGuardsNetflix (PF-023).
+    """
 
     @pytest.fixture(autouse=True)
     def _setup(self):
@@ -1829,7 +1848,10 @@ class TestNetflixEnterFallbackGuard:
         nc._LAST_NETFLIX_FAILURE_AT = 0.0
         with (
             patch("core.self_healing_router.load_state", return_value={}),
-            patch("core.self_healing_router.get_active_title", return_value=""),
+            patch(
+                "core.self_healing_router.get_active_title",
+                return_value="Stranger Things - Netflix - Brave",
+            ),
         ):
             yield
 
@@ -1975,6 +1997,61 @@ class TestNetflixEnterFallbackGuard:
         )
         assert tool == "netflix_control"
         assert params.get("action") == "status"
+
+
+class TestNetflixEnterOnlyGuardsNetflix:
+    """PF-023: a real Netflix failure must not swallow Enter in another app.
+
+    The same failure that blocks Enter on the Netflix tab lets it through,
+    immediately, when another app is in front.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _failure_just_happened(self):
+        import time as _t
+
+        import actions.netflix_control as nc
+
+        nc._VISION_COOLDOWN_UNTIL = 0.0
+        nc._LAST_NETFLIX_FAILURE_AT = _t.monotonic() - 1.0
+        assert nc.is_netflix_failure_context_active()
+        with (
+            patch("core.self_healing_router.load_state", return_value={}),
+            patch("core.self_healing_router.get_scroll_context", return_value=None),
+        ):
+            yield
+        nc._LAST_NETFLIX_FAILURE_AT = 0.0
+
+    def _route(self, title, tool="computer_control", user_text=""):
+        with patch("core.self_healing_router.get_active_title", return_value=title):
+            return route_tool_call(tool, {"action": "press", "key": "enter"}, user_text)
+
+    @pytest.mark.parametrize("tool", ["computer_control", "browser_control"])
+    @pytest.mark.parametrize(
+        "title", ["Untitled - Notepad", "WhatsApp", "Instagram - Brave", "Visual Studio Code"]
+    )
+    def test_enter_reaches_another_app_immediately(self, title, tool):
+        routed_tool, params = self._route(title, tool)
+        assert routed_tool == "computer_control"
+        assert params.get("action") == "press"
+
+    @pytest.mark.parametrize("tool", ["computer_control", "browser_control"])
+    def test_enter_on_the_netflix_page_is_still_blocked(self, tool):
+        routed_tool, params = self._route("Home - Netflix - Brave", tool)
+        assert routed_tool == "netflix_control"
+        assert params == {"action": "status"}
+
+    def test_unreadable_foreground_without_netflix_evidence_lets_enter_through(self):
+        assert self._route("")[0] == "computer_control"
+
+    def test_unreadable_foreground_with_live_netflix_keeps_the_guard(self):
+        with patch("core.self_healing_router.get_scroll_context", return_value="netflix"):
+            assert self._route("")[0] == "netflix_control"
+
+    def test_same_failure_switching_apps_flips_the_decision(self):
+        assert self._route("Netflix - Brave")[0] == "netflix_control"
+        assert self._route("Untitled - Notepad")[0] == "computer_control"
+        assert self._route("Netflix - Brave")[0] == "netflix_control"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2276,17 +2353,19 @@ class TestV8BNetflixBrowserControlClickGuard:
         assert params.get("action") == "play"
 
     def test_enter_fallback_guard_still_works(self):
-        """PART A.6 Enter fallback guard still blocks bare Enter during failure."""
+        """PART A.6 Enter fallback guard still blocks bare Enter on the Netflix
+        tab during failure (other apps: TestNetflixEnterOnlyGuardsNetflix)."""
         import time as _time
 
         import actions.netflix_control as nc
 
         nc._LAST_NETFLIX_FAILURE_AT = _time.monotonic() - 1.0
-        tool, params = route_tool_call(
-            "browser_control",
-            {"action": "press", "key": "Enter"},
-            "",
-        )
+        with patch("core.self_healing_router.get_active_title", return_value="Netflix - Brave"):
+            tool, params = route_tool_call(
+                "browser_control",
+                {"action": "press", "key": "Enter"},
+                "",
+            )
         assert tool == "netflix_control"
         assert params.get("action") == "status"
         nc._LAST_NETFLIX_FAILURE_AT = 0.0
@@ -2414,7 +2493,8 @@ class TestV8CComputerControlGuard:
         assert params.get("query") == "one piece"
 
     def test_computer_control_press_enter_with_netflix_failure(self):
-        """computer_control press Enter during Netflix failure -> status."""
+        """computer_control press Enter during Netflix failure, Netflix tab in
+        front -> status (other apps: TestNetflixEnterOnlyGuardsNetflix)."""
         import time
 
         import actions.netflix_control as nc
@@ -2423,11 +2503,12 @@ class TestV8CComputerControlGuard:
         from core.browser_grid_state import clear_scroll_context_for_tests
 
         clear_scroll_context_for_tests()
-        tool, params = route_tool_call(
-            "computer_control",
-            {"action": "press", "key": "Enter"},
-            "",
-        )
+        with patch("core.self_healing_router.get_active_title", return_value="Netflix - Brave"):
+            tool, params = route_tool_call(
+                "computer_control",
+                {"action": "press", "key": "Enter"},
+                "",
+            )
         assert tool == "netflix_control"
         assert params.get("action") == "status"
         nc._LAST_NETFLIX_FAILURE_AT = 0.0

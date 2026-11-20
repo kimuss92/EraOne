@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -155,3 +157,39 @@ def status(sd=None) -> str:
     if index is None:
         return f"Microphone: {pin!r} pinned but not connected; using the system default."
     return f"Microphone: {pin!r} (device {index})."
+
+
+# The pin is an intention; this is the outcome: the microphone stream Era
+# actually opened (the HUD's System awareness shows it live). In memory only.
+_active_lock = threading.Lock()
+_active: dict | None = None
+_active_owner: object | None = None
+
+
+def note_active_input(device_index, name: str, *, owner: object | None = None) -> None:
+    """Called by the capture layer each time it opens a microphone stream."""
+    global _active, _active_owner
+    with _active_lock:
+        _active_owner = owner
+        _active = {
+            "index": device_index,
+            "name": str(name or ""),
+            "pinned": bool(get_pin()),
+            "at": datetime.now().isoformat(timespec="seconds"),
+        }
+
+
+def clear_active_input(*, owner: object | None = None) -> None:
+    """Invalidate the evidence when the stream closes or fails."""
+    global _active, _active_owner
+    with _active_lock:
+        if owner is not None and _active_owner is not owner:
+            return  # an older retained stream cannot clear a replacement route
+        _active = None
+        _active_owner = None
+
+
+def active_input() -> dict | None:
+    """The last microphone stream Era opened, or None if none is open."""
+    with _active_lock:
+        return dict(_active) if _active else None

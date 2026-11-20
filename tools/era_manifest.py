@@ -326,6 +326,9 @@ def load_capabilities() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - see above
         out["errors"].append(f"core.action_registry: {exc}")
 
+    from app.hud.views import snapshot as view_registry
+
+    out["hud_views"] = view_registry()
     return out
 
 

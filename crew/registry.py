@@ -22,6 +22,7 @@ yaml schema (all keys required except the last four):
     tier_preference: standard      # optional SOFT default: trivial|standard|critical. Used
                                    # only for a turn whose own shape says nothing; the TASK
                                    # decides the tier (crew/router.py), never the bot.
+    max_steps: 10                  # optional step budget, 2-12 (default crew.runtime.MAX_STEPS)
 """
 
 from __future__ import annotations
@@ -43,6 +44,8 @@ _TIERS = ("fast", "smart")
 _ROUTE_TIERS = ("trivial", "standard", "critical")
 _ZONES = frozenset({"inbox", "brand", "global", "other"})
 _MAX_PROMPT_CHARS = 20_000
+# PF-054: a bot's own step budget stays bounded; the shared 240 s deadline still applies.
+_MIN_STEPS, _MAX_STEPS = 2, 12
 
 
 def crew_dir() -> Path:
@@ -114,6 +117,9 @@ def _build(path: Path, directory: Path, known_capabilities: frozenset[str]) -> B
     preference = str(data.get("tier_preference") or "").strip().lower()
     if preference and preference not in _ROUTE_TIERS:
         raise ValueError(f"tier_preference must be one of {_ROUTE_TIERS} (or absent)")
+    max_steps = data.get("max_steps", 0)
+    if max_steps and (type(max_steps) is not int or not _MIN_STEPS <= max_steps <= _MAX_STEPS):
+        raise ValueError(f"max_steps must be an integer {_MIN_STEPS}-{_MAX_STEPS} (or absent)")
 
     return BotSpec(
         id=bot_id,
@@ -126,6 +132,7 @@ def _build(path: Path, directory: Path, known_capabilities: frozenset[str]) -> B
         write_zones=zones,
         handoffs_to=handoffs,
         tier_preference=preference,
+        max_steps=max_steps or 0,
     )
 
 

@@ -250,47 +250,34 @@ def _handle_playback_control(action: str, browser_name: str | None = _DEFAULT_BR
     js_scripts = {
         "pause": (
             "const v = document.querySelector('video'); "
-            "if(v) { v.pause(); return 'YouTube video paused cleanly'; } "
+            "if(v) { v.pause(); return v.paused ? 'YouTube video paused cleanly' : 'YouTube pause failed read-back'; } "
             "return 'No HTML5 video element found on YouTube page';"
         ),
         "resume": (
             "const v = document.querySelector('video'); "
-            "if(v) { v.play(); return 'YouTube video resumed cleanly'; } "
+            "if(v) { return v.play().then(() => !v.paused && !v.ended ? 'YouTube video resumed cleanly' : 'YouTube resume failed read-back').catch(() => 'YouTube playback was blocked'); } "
             "return 'No HTML5 video element found on YouTube page';"
         ),
         "play_pause": (
             "const v = document.querySelector('video'); "
-            "if(v) { if(v.paused) { v.play(); return 'YouTube video resumed'; } else { v.pause(); return 'YouTube video paused'; } } "
+            "if(v) { if(v.paused) { return v.play().then(() => !v.paused && !v.ended ? 'YouTube video resumed' : 'YouTube resume failed read-back').catch(() => 'YouTube playback was blocked'); } else { v.pause(); return v.paused ? 'YouTube video paused' : 'YouTube pause failed read-back'; } } "
             "return 'No HTML5 video target discovered';"
         ),
     }
 
     script = js_scripts.get(action if action in js_scripts else "play_pause")
 
-    cdp_error: str | None = None
     # Primary path: CDP-based JS injection into the YouTube tab.
     try:
         sess = get_browser_session(browser_name)
         result = sess.run(sess.evaluate_background_media("youtube.com", script))
         print(f"[YouTube] Native CDP Pipeline Response: {result}")
-        # If CDP succeeded, return the result directly.
-        if "No HTML5" not in result and "exception" not in result.lower():
-            return result
+        # Missing targets and failed reads do not identify a safe keyboard target.
+        # A timeout can also occur after mutation: never replay it as a toggle.
+        return result
     except Exception as e:
-        cdp_error = str(e)
-        print(f"[YouTube] CDP injection failed ({cdp_error}), falling back to keyboard simulation")
-
-    # Fallback: keyboard shortcut simulation on the focused browser window.
-    # YouTube uses Spacebar (or 'k') to toggle play/pause.
-    try:
-        import pyautogui
-
-        pyautogui.press("space")
-        print(f"[YouTube] Keyboard fallback sent spacebar for action: {action}")
-        return f"YouTube {action} triggered via keyboard fallback."
-    except Exception as kb_e:
-        cdp_detail = f" CDP: {cdp_error}" if cdp_error else ""
-        return f"YouTube control failed: keyboard ({kb_e}){cdp_detail}"
+        print(f"[YouTube] CDP control interrupted ({type(e).__name__}); playback is unverified")
+        return "YouTube control interrupted; playback is not verified. Check the player before retrying."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -444,280 +431,179 @@ def _get_page_url(browser_name: str | None) -> str:
         return ""
 
 
-def _verify_youtube_navigation(browser_name: str | None, expected_url: str) -> tuple[bool, str]:
-    """Check that the owned YouTube page navigated to a watch page.
+async def _start_and_observe(page, expected_id: str) -> dict:
+    """Act and read back on the SAME owned page; no active-tab or OS fallback."""
+    await page.wait_for_selector("video", timeout=10000)
+    if _extract_video_id(str(page.url)) != expected_id:
+        return {"playing": False, "reason": "wrong_video"}
+    # A real user gesture is needed on browsers that block autoplay. Never
+    # toggle a player already running; click only the paused player's control.
+    paused = await page.evaluate(
+        "() => { const v=document.querySelector('video'); return !v || v.paused; }"
+    )
+    if paused:
+        button = page.locator(".ytp-large-play-button, .ytp-play-button").first
+        if await button.is_visible():
+            await button.click(timeout=2500)
+        else:
+            await page.evaluate(
+                "async () => { const v=document.querySelector('video'); if(v) await v.play(); }"
+            )
+    script = """() => {
+      const v=document.querySelector('video');
+      return {url:location.href, time:v?.currentTime || 0, paused:!v || v.paused,
+              ended:!v || v.ended, ready:v?.readyState || 0,
+              ad:!!document.querySelector('.html5-video-player.ad-showing'),
+              muted:!v || v.muted || v.volume === 0};
+    }"""
+    first = await page.evaluate(script)
+    import asyncio
 
-    Uses owned page URL instead of active tab URL to avoid
-    reading the wrong tab (e.g. WhatsApp).
-    Returns (success, final_url).
-    """
+    for _ in range(16):
+        from core.cancel_registry import raise_if_cancelled
+
+        raise_if_cancelled()
+        await asyncio.sleep(0.25)
+        state = await page.evaluate(script)
+        if _extract_video_id(state.get("url", "")) != expected_id:
+            return {"playing": False, "reason": "wrong_video"}
+        if (
+            not state["paused"]
+            and not state["ended"]
+            and not state["ad"]
+            and not state["muted"]
+            and state["ready"] >= 2
+            and state["time"] > first["time"] + 0.1
+            and not first["ad"]
+        ):
+            return {
+                "playing": True,
+                "video_id": expected_id,
+                "progress": state["time"] - first["time"],
+            }
+        if first["ad"] and not state["ad"]:
+            first = state
+    return {"playing": False, "reason": "blocked_ad_paused_muted_or_stalled"}
+
+
+def _verify_youtube_navigation(browser_name: str | None, expected_url: str) -> tuple[bool, str]:
+    """Compatibility name; now verifies identity AND advancing playback."""
     try:
         from actions.platform_tab import get_or_open_platform_tab
 
-        tab_result = get_or_open_platform_tab(platform="youtube", browser=browser_name or "brave")
-        page = tab_result.page
-        if page is None:
-            sess = get_browser_session(browser_name)
-            current_url = sess.run(sess.get_url()) or ""
-        else:
-            current_url = str(page.url) or ""
-        print(f"[YouTube] Post-navigation URL: {current_url[:100]}")
-        if "/watch" in current_url or "youtu.be/" in current_url:
-            return True, current_url
-        print(f"[YouTube] ⚠️ URL is not a watch page: {current_url[:120]}")
-        return False, current_url
-    except Exception as e:
-        print(f"[YouTube] ⚠️ URL verification failed: {e}")
+        page = get_or_open_platform_tab(platform="youtube", browser=browser_name or "brave").page
+        video_id = _extract_video_id(expected_url)
+        if page is None or not video_id:
+            return False, ""
+        evidence = get_browser_session(browser_name).run(_start_and_observe(page, video_id))
+        return evidence.get("playing") is True, str(page.url)
+    except Exception as exc:
+        print(f"[YouTube] Playback verification failed: {type(exc).__name__}")
         return False, ""
 
 
-def _handle_play(params: dict, player, browser_name: str) -> str:
-    query = params.get("query", "").strip()
+def _handle_play(params: dict, player, browser_name: str) -> dict:
+    query = str(params.get("query") or "").strip()
+
+    def failed(message, kind="PlaybackNotVerified"):
+        return {"success": False, "message": message, "error_type": kind}
+
     if not query:
-        return "Please tell me what you'd like to watch, sir."
-
-    # Running-only Spotify pause: prevents unwanted Spotify startup during YouTube navigation.
-    try:
-        from actions.spotify_control import spotify_control
-
-        spotify_control({"action": "pause_if_running_only"})
-    except Exception:
-        pass
-
-    if player:
-        player.write_log(f"[YouTube] Searching: {query}")
-    print(f"[YouTube] 🔍 Searching for: {query}")
-
-    search_url = (
-        f"https://www.youtube.com/results?search_query={quote_plus(query)}&sp={_YT_VIDEO_FILTER}"
-    )
-
-    # ── Check for ordinal command before doing search ──
-    try:
-        from utils.media_match import clean_youtube_watch_url, parse_ordinal_media_command
-
-        ordinal_info = parse_ordinal_media_command(query)
-        if ordinal_info:
-            ordinal = ordinal_info["ordinal"]
-            print(f"[YouTube] Ordinal command detected: #{ordinal}")
-            from actions.browser_intelligence import scan_youtube_cards
-
-            cards = scan_youtube_cards(browser_name)
-            _save_youtube_grid(cards, query)
-            if not cards:
-                return "I need YouTube search results first. What should I search?"
-            from utils.media_match import filter_youtube_candidates
-
-            candidates = [
-                {"title": c.title, "url": c.href, "href": c.href, "kind": "video"} for c in cards
-            ]
-            filtered = filter_youtube_candidates(candidates)
-            if ordinal > len(filtered):
-                return f"I only found {len(filtered)} safe YouTube videos. Which one should I open?"
-            target = filtered[ordinal - 1]
-            target_url = clean_youtube_watch_url(target["url"]) or target["url"]
-            print(f"[YouTube] Ordinal #{ordinal}: {target['title'][:60]} → {target_url[:80]}")
-            before_url = _get_page_url(browser_name)
-            _navigate_in_browser(target_url, browser_name)
-            time.sleep(1.0)
-            ok, final_url = _verify_youtube_navigation(browser_name, target_url)
-            print(f"[YouTube] selected_url={target_url}")
-            print(f"[YouTube] target_page_before_url={before_url[:100] if before_url else ''}")
-            print(f"[YouTube] final_url={final_url[:100] if final_url else ''}")
-            print(f"[YouTube] verification_success={ok}")
-            if ok:
-                try:
-                    from core.browser_grid_state import set_scroll_context
-
-                    set_scroll_context("youtube")
-                except Exception:
-                    pass
-                return f"Playing: {target['title']}"
-            return "I selected a YouTube result but could not verify that it opened."
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"[YouTube] Ordinal selection error: {e}")
-
-    # ── Generic query fast path: try HTTP scrape for direct URL ──
-    try:
-        from utils.media_match import is_generic_media_query as _is_generic
-
-        if _is_generic(query):
-            print(f"[YouTube] Generic query detected: '{query}' — trying fast direct path")
-            video_url = _scrape_first_video_url(query)
-            if video_url:
-                print(f"[YouTube] Fast path: got URL {video_url}")
-                before_url = _get_page_url(browser_name)
-                _navigate_in_browser(video_url, browser_name)
-                time.sleep(1.0)
-                ok, final_url = _verify_youtube_navigation(browser_name, video_url)
-                if ok:
-                    try:
-                        from core.browser_grid_state import set_scroll_context
-
-                        set_scroll_context("youtube")
-                    except Exception:
-                        pass
-                    print(f"[YouTube] Fast path succeeded: {video_url}")
-                    return f"Playing: {query}"
-                print(
-                    "[YouTube] Fast path navigation verification failed, falling back to browser search"
-                )
-            else:
-                print("[YouTube] Fast path scrape failed, falling back to browser search")
-    except Exception as e:
-        print(f"[YouTube] Fast path error: {e}")
-
-    # ── Safe selection via browser scanning + title scoring ──────────────
+        return failed("YouTube needs a video title or URL.", "InvalidArguments")
     try:
         from actions.browser_intelligence import scan_youtube_cards
+        from actions.platform_tab import get_or_open_platform_tab
         from utils.media_match import (
+            clean_youtube_watch_url,
             filter_youtube_candidates,
             is_generic_media_query,
-            is_youtube_watch_url,
+            parse_ordinal_media_command,
             select_best_media_candidate,
         )
 
-        _navigate_in_browser(search_url, browser_name)
-        time.sleep(2.0)
-
-        cards = scan_youtube_cards(browser_name)
-        _save_youtube_grid(cards, query)
-        print(f"[YouTube] Scanned {len(cards) if cards else 0} cards")
-        if cards:
-            candidates = [
-                {"title": c.title, "url": c.href, "href": c.href, "kind": "video"} for c in cards
-            ]
-            for i, c in enumerate(candidates):
-                print(f"[YouTube]  Candidate {i + 1}: title={c['title'][:60]}, url={c['url'][:80]}")
-
-            filtered = filter_youtube_candidates(candidates)
-            print(f"[YouTube] After filter: {len(filtered)}/{len(candidates)} candidates remain")
-
-            # Determine if query is short (1-2 words, specific) for fallback
-            query_words = [w for w in query.lower().split() if w not in ("play", "the", "a", "an")]
-            is_short_query = len(query_words) <= 2
-
-            if filtered:
-                is_generic = is_generic_media_query(query)
-                print(f"[YouTube] is_generic={is_generic}, query_words={len(query_words)}")
-
-                if is_generic:
-                    selected_url = clean_youtube_watch_url(filtered[0]["url"]) or filtered[0]["url"]
-                    before_url = _get_page_url(browser_name)
-                    _navigate_in_browser(selected_url, browser_name)
-                    time.sleep(1.0)
-                    ok, final_url = _verify_youtube_navigation(browser_name, selected_url)
-                    print(f"[YouTube] selected_url={selected_url}")
-                    print(
-                        f"[YouTube] target_page_before_url={before_url[:100] if before_url else ''}"
-                    )
-                    print(f"[YouTube] final_url={final_url[:100] if final_url else ''}")
-                    print(f"[YouTube] verification_success={ok}")
-                    if ok:
-                        return f"Playing: {query}"
-                    return "I selected a YouTube result but could not verify that it opened."
-
-                best, score, reason = select_best_media_candidate(query, filtered, "youtube")
-                print(
-                    f"[YouTube] Selection: best={best['title'][:60] if best else 'None'}, score={score:.2f}, reason={reason}"
-                )
-
-                if best and reason == "selected":
-                    selected_url = clean_youtube_watch_url(best["url"]) or best["url"]
-                    before_url = _get_page_url(browser_name)
-                    _navigate_in_browser(selected_url, browser_name)
-                    time.sleep(1.0)
-                    ok, final_url = _verify_youtube_navigation(browser_name, selected_url)
-                    print(f"[YouTube] selected_url={selected_url}")
-                    print(
-                        f"[YouTube] target_page_before_url={before_url[:100] if before_url else ''}"
-                    )
-                    print(f"[YouTube] final_url={final_url[:100] if final_url else ''}")
-                    print(f"[YouTube] verification_success={ok}")
-                    if ok:
-                        return f"Playing: {query}"
-                    return "I selected a YouTube result but could not verify that it opened."
-
-                if reason == "ambiguous":
-                    lines = [f"{i + 1}. {c['title']}" for i, c in enumerate(filtered[:5])]
-                    msg = "I found multiple possible YouTube videos. Please specify the title more clearly."
-                    if lines:
-                        msg += "\n" + "\n".join(lines)
-                    return msg
-
-                # low_confidence: fall back to first safe organic for short queries
-                if is_short_query:
-                    fallback = filtered[0]
-                    fallback_url = clean_youtube_watch_url(fallback["url"]) or fallback["url"]
-                    print(
-                        f"[YouTube] Low confidence but short query — using first safe organic: {fallback['title'][:60]}"
-                    )
-                    before_url = _get_page_url(browser_name)
-                    _navigate_in_browser(fallback_url, browser_name)
-                    time.sleep(1.0)
-                    ok, final_url = _verify_youtube_navigation(browser_name, fallback_url)
-                    print(f"[YouTube] selected_url={fallback_url}")
-                    print(
-                        f"[YouTube] target_page_before_url={before_url[:100] if before_url else ''}"
-                    )
-                    print(f"[YouTube] final_url={final_url[:100] if final_url else ''}")
-                    print(f"[YouTube] verification_success={ok}")
-                    if ok:
-                        return f"Playing: {query}"
-                    return "I selected a YouTube result but could not verify that it opened."
-
-                return "I found multiple possible YouTube videos. Please specify the title more clearly."
-
-            # filtered empty — try first card that has a watch URL
-            print(
-                f"[YouTube] All {len(candidates)} candidates were filtered out — trying first valid URL"
+        sess = get_browser_session(browser_name)
+        page = get_or_open_platform_tab(platform="youtube", browser=browser_name or "brave").page
+        if page is None:
+            return failed(
+                "YouTube browser connection failed; no playback was started.", "BrowserUnavailable"
             )
-            for c in candidates:
-                url = c.get("url", "") or c.get("href", "") or ""
-                if is_youtube_watch_url(url):
-                    clean_url = clean_youtube_watch_url(url) or url
-                    print(
-                        f"[YouTube] Fallback to unfiltered card: {c['title'][:60]} → {clean_url[:80]}"
+        direct = clean_youtube_watch_url(query)
+        ordinal = parse_ordinal_media_command(query)
+        selected_title = query
+        if not direct:
+            if not ordinal:
+                search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}&sp={_YT_VIDEO_FILTER}"
+                sess.run(page.goto(search_url, wait_until="domcontentloaded", timeout=20000))
+                sess.run(page.wait_for_selector("ytd-video-renderer a#video-title", timeout=10000))
+            cards = scan_youtube_cards(browser_name, page=page)
+            _save_youtube_grid(cards, query)
+            candidates = filter_youtube_candidates(
+                [
+                    {
+                        "title": c.title,
+                        "url": clean_youtube_watch_url(c.href),
+                        "href": c.href,
+                        "kind": "video",
+                    }
+                    for c in cards
+                ]
+            )
+            if not candidates:
+                return failed("No suitable YouTube video found in the page DOM.", "NoResults")
+            if ordinal:
+                index = ordinal["ordinal"] - 1
+                if not 0 <= index < len(candidates):
+                    return failed("The requested YouTube result is not available.", "NoResults")
+                selected = candidates[index]
+            elif is_generic_media_query(query):
+                selected = candidates[0]
+            else:
+                selected, _, reason = select_best_media_candidate(query, candidates, "youtube")
+                if not selected or reason != "selected":
+                    choices = [
+                        f"{index}. {candidate.get('title') or 'Untitled video'}"
+                        for index, candidate in enumerate(candidates[:5], start=1)
+                    ]
+                    detail = "\n" + "\n".join(choices) if choices else ""
+                    return failed(
+                        (
+                            "I found multiple possible YouTube videos. Which one should I play?"
+                            if reason == "ambiguous"
+                            else "I could not match a YouTube video confidently. Choose from these results:"
+                        )
+                        + detail,
+                        "VideoSelectionRequired",
                     )
-                    before_url = _get_page_url(browser_name)
-                    _navigate_in_browser(clean_url, browser_name)
-                    time.sleep(1.0)
-                    ok, final_url = _verify_youtube_navigation(browser_name, clean_url)
-                    print(f"[YouTube] selected_url={clean_url}")
-                    print(
-                        f"[YouTube] target_page_before_url={before_url[:100] if before_url else ''}"
-                    )
-                    print(f"[YouTube] final_url={final_url[:100] if final_url else ''}")
-                    print(f"[YouTube] verification_success={ok}")
-                    if ok:
-                        return f"Playing: {query}"
-                    return "I selected a YouTube result but could not verify that it opened."
-            return "No suitable YouTube video found for that search, sir."
-        else:
-            print("[YouTube] No cards found on search page, using fallback")
-    except ImportError as e:
-        print(f"[YouTube] media_match/browser_intelligence not available: {e}")
-    except Exception as e:
-        print(f"[YouTube] Safe selection error: {e}")
+            direct = clean_youtube_watch_url(selected["url"])
+            selected_title = selected["title"]
+        if not direct:
+            return failed("The selected YouTube result has no valid watch URL.", "InvalidArguments")
+        sess.run(page.goto(direct, wait_until="domcontentloaded", timeout=20000))
+        evidence = sess.run(_start_and_observe(page, _extract_video_id(direct)))
+        if not evidence.get("playing"):
+            return failed(
+                "YouTube playback could not be verified: "
+                + evidence.get("reason", "unknown")
+                + ". No repeat click was sent."
+            )
+        from core.tool_result import ToolResult
 
-    # ── Fallback: request scrape if browser bridge unavailable ──────────
-    video_url = _scrape_first_video_url(query)
-    target = video_url or search_url
-    _navigate_in_browser(target, browser_name)
-
-    # Post-navigation double-playback guard.
-    try:
-        from actions.spotify_control import spotify_control
-
-        spotify_control({"action": "pause_if_running_only"})
-    except Exception:
-        pass
-
-    action_desc = f"Playing: {query}" if video_url else f"Opened YouTube search for: {query}"
-    print(f"[YouTube] {action_desc}")
-    return action_desc
+        return ToolResult(
+            success=True,
+            message=f"Playing: {selected_title}",
+            verified=True,
+            verification_status="VERIFIED",
+            verifier_name="youtube_dom",
+            data={
+                "video_id": evidence["video_id"],
+                "progress": evidence["progress"],
+                "url": direct,
+            },
+        )
+    except Exception as exc:
+        return failed(
+            f"YouTube playback failed ({type(exc).__name__}); inspect the browser connection or player before retrying."
+        )
 
 
 def _handle_summarize(params: dict, player, speak, browser_name: str) -> str:
@@ -1060,9 +946,9 @@ def youtube_video(
         try:
             from core.media_state import set_status
 
-            if action == "pause":
+            if result.startswith("YouTube video paused"):
                 set_status("youtube", "paused")
-            elif action in ("resume", "play_pause", "play"):
+            elif result.startswith("YouTube video resumed"):
                 set_status("youtube", "playing")
         except Exception:
             pass
@@ -1073,7 +959,16 @@ def youtube_video(
     try:
         if action == "play":
             result = _handle_play(params, player, browser_name) or "Done."
-            if "Playing" in result:
+            from core.tool_result import ToolResult
+
+            if ToolResult.from_any(result).success:
+                # Video sound goes to the remembered media device, like music.
+                try:
+                    from core.media_routing import enforce_media_target_async
+
+                    enforce_media_target_async("browser")
+                except Exception:
+                    pass
                 try:
                     from core.browser_grid_state import set_scroll_context
 

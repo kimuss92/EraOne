@@ -4,14 +4,17 @@ Mute   — "mute your mic" / "stop listening": caught by the set_microphone tool
          (Gemini), by the voice-transcript backstop in _receive_audio, or by the
          typed path in _on_text_command. All three land in mute_microphone(),
          which is idempotent, so whichever fires first wins and the rest no-op.
-Unmute — "activate mic" / "start listening": while muted, Gemini hears nothing,
-         so the mic feeds a LOCAL Vosk recognizer (_run_unmute_listener) that
-         only knows the unmute phrases, and the phrase must be the enrolled
-         owner's voice. Also typed commands and the UI mic button.
+Unmute — "activate mic" / "start listening": while muted (by voice, typing or
+         the button alike), Gemini hears nothing, so the mic feeds a LOCAL Vosk
+         recognizer (_run_unmute_listener) that only knows the unmute phrases.
+         The phrase goes through the speaker verifier: with owner verification
+         ON only the owner's voice counts; with it OFF (owner's choice) grammar +
+         confidence are the only check. Also typed commands and the UI mic button.
 
 Mic-mute is orthogonal to standby: standby/wake never reopens a voice-muted
 mic (a network-failure standby must not be a way around a privacy mute). Only
-an explicit mic-on order does.
+an explicit mic-on order does. The browser/UI hard-off switch remains separate:
+a vocal unmute clears the logical voice mute but cannot override hard-off.
 """
 
 from __future__ import annotations
@@ -39,10 +42,18 @@ except ImportError:  # pragma: no cover - vosk is optional
     vosk = None
 
 _VOICE_UNMUTE_HINT = "Say 'start listening' or 'activate mic' to turn it back on."
+# Mute sources whose origin was the owner's own voice (kept for the UI/telemetry).
+# PF-008 (owner, 2026-11-16): EVERY mute, whatever its source, can be undone by
+# voice, typing or the mic button. Ambient noise still cannot reopen it: the local
+# listener knows only the unmute phrases (strict grammar + confidence) and skips
+# Era's own voice. With owner verification ON the phrase must be the owner's;
+# with it OFF any clear speaker saying a phrase can unmute (owner-accepted risk).
+_VOICE_UNMUTABLE_SOURCES = frozenset({"voice", "restored"})
 
 
 class MicMuteMixin:
     _mic_muted: bool = False
+    _mic_muted_source: str = "voice"
     _unmute_queue: asyncio.Queue | None = None
     _unmute_task: Any = None
     _unmute_ignore_until: float = 0.0
@@ -60,13 +71,18 @@ class MicMuteMixin:
             pass
 
     @staticmethod
-    def _persist_mic_muted(value: bool) -> None:
+    def _persist_mic_muted(value: bool, source: str = "") -> None:
         try:
-            from core.user_prefs import set_mic_muted
+            from core.user_prefs import set_mic_mute_source, set_mic_muted
 
             set_mic_muted(value)
+            set_mic_mute_source(source if value else "")
         except Exception as e:
             print(f"[MIC-MUTE] Could not persist mic state: {e}")
+
+    def mic_muted_by_voice(self) -> bool:
+        """True when the owner's own voice order muted the mic."""
+        return self._mic_muted and self._mic_muted_source in _VOICE_UNMUTABLE_SOURCES
 
     def _say_mic_ack(self, text: str) -> None:
         try:
@@ -78,19 +94,25 @@ class MicMuteMixin:
     def mute_microphone(self, source: str, speak_ack: bool = True) -> bool:
         """Stop sending mic audio anywhere but the local unmute listener.
 
-        Returns False (and does nothing) when already muted.
+        Returns False when already muted. Muting never clears
+        ``_browser_mic_active``: local capture must remain available to the
+        restricted unmute recognizer (owner-verified when verification is on).
         """
         if self._mic_muted:
             return False
         # Flag first: the audio callback and _send_realtime both read it, so no
         # further frame reaches Gemini from this point on.
         self._mic_muted = True
+        self._mic_muted_source = str(source or "voice").strip().lower()
         dropped = self._drain_mic_out_queue()
-        self._persist_mic_muted(True)
+        self._persist_mic_muted(True, self._mic_muted_source)
         print(f"[MIC-MUTE] Microphone muted ({source}); dropped {dropped} queued frame(s)")
         self.ui.write_log(f"SYS: Microphone off ({source}). {self._unmute_hint()}")
         self._broadcast_mic_state()
-        self._start_unmute_listener()
+        # PF-008 (owner, 2026-11-16): any mute can be undone by voice. Live
+        # 18:03: after "microphone off" the owner said "activate mic" for 40 s
+        # and nothing listened; only the mic button worked.
+        self._ensure_unmute_listener()
         if speak_ack:
             self._say_mic_ack(MIC_OFF_ACK)
         return True
@@ -100,6 +122,7 @@ class MicMuteMixin:
         if not self._mic_muted:
             return False
         self._mic_muted = False
+        self._mic_muted_source = ""
         self._stop_unmute_listener()
         self._persist_mic_muted(False)
         self._last_interaction_timestamp = time.time()
@@ -111,22 +134,23 @@ class MicMuteMixin:
         return True
 
     def restore_mic_mute(self) -> None:
-        """Re-apply a voice mute that was active before a restart/relaunch.
-
-        A crash-relaunch must not silently reopen a mic the user closed.
-        """
+        """Re-apply a mute that was active before a restart/relaunch."""
         try:
-            from core.user_prefs import get_mic_muted
+            from core.user_prefs import get_mic_mute_source, get_mic_muted
 
             if not get_mic_muted():
                 return
+            previous = (get_mic_mute_source() or "voice").strip().lower()
         except Exception:
             return
         self._mic_muted = True
+        # Keep the source for the UI/telemetry; every restored mute re-arms the
+        # local unmute listener below (PF-008).
+        self._mic_muted_source = "restored" if previous in _VOICE_UNMUTABLE_SOURCES else previous
         print("[MIC-MUTE] Restored muted microphone from previous session")
         self.ui.write_log(f"SYS: Microphone is still off from before. {self._unmute_hint()}")
         self._broadcast_mic_state()
-        self._start_unmute_listener()
+        self._ensure_unmute_listener()
 
     def _unmute_hint(self) -> str:
         if getattr(self, "_vosk_model", None) is None:
@@ -150,10 +174,14 @@ class MicMuteMixin:
 
     # ── Tool / typed entry points ────────────────────────────────────────────
     def _handle_set_microphone(self, args: dict) -> str:
+        """Dispatcher entry point for the registered set_microphone tool."""
         state = str(args.get("state", "")).strip().lower()
         if state in ("off", "mute", "muted", "false", "0"):
             if self.mute_microphone("voice"):
                 return "Microphone muted. Say nothing — the system speaks its own notice."
+            # A prior listener can have stopped because of a recognizer error;
+            # repeating "off" repairs it so voice unmute stays available.
+            self._ensure_unmute_listener()
             return "The microphone is already off. Say nothing."
         if state in ("on", "unmute", "unmuted", "true", "1"):
             if self.unmute_microphone("voice"):
@@ -162,11 +190,12 @@ class MicMuteMixin:
         return "Unknown microphone state. Use state 'off' or 'on'."
 
     def _handle_typed_mic_order(self, text: str) -> bool:
-        """Typed/Telegram mic order. Returns True when `text` was one."""
+        """Typed/Telegram mic order. Returns True when ``text`` was one."""
         if is_mic_off_order(text):
             if self.mute_microphone("typed", speak_ack=False):
                 ack = MIC_OFF_ACK
             else:
+                self._ensure_unmute_listener()
                 ack = "My microphone is already off."
         elif is_mic_on_order(text):
             if self.unmute_microphone("typed", speak_ack=False):
@@ -175,17 +204,25 @@ class MicMuteMixin:
                 ack = "My microphone is already on."
         else:
             return False
-        # Answer Telegram first (disarms the mirror), then say it in the room.
         self._tg_ack(ack)
         self._say_mic_ack(ack)
         return True
 
-    # ── Local unmute listener (offline Vosk, owner-verified) ─────────────────
+    # ── Local unmute listener (offline Vosk; owner-verified when enabled) ────
     def _feed_unmute_audio(self, loop, data: bytes) -> None:
         """Called from the sounddevice callback thread while voice-muted."""
         q = self._unmute_queue
         if q is not None:
             loop.call_soon_threadsafe(q.put_nowait, data)
+
+    def _ensure_unmute_listener(self) -> None:
+        """Arm or repair the local listener while the logical mute is active."""
+        if not self._mic_muted:
+            return
+        task = self._unmute_task
+        if self._unmute_queue is not None and task is not None and not task.done():
+            return
+        self._start_unmute_listener()
 
     def _start_unmute_listener(self) -> None:
         if vosk is None or getattr(self, "_vosk_model", None) is None:
@@ -228,10 +265,10 @@ class MicMuteMixin:
         print("[MIC-MUTE] Local unmute listener started")
         rec = vosk.KaldiRecognizer(self._vosk_model, 16000, unmute_grammar())
         try:
-            rec.SetWords(True)  # per-word confidences on finals
+            rec.SetWords(True)
         except Exception:
             pass
-        tap = WakeAudioTap()  # word timings restart with the recognizer
+        tap = WakeAudioTap()
         verifier = getattr(self, "_unmute_verifier", None)
         try:
             while self._mic_muted and self._unmute_queue is queue:
@@ -250,7 +287,6 @@ class MicMuteMixin:
                     if "[unk]" not in text and ("listening" in text or "mic" in text):
                         print(f"[MIC-MUTE] Not an unmute order (text={text!r}, conf={confidence})")
                     continue
-                # The right words are not enough — it must be the owner's voice.
                 if verifier is None:
                     from core.speaker_recognition import get_verifier
 
@@ -270,4 +306,9 @@ class MicMuteMixin:
                 "WARN: Voice unmute stopped working — use the mic button or type 'start listening'."
             )
         finally:
+            current = asyncio.current_task()
+            if self._unmute_task is current:
+                self._unmute_task = None
+            if self._unmute_queue is queue and not self._mic_muted:
+                self._unmute_queue = None
             print("[MIC-MUTE] Local unmute listener stopped")

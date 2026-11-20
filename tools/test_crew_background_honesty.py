@@ -115,7 +115,7 @@ def test_a_crew_failure_is_spoken_and_flipped_onto_the_hud(monkeypatch):
     monkeypatch.setattr(tt, "trace", lambda *a, **k: None)
     monkeypatch.setattr(
         "crew.runtime.run_tool",
-        lambda params: ToolResult.fail(
+        lambda params, **_kw: ToolResult.fail(
             message="drew used all 6 steps without finishing.",
             error="drew used all 6 steps without finishing.",
             error_type="StepLimit",
@@ -144,7 +144,9 @@ def test_a_crew_success_is_reported(monkeypatch):
     monkeypatch.setattr(tt, "trace", lambda *a, **k: None)
     monkeypatch.setattr(
         "crew.runtime.run_tool",
-        lambda params: ToolResult.ok(message="The design philosophy favours stone and wood."),
+        lambda params, **_kw: ToolResult.ok(
+            message="The design philosophy favours stone and wood."
+        ),
     )
 
     era = _Era()
@@ -163,7 +165,7 @@ def test_a_confirmation_required_crew_result_is_announced_not_read_as_an_outcome
     monkeypatch.setattr(tt, "trace", lambda *a, **k: None)
     monkeypatch.setattr(
         "crew.runtime.run_tool",
-        lambda params: ToolResult.fail(
+        lambda params, **_kw: ToolResult.fail(
             message="Replace the intro paragraph. Should I proceed?",
             error_type="ConfirmationRequired",
             data={PREVIEW_KEY: "Replace the intro paragraph of the brief. Should I proceed?"},
@@ -185,7 +187,7 @@ def test_a_crashing_crew_still_reports_a_failure(monkeypatch):
 
     monkeypatch.setattr(tt, "trace", lambda *a, **k: None)
 
-    def _boom(params):
+    def _boom(params, **_kw):
         raise RuntimeError("executor died")
 
     monkeypatch.setattr("crew.runtime.run_tool", _boom)
@@ -214,7 +216,7 @@ def test_undelivered_crew_approval_uses_reconnect_safe_report(monkeypatch, raise
         error_type="ConfirmationRequired",
         data={PREVIEW_KEY: preview},
     )
-    monkeypatch.setattr("crew.runtime.run_tool", lambda params: result)
+    monkeypatch.setattr("crew.runtime.run_tool", lambda params, **_kw: result)
     era = _Era()
     spoken = []
     era._loop = object()

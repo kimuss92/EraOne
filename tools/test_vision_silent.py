@@ -453,6 +453,11 @@ class TestVisionImageOptimization(unittest.TestCase):
 
 
 class TestVisionCache(unittest.TestCase):
+    def setUp(self):
+        from core.vision_service import clear_cache
+
+        clear_cache()
+
     def test_cache_returns_same_result(self):
         import actions.screen_processor as sp_module
 

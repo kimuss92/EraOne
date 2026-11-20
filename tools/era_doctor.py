@@ -146,13 +146,19 @@ def check_api_key_config() -> tuple[str, str]:
             return _fail(f"config/api_keys.json is invalid JSON: {e}")
         if not isinstance(data, dict):
             return _fail("config/api_keys.json root is not a JSON object")
-        if _contains_secret_literal(data):
+        from core.protected_config import has_plaintext_credentials, read_config
+
+        if has_plaintext_credentials(data):
             return _warn(
                 "config/api_keys.json contains literal credentials; keep this file local and never commit it"
             )
-        key = data.get("gemini_api_key", "")
+        try:
+            resolved = read_config(config_path)
+        except Exception as exc:
+            return _fail(f"API credential configuration unreadable ({type(exc).__name__})")
+        key = resolved.get("gemini_api_key", "")
         if isinstance(key, str) and not _looks_like_placeholder(key):
-            return _ok("present in local config/api_keys.json")
+            return _ok("available from local protected configuration")
         if env_key:
             return _ok("present in GEMINI_API_KEY env var")
         return _fail(
@@ -497,12 +503,12 @@ def check_optional_packages() -> tuple[str, str]:
         "pyautogui",
         "pyperclip",
         ("PIL", "pillow"),
-        "pyaudio",
         "spotipy",
-        "python_vlc",
         "playwright",
         "vosk",
         "sounddevice",
+        ("webrtcvad", "webrtcvad-wheels"),
+        "watchdog",
     ]
     not_found: list[str] = []
     for pkg in packages:
@@ -515,7 +521,7 @@ def check_optional_packages() -> tuple[str, str]:
             not_found.append(pip_name)
     if not_found:
         return _warn(f"Not installed: {', '.join(not_found)}")
-    return _ok()
+    return _ok("Active integrations available; unused PyAudio/VLC integrations are not required")
 
 
 def check_vosk_model() -> tuple[str, str]:

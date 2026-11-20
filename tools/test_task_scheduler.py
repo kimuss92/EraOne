@@ -51,6 +51,37 @@ def _delete_task(**kw):
     )
 
 
+@pytest.mark.parametrize("as_steps", [True, False])
+def test_tool_normalizes_single_call_chain(isolated, as_steps):
+    params = {"action": "create", "name": "single", "when": "every day at 9", "kind": "chain"}
+    if as_steps:
+        params["steps"] = [{"tool": "weather_report", "args": {"city": "Lagos"}}]
+    else:
+        params.update(tool="weather_report", tool_args={"city": "Lagos"})
+    result = tool.scheduled_task(params)
+    assert result["success"]
+    task = ts.get_task("single")
+    assert task["kind"] == "tool"
+    assert ts.steps_of(task)[0]["args"] == {"city": "Lagos"}
+
+
+def test_single_call_normalization_keeps_protocol_authority(isolated):
+    # The real Protocol tool/action mapping remains the authority source.
+    from core.task_store import VOICE_GATED_ACTIONS
+
+    name, action = next(iter(VOICE_GATED_ACTIONS.items()))
+    result = tool.scheduled_task(
+        {
+            "action": "create",
+            "name": "gated",
+            "when": "every day at 9",
+            "steps": [{"tool": name, "args": {"action": action}}],
+        }
+    )
+    assert not result["success"]
+    assert "name it yourself" in result["message"]
+
+
 # ── parser ───────────────────────────────────────────────────────────────────
 class TestParser:
     @pytest.mark.parametrize(

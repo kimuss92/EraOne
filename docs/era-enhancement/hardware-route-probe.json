@@ -1,0 +1,24 @@
+[
+  {
+    "endpoint_id": "{0.0.0.00000000}.{0b460ad8-e455-4b3c-ad4a-d8cc0c2fedc2}",
+    "name": "pc - speakers (Realtek(R) Audio)",
+    "requested_index": 5,
+    "format": "24000 Hz, mono, int16",
+    "audibility_verified": false,
+    "actual_index": 5,
+    "actual_name": "pc - speakers (Realtek(R) Audio",
+    "underflow": false,
+    "status": "opened_and_silence_written"
+  },
+  {
+    "endpoint_id": "{0.0.0.00000000}.{a1bee983-6064-43d2-8661-7099163bdd77}",
+    "name": "Star glass (CY03-CB36)",
+    "requested_index": 4,
+    "format": "24000 Hz, mono, int16",
+    "audibility_verified": false,
+    "actual_index": 4,
+    "actual_name": "Star glass (CY03-CB36)",
+    "underflow": false,
+    "status": "opened_and_silence_written"
+  }
+]

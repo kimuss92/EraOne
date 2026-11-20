@@ -530,3 +530,189 @@ class TestWiring:
         for action in ("status", "launch", "list"):
             tool, params = canonicalize_tool_call("protocol_one", {"action": action})
             assert tool == "protocol_one" and params["action"] == action
+
+
+# ── report accuracy: what the 2026-11-14 report got wrong or left unsaid ─────
+class TestReportAccuracy:
+    def test_identical_lint_hits_in_one_file_are_counted_not_merged_away(self, monkeypatch):
+        """Two I001 blocks in one file shared a signature and the report showed ONE."""
+        root = p1.checks.REPO_ROOT
+        diag = [
+            {
+                "code": "I001",
+                "message": "Import block is un-sorted",
+                "location": {"row": r},
+                "filename": str(root / "core" / "x.py"),
+            }
+            for r in (166, 145)  # deliberately out of order
+        ]
+        monkeypatch.setattr(p1.checks, "_ruff_json", lambda rules, paths: (diag, ""))
+        found = p1.checks.check_lint()
+        assert len(found) == 1
+        f = found[0]
+        assert f.count == 2 and f.location == "core/x.py:145" and f.also_at == "166"
+        line = p1._finding_line(f)
+        assert "x2" in line and "145" in line and "166" in line
+
+    def test_a_rolled_back_autofix_says_why(self, monkeypatch, tmp_path):
+        import actions.self_improve as si
+
+        target = tmp_path / "m.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        backup = tmp_path / "m.bak"
+        backup.write_text("x = 1\n", encoding="utf-8")
+        monkeypatch.setattr(p1, "_eligible", lambda rel: (target, ""))
+        monkeypatch.setattr(p1, "_backup", lambda t, s: backup)
+        monkeypatch.setattr(p1.checks, "ruff_command", lambda: ["ruff"])
+        monkeypatch.setattr(p1.subprocess, "run", lambda *a, **k: None)
+        monkeypatch.setattr(si, "_verify", lambda t: (["tests (test_m.py): 4 errors"], []))
+        f = Finding("lint:m", "low", "lint", "I001 sort", "sort", "m.py:3", "autofix")
+
+        assert p1.apply_autofixes([f], "stamp") == []
+        assert "rolled back" in f.evidence and "4 errors" in f.evidence
+        assert "rolled back" in p1._finding_line(f)
+
+    def test_an_ineligible_autofix_says_why(self, monkeypatch):
+        monkeypatch.setattr(p1, "_eligible", lambda rel: (None, "safety-critical file"))
+        monkeypatch.setattr(p1.checks, "ruff_command", lambda: ["ruff"])
+        f = Finding("lint:m", "low", "lint", "I001 sort", "sort", "m.py:3", "autofix")
+        p1.apply_autofixes([f], "stamp")
+        assert "autofix skipped: safety-critical file" in f.evidence
+
+    def test_junit_carries_the_real_cause_not_a_truncated_one(self, tmp_path):
+        xml = tmp_path / "r.xml"
+        xml.write_text(
+            '<testsuites><testsuite tests="3" failures="1" errors="1" skipped="0">'
+            '<testcase classname="tools.test_x.TestC" name="test_a" file="tools/test_x.py">'
+            '<failure message="AssertionError: listener must stay active">'
+            "E   assert None is not None</failure></testcase>"
+            '<testcase classname="tools.test_x" name="test_b" file="tools/test_x.py">'
+            '<error message="failed on setup with AttributeError: no media_sessions">'
+            "</error></testcase>"
+            '<testcase classname="tools.test_x" name="test_ok" file="tools/test_x.py"/>'
+            "</testsuite></testsuites>",
+            encoding="utf-8",
+        )
+        found, stats = p1.checks._failures_from_junit(xml)
+        assert stats == {"tests": 3, "failures": 1, "errors": 1, "skipped": 0, "passed": 1}
+        by_sig = {f.signature: f for f in found}
+        failed = by_sig["tests:tools/test_x.py::TestC::test_a"]
+        assert failed.title == "Failed: tools/test_x.py::TestC::test_a"
+        assert "listener must stay active" in failed.evidence
+        errored = by_sig["tests:tools/test_x.py::test_b"]
+        assert errored.title.startswith("Error:") and "media_sessions" in errored.evidence
+
+    def test_the_suite_run_covers_the_root_tests_too(self, monkeypatch):
+        """`pytest tools/` skipped the 91 root-level tests entirely."""
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return SimpleNamespace(stdout="1 passed in 0.1s", returncode=0)
+
+        monkeypatch.setattr(p1.checks.subprocess, "run", fake_run)
+        p1.checks.check_tests()
+        assert "tools/" not in seen["cmd"] and "tools" not in seen["cmd"]
+        assert any(str(a).startswith("--junitxml=") for a in seen["cmd"])
+
+    def test_a_section_cap_is_stated_not_silent(self):
+        many = [Finding(f"l:{i}", "low", "lint", f"F401 x{i}", "", f"a.py:{i}") for i in range(65)]
+        lines = p1._listed(many)
+        assert len(lines) == p1._MAX_LISTED + 1
+        assert "5 more not listed" in lines[-1]
+
+    def test_changes_section_reports_new_resolved_and_a_shrinking_suite(self):
+        now = [Finding("lint:new", "low", "lint", "F841 fresh", "", "a.py:1")]
+        meta = {
+            "previous": {
+                "stamp": "20261101_120000",
+                "open": {"lint:old": "F401 gone", "lint:new_not": "x"},
+                "tests": {"tests": 9000},
+            },
+            "test_stats": {"tests": 8911},
+        }
+        text = "\n".join(p1._changes_section(now, meta))
+        assert "NEW since then (1)" in text and "F841 fresh" in text
+        assert "RESOLVED since then (2)" in text and "F401 gone" in text
+        assert "-89" in text and "FEWER tests" in text
+
+    def test_first_cycle_has_nothing_to_compare(self):
+        assert "First recorded cycle" in "\n".join(p1._changes_section([], {}))
+
+    def test_the_full_report_states_scope_timing_and_cap(self):
+        meta = {
+            "doctor": "READY",
+            "tests": "1 failed, 5 passed",
+            "test_stats": {"tests": 6, "passed": 5, "failures": 1, "errors": 0, "skipped": 0},
+            "logs_as_of": "2026-11-14T17:39:10",
+            "spy_insights": 0,
+            "suppressed": [],
+        }
+        report = p1._render([], meta, [], [], datetime(2026, 11, 14, 17, 39, 6))
+        assert "`tools/` + repo root" in report and "6 run — 5 passed, 1 failed" in report
+        assert "24 h runtime-log scan ran at 2026-11-14 17:39:10" in report
+        assert "## Since the previous cycle" in report
+
+    # ── Era can find and read the report ─────────────────────────────────────
+    def _reports(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(p1, "REPORT_DIR", tmp_path)
+        (tmp_path / "protocol_one_20261101_090000.md").write_text(
+            "# old\n\n**State: STABLE.**\n", encoding="utf-8"
+        )
+        (tmp_path / "protocol_one_20261114_173906.md").write_text(
+            "# Protocol One — cycle\n\n**State: NEEDS ATTENTION — unresolved errors.** x\n\n"
+            "## Detected errors — still open\n- **high** the real one\n\n"
+            "## Potential risks — review only (not auto-fixed)\n- **low** a risk\n",
+            encoding="utf-8",
+        )
+        # A confirm report and the extracted dump must never be mistaken for a cycle.
+        (tmp_path / "protocol_one_confirm_20261115_000000.md").write_text("c", encoding="utf-8")
+        (tmp_path / "protocol_one_20261115_000000_extracted.txt").write_text("e", encoding="utf-8")
+
+    def test_the_latest_cycle_report_is_found(self, tmp_path, monkeypatch):
+        self._reports(tmp_path, monkeypatch)
+        assert p1.latest_report_path().name == "protocol_one_20261114_173906.md"
+
+    def test_no_report_is_said_plainly(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(p1, "REPORT_DIR", tmp_path)
+        assert "No Protocol One report exists yet" in p1.read_report()
+
+    def test_read_report_returns_one_section_with_age_and_currency(self, tmp_path, monkeypatch):
+        self._reports(tmp_path, monkeypatch)
+        monkeypatch.setattr(p1, "_changed_since", lambda then: 7)
+        text = p1.read_report("errors")
+        assert "protocol_one_20261114_173906.md" in text and "written 2026-11-14 17:39" in text
+        assert "7 source file(s) have been edited since" in text
+        assert "the real one" in text and "a risk" not in text
+
+    def test_read_report_says_when_nothing_changed(self, tmp_path, monkeypatch):
+        self._reports(tmp_path, monkeypatch)
+        monkeypatch.setattr(p1, "_changed_since", lambda then: 0)
+        assert "still current" in p1.read_report()
+
+    def test_unknown_section_lists_the_valid_ones(self, tmp_path, monkeypatch):
+        self._reports(tmp_path, monkeypatch)
+        assert "Available:" in p1.read_report("nonsense")
+
+    def test_long_reports_are_cut_with_a_pointer_to_sections(self, tmp_path, monkeypatch):
+        self._reports(tmp_path, monkeypatch)
+        monkeypatch.setattr(p1, "_changed_since", lambda then: 0)
+        assert "ask for one section" in p1.read_report(max_chars=60)
+
+    def test_status_now_points_at_the_report(self, tmp_path, monkeypatch):
+        self._reports(tmp_path, monkeypatch)
+        out = p1.protocol_status()
+        assert "protocol_one_20261114_173906.md" in out and "action=report" in out
+        assert "NEEDS ATTENTION" in out
+
+    def test_report_is_a_declared_read_only_action(self):
+        from app.tool_declarations import TOOL_DECLARATIONS
+        from core.action_registry import canonicalize_tool_call
+        from core.safety_guard import classify_action
+
+        decl = next(d for d in TOOL_DECLARATIONS if d["name"] == "protocol_one")
+        assert "action=report" in decl["description"]
+        assert "section" in decl["parameters"]["properties"]
+        assert canonicalize_tool_call("protocol_one", {"action": "report"})[0] == "protocol_one"
+        verdict = classify_action("protocol_one", {"action": "report"})
+        assert verdict["risk_level"] == "LOW" and not verdict["requires_confirmation"]

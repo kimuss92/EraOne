@@ -6,8 +6,10 @@ import subprocess
 import time
 from pathlib import Path
 
+from core.hotkeys import resolve_keys, send_hotkey, send_key
 from core.utils import get_api_key, get_os, is_windows
 from core.win_subprocess import NO_WINDOW
+from core.workstation_lock import lock_workstation
 
 _OS = get_os()
 
@@ -123,7 +125,7 @@ def _route_named_device(action: str, params: dict, value) -> str | None:
         return None
     from actions.audio_control import audio_control
 
-    return audio_control(
+    reply = audio_control(
         {
             "action": _DEVICE_ACTIONS[action],
             "device": device,
@@ -132,6 +134,9 @@ def _route_named_device(action: str, params: dict, value) -> str | None:
             "step": params.get("step"),
         }
     )
+    # computer_settings answers in text; audio_control may hand back its verified
+    # read-back result (PF-030). The text is the same read-back.
+    return getattr(reply, "message", reply)
 
 
 def _pycaw_endpoint_volume():
@@ -1089,9 +1094,10 @@ def take_screenshot():
 
 
 def lock_screen():
-    pyautogui.hotkey("win", "l") if is_windows() else subprocess.run(
-        ["pmset", "displaysleepnow"], capture_output=True
-    )
+    # Never inject Win+L: Windows ignores it and nothing reports the miss.
+    if is_windows():
+        return lock_workstation()
+    subprocess.run(["pmset", "displaysleepnow"], capture_output=True)
 
 
 def open_system_settings():
@@ -1801,24 +1807,13 @@ def computer_settings(
 
     # Map generic computer_control actions to existing primitives
     if action in {"press", "press_key", "key_press"}:
-        key = str(value or params.get("key", "")).strip() or str(params.get("keys", "")).strip()
+        key = resolve_keys(params)
         if not key:
             return "No key specified."
-        press_key(key)
-        return f"Pressed: {key}"
+        return send_key(key, pyautogui)
 
     if action in {"hotkey", "hotkeys", "key_combo", "shortcut"}:
-        keys = str(value or params.get("keys", "")).strip() or str(params.get("key", "")).strip()
-        if not keys:
-            return "No hotkey specified."
-        # Expect either "ctrl+c" or "ctrl + c" style; pyautogui accepts separate args
-        key_parts = [k.strip() for k in re.split(r"\+", keys) if k.strip()]
-        if len(key_parts) < 2:
-            # Fallback to simple key press
-            press_key(keys)
-            return f"Pressed: {keys}"
-        pyautogui.hotkey(*key_parts)
-        return f"Hotkey fired: {keys}"
+        return send_hotkey(resolve_keys(params), pyautogui)
 
     if action == "connect_device":
         target = str(value or params.get("description", "")).strip()
@@ -1889,17 +1884,6 @@ def computer_settings(
         ):
             return bluetooth_off()
         return toggle_bluetooth()
-
-    if action in ("hotkey", "key_combo", "shortcut"):
-        raw = str(value or params.get("keys", "") or params.get("key", "")).strip()
-        if not raw:
-            return "No hotkey specified."
-        parts = [k.strip() for k in re.split(r"[+\s]+", raw) if k.strip()]
-        if len(parts) == 1:
-            pyautogui.press(parts[0])
-            return f"Pressed: {parts[0]}"
-        pyautogui.hotkey(*parts)
-        return f"Hotkey fired: {'+'.join(parts)}"
 
     if action in ("show_desktop", "minimize_all"):
         return show_desktop_robust()

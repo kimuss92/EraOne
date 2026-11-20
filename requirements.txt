@@ -28,6 +28,11 @@ youtube-transcript-api
 pywinauto; platform_system == "Windows"
 python-pptx
 python-docx
+openpyxl>=3.1,<4
+pypdf>=6,<7
+reportlab>=4,<5
+pefile>=2024.8.26
+qrcode[pil]>=8,<9
 pandas
 PyQt6
 PyQt6-WebEngine
@@ -55,3 +60,4 @@ pywin32; platform_system == "Windows"
 
 # Candidate verification
 ruff>=0.12,<1
+webrtcvad-wheels>=2.0.14.post1,<3

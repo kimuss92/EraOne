@@ -55,6 +55,23 @@ def isolated(tmp_path, monkeypatch):
     return SimpleNamespace(prompt=prompt, decl=decl, tmp=tmp_path)
 
 
+def test_sync_respects_lazy_action_rules_and_missing_pack_fallback(isolated, monkeypatch):
+    from core import prompt_packs
+
+    isolated.prompt.write_text("Use gmail_control to read mail.\n", encoding="utf-8")
+    isolated.decl.write_text(
+        _decls(_tool("gmail_control", actions=["read", "watch_start"], enum=True)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(prompt_packs, "load", lambda name: "Use watch_start to watch mail.")
+    z.sync(isolated.prompt, isolated.decl)
+    assert "watch_start" not in isolated.prompt.read_text(encoding="utf-8")
+    assert not z.sync(isolated.prompt, isolated.decl).written
+    monkeypatch.setattr(prompt_packs, "load", lambda name: "")
+    z.sync(isolated.prompt, isolated.decl)
+    assert "watch_start" in isolated.prompt.read_text(encoding="utf-8")
+
+
 class TestSync:
     def test_documents_only_what_the_hand_written_prompt_lacks(self, isolated):
         report = z.sync(isolated.prompt, isolated.decl)
@@ -83,6 +100,26 @@ class TestSync:
         report = z.sync(isolated.prompt, isolated.decl)
         assert report.modified == ["spotify_control"] and report.removed == ["vault_note"]
         assert "vault_note" not in isolated.prompt.read_text(encoding="utf-8")
+
+    def test_a_tool_the_prompt_now_describes_is_not_reported_as_gone(self, isolated):
+        """Era said a working tool was removed because the report said "removed"."""
+        z.sync(isolated.prompt, isolated.decl)
+        text = isolated.prompt.read_text(encoding="utf-8")
+        isolated.prompt.write_text("Use vault_note to save and read.\n" + text, encoding="utf-8")
+        report = z.sync(isolated.prompt, isolated.decl)
+        assert report.removed == ["vault_note"] and report.covered == ["vault_note"]
+        assert "still fully available" in report.summary()
+        assert "no longer exist" not in report.summary()
+
+    def test_a_tool_that_really_left_is_reported_as_gone(self, isolated):
+        z.sync(isolated.prompt, isolated.decl)
+        isolated.decl.write_text(
+            _decls(_tool("spotify_control", actions=["play", "pause", "like", "shuffle"])),
+            encoding="utf-8",
+        )
+        report = z.sync(isolated.prompt, isolated.decl)
+        assert report.covered == []
+        assert "no longer exist (vault_note)" in report.summary()
 
     def test_block_disappears_when_prompt_covers_everything(self, isolated):
         z.sync(isolated.prompt, isolated.decl)

@@ -99,10 +99,13 @@ def audio_output() -> dict:
 
         route = voice_output.active_route() or {}
         pin = voice_output.get_pin() or {}
+        current = route.get("generation") == voice_output.generation()
         return {
-            "device": route.get("name") or pin.get("device") or "System default",
+            "device": (route.get("name") or None) if current else None,
+            "requested_device": pin.get("name"),
+            "routing_verified": voice_output.route_matches_pin(pin or None),
             "pinned": bool(pin),
-            "fallback": bool(route.get("fallback")),
+            "fallback": bool(route.get("fallback")) if current else False,
         }
     except Exception:
         return {"device": None, "pinned": False, "fallback": False}
@@ -152,6 +155,8 @@ def integrations() -> list[dict]:
 
 
 def capabilities() -> dict:
+    from app.hud.views import snapshot as view_registry
+
     try:
         from app.tool_declarations import TOOL_DECLARATIONS
     except Exception:
@@ -173,6 +178,7 @@ def capabilities() -> dict:
         "tools": tools,
         "skills": [{"id": k, "tools": v, "count": len(v)} for k, v in sorted(groups.items())],
         "integrations": integrations(),
+        "hud_views": view_registry(),
     }
 
 
@@ -193,6 +199,60 @@ def _mic_state(engine: Any) -> str:
         return "active"
     except Exception:
         return "unavailable"
+
+
+_last_mode: dict = {"mode": None, "kind": None}
+
+
+def _reason_kind(why: str) -> str:
+    """The reason without its ticking numbers ("window open, 23s left" ->
+    "window open"), so a countdown never floods the log."""
+    return why.split(",")[0].strip()
+
+
+def listening_mode(engine: Any) -> str:
+    """Read the engine's real window; never start or re-anchor one for the HUD."""
+    mode, why = _listening_mode_and_reason(engine)
+    kind = _reason_kind(why)
+    if mode != _last_mode["mode"] or kind != _last_mode.get("kind"):
+        # PF-040: every change of mode OR of reason is logged, so "inactivity
+        # never came" is traced even while the mode stays "active" (window
+        # open -> busy: processing; dev-review).
+        _last_mode["mode"] = mode
+        _last_mode["kind"] = kind
+        try:
+            from core.logger import log_event, main_logger
+
+            log_event(main_logger, "listening.mode", "INFO", mode=mode, reason=why)
+        except Exception:
+            pass
+    return mode
+
+
+def _listening_mode_and_reason(engine: Any) -> tuple[str, str]:
+    if engine is None:
+        return "unavailable", "no engine"
+    try:
+        mic = _mic_state(engine)
+        if mic != "active":
+            return mic, "mic"
+        state = getattr(engine, "_listening", None)
+        if state is None:
+            return "unavailable", "no listening state yet"
+        if state.window_open():
+            return "active", f"window open, {state.session_remaining_s():.0f}s left"
+        from app.era_live.audio import AudioIOMixin
+
+        reason = (
+            AudioIOMixin._busy_reason(engine)
+            if isinstance(engine, AudioIOMixin)
+            else ("busy" if engine._attention_keep_open() else None)
+        )
+        if reason:
+            return "active", f"busy: {reason}"
+        return "inactive", "window expired"
+    except Exception as e:
+        return "unavailable", f"{type(e).__name__}"
 
 
 def health(server: Any, engine: Any) -> dict:
@@ -226,6 +286,7 @@ def status(server: Any, engine: Any) -> dict:
         },
         "voice": voice_providers(engine),
         "mic": _mic_state(engine),
+        "listeningMode": listening_mode(engine),
         "voiceLock": _voice_lock(),
         "audioOutput": audio_output(),
         "tools": {"count": tools["count"], "active": hud.active_tools()},
@@ -245,11 +306,27 @@ def _voice_lock() -> bool | None:
         return None
 
 
+def _fabric_health() -> list[dict]:
+    """Era Fabric F1 breakers (core/fabric/health.py); [] when the fabric is absent."""
+    try:
+        from core.fabric import health
+
+        return health.snapshot()
+    except Exception:
+        return []
+
+
 def diagnostics(server: Any, engine: Any) -> dict:
+    from core.tool_health import snapshot as tool_health
+    from crew.reliability import snapshot as crew_health
+
     return {
         "status": status(server, engine),
         "latency": hud.latency(),
         "failures": hud.failures(),
+        "toolHealth": tool_health(),
+        "crewHealth": crew_health(),
+        "fabricHealth": _fabric_health(),
         "recentEvents": hud.recent_events(60),
         "websocket": {"clients": server.client_count() if hasattr(server, "client_count") else 0},
         "process": {"pid": os.getpid(), "python": platform.python_version(), "os": os_name()},

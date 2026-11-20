@@ -263,8 +263,17 @@ class ClaudeVoiceMixin:
             return
         while not self._shutdown_requested and not self._go_away_event.is_set():
             await asyncio.sleep(1.0)
-            if self._standby_active or getattr(self, "_mic_muted", False):
+            if (self._standby_active or getattr(self, "_mic_muted", False)) and not getattr(
+                self.live_health, "pending_text", False
+            ):
                 self.live_health.reset()  # nobody is expected to be answered
+                continue
+            from app.codemode_runtime import owns_reply
+
+            if getattr(self, "_tools_in_flight", 0) > 0 or owns_reply():
+                # These lanes have their own deadlines and outcome reporting.
+                # Renewing here could interrupt a legitimate gated action.
+                self.live_health.note_working()
                 continue
             verdict = self.live_health.verdict()
             if verdict is None:
@@ -276,6 +285,43 @@ class ClaudeVoiceMixin:
                 kind=verdict.kind,
                 detail=verdict.detail,
             )
+            from core.vad import voice_settings
+
+            if voice_settings().get("prefer_gemini_reconnect", True):
+                # Recover Gemini rather than changing the user's chosen brain.
+                log_event(
+                    main_logger,
+                    "engine.gemini.unresponsive",
+                    "WARNING",
+                    kind=verdict.kind,
+                    detail=verdict.detail,
+                    recovery="reconnect",
+                )
+                ui = getattr(self, "ui", None)
+                if ui is not None:
+                    ui.write_log(
+                        "SYS: Gemini stopped answering. Reconnecting now; "
+                        "please repeat your last request after reconnection."
+                    )
+                if verdict.kind in ("mute", "undelivered"):
+                    # A live transport can preserve a stuck turn indefinitely.
+                    # Start fresh with local recap/memory, without replaying a
+                    # command that may already have performed side effects.
+                    turn = getattr(self, "live_turn", None)
+                    if turn is not None:
+                        turn.note_interrupted()
+                    flush = getattr(self, "_flush_audio_in_queue", None)
+                    if callable(flush):
+                        flush()
+                    manager = getattr(self, "session_manager", None)
+                    if manager is not None:
+                        manager.clear_token()
+                        manager.save_to_disk()
+                    # A final old-socket token can arrive before cancellation.
+                    # Clear it again at the next connect boundary.
+                    self._fresh_session_requested = True
+                self._go_away_event.set()
+                return
             if self.enter_claude_voice(verdict.kind, verdict.detail):
                 return
             # Unavailable: don't re-judge the same silence. reset() keeps the

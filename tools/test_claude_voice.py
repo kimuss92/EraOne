@@ -48,6 +48,13 @@ class Clock:
 LOUD = VOICE_RMS * 4
 
 
+@pytest.fixture(autouse=True)
+def legacy_claude_recovery_policy(monkeypatch):
+    # This suite verifies the optional Claude policy, independently of the
+    # user's current Gemini-first preference.
+    monkeypatch.setattr("core.vad.voice_settings", lambda: {"prefer_gemini_reconnect": False})
+
+
 def speak(health, clock, seconds, rms=LOUD):
     """Feed `seconds` of speech in 100 ms blocks, advancing the clock with it."""
     for _ in range(int(seconds * 10)):
@@ -139,6 +146,7 @@ def test_a_transcript_clears_the_deaf_suspicion():
     c.advance(5)
     h.note_heard()  # Gemini transcribed it after all — just slowly
     h.note_reply()
+    h.note_delivered()
     c.advance(60)
     assert h.verdict() is None
 
@@ -161,6 +169,7 @@ def test_an_answer_clears_mute():
     h.note_heard()
     c.advance(5)
     h.note_reply()
+    h.note_delivered()
     c.advance(60)
     assert h.verdict() is None
 
@@ -682,9 +691,18 @@ def _main_tree():
 def _run_source():
     import ast
 
-    run = next(
-        n for n in ast.walk(_main_tree()) if isinstance(n, ast.AsyncFunctionDef) and n.name == "run"
-    )
+    cls = next(n for n in _main_tree().body if isinstance(n, ast.ClassDef) and n.name == "EraLive")
+    methods = {n.name: n for n in cls.body if isinstance(n, ast.AsyncFunctionDef)}
+    run = methods["run"]
+    if "_run_local_session" in methods:
+        assert any(
+            isinstance(n, ast.Await)
+            and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Attribute)
+            and n.value.func.attr == "_run_local_session"
+            for n in ast.walk(run)
+        ), "The lifecycle wrapper must await the local conversation loop."
+        run = methods["_run_local_session"]
     return ast.unparse(run)
 
 
@@ -1257,6 +1275,58 @@ def test_the_reconnect_order_closes_the_claude_window(monkeypatch):
     asyncio.run(era._local_on_utterance("reconnect", "en", 0.0))
     assert era._claude_until == 0.0, "left open, 'reconnect' would re-enter Claude at once"
     assert era._local_exit.is_set()
+
+
+@pytest.mark.parametrize("order", ["switch to Gemini voice", "Era, use cloud voice", "use gemini"])
+def test_gemini_voice_order_reconnects_even_when_preference_is_already_gemini(monkeypatch, order):
+    from core.voice_mode import VOICE_CFG
+
+    era, played = _claude_era(monkeypatch)
+    modes = []
+    monkeypatch.setattr(VOICE_CFG, "mode", "gemini_audio")
+    monkeypatch.setattr(VOICE_CFG, "set_mode", lambda mode: modes.append(mode))
+    asyncio.run(era._local_on_utterance(order, "en", 0.0))
+    assert era._local_exit.is_set() and era._claude_until == 0
+    assert modes == ["gemini"]
+    assert era._local_turn_task is None and played == []
+
+
+@pytest.mark.parametrize("handler", ["typed", "tool"])
+def test_gemini_switch_handlers_report_retry_instead_of_already_active(monkeypatch, handler):
+    import main
+    from app.era_live.tool_dispatch import ToolDispatchMixin
+    from core.voice_mode import VOICE_CFG
+
+    era, _ = _claude_era(monkeypatch)
+    logs = []
+    era.ui.write_log = logs.append
+    monkeypatch.setattr(VOICE_CFG, "mode", "gemini_audio")
+    monkeypatch.setattr(VOICE_CFG, "set_mode", lambda mode: mode)
+    if handler == "typed":
+        main.EraLive._apply_voice_switch(era, "gemini")
+    else:
+        result = ToolDispatchMixin._handle_set_voice(era, {"voice": "gemini"})
+        assert "not connected" in result and "reconnection" in result
+    assert era._local_exit.is_set() and era._claude_until == 0
+    assert any("retrying" in line for line in logs)
+    assert not any("Already" in line for line in logs)
+
+
+def test_cloud_retry_from_ui_thread_schedules_exit_on_runtime_loop(monkeypatch):
+    era, _ = _claude_era(monkeypatch)
+    scheduled = []
+    era._loop = SimpleNamespace(is_running=lambda: True, call_soon_threadsafe=scheduled.append)
+    assert era.request_gemini_reconnect()
+    assert not era._local_exit.is_set() and era._claude_until > 0
+    scheduled[0]()
+    assert era._local_exit.is_set() and era._claude_until == 0
+
+
+def test_cloud_retry_does_not_touch_a_live_gemini_session(monkeypatch):
+    era, _ = _claude_era(monkeypatch)
+    era._local_mode_active = False
+    assert not era.request_gemini_reconnect()
+    assert not era._local_exit.is_set() and era._claude_until > 0
 
 
 def test_the_claude_reasons_have_their_own_announcement():

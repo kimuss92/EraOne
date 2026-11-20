@@ -1,0 +1,2912 @@
+
+[Extraction tests]
+  --- extract_declared_tool_name_list ---
+  PASS: returns list
+  PASS: finds open_app
+  PASS: finds confirm_pending_confirmation
+  PASS: finds cancel_pending_confirmation
+  PASS: finds shutdown_era
+  PASS: finds all 8 tools
+  --- extract_tool_names_from_declarations ---
+  PASS: returns set
+  PASS: open_app in set
+  --- extract_tool_names_from_main_dispatch ---
+  PASS: captures close_era from tuple
+  PASS: captures exit_era from tuple
+  PASS: captures shutdown_era
+  PASS: captures open_app
+  PASS: captures enter_standby
+  PASS: captures save_memory
+  PASS: captures generated_code
+  --- extract_tool_names_from_executor_dispatch ---
+  PASS: captures open_app
+  PASS: captures generated_code
+  PASS: captures confirm_pending_confirmation
+  --- extract_tool_risk_map ---
+  PASS: confirm_pending_confirmation = LOW
+  PASS: cancel_pending_confirmation = LOW
+  PASS: send_message = HIGH
+  PASS: shutdown_era = LOW
+  PASS: close_era = LOW
+  PASS: exit_era = LOW
+  PASS: open_app = LOW
+  PASS: media_coordinator = LOW
+  PASS: netflix_control = LOW
+  PASS: spotify_control = LOW
+  --- _extract_bracket_section ---
+  PASS: nonexistent marker returns None
+  PASS: extracts between brackets
+  --- _extract_function_body ---
+  PASS: nonexistent function returns None
+  PASS: extracts function body
+  PASS: body is single line
+  --- Empty source tests ---
+  PASS: empty declarations list
+  PASS: empty declarations set
+  PASS: empty main dispatch
+  PASS: empty executor dispatch
+  PASS: empty risk map
+
+[Validation tests]
+  --- Clean registry ---
+  PASS: clean registry: no ERROR issues
+  --- Missing confirmation tools ---
+  PASS: missing confirm tools produces ERROR
+  --- send_message wrong risk ---
+  PASS: send_message wrong risk produces ERROR
+  --- Shutdown family wrong risk ---
+  PASS: shutdown family wrong risk produces ERROR
+  --- Duplicate declarations ---
+  PASS: duplicate declarations produces ERROR
+  --- Declared tool with no handler ---
+  PASS: phantom tool produces ERROR
+  --- Main-only tools produce WARN ---
+  PASS: main-only tools produce WARN
+  --- Executor-only tools produce WARN ---
+  PASS: executor-only tools produce WARN
+  --- Alias-only tools do NOT produce WARN (intentional registry design) ---
+  PASS: alias-only tools do NOT produce WARN
+  --- Alias mapping: close_era -> shutdown_era ---
+  PASS: close_era not required in TOOL_DECLARATIONS
+  PASS: close_era mapped to shutdown_era
+  PASS: exit_era mapped to shutdown_era
+  --- Internal tool: generated_code ---
+  PASS: generated_code not mentioned in executor-only WARN
+  PASS: generated_code is listed in _INTERNAL_TOOLS
+  --- Missing safety produces INFO ---
+  PASS: missing safety produces INFO
+
+[On-disk extraction tests]
+  PASS: on-disk declarations non-empty
+  PASS: on-disk has open_app
+  PASS: on-disk has send_message
+  PASS: on-disk has shutdown_era
+  PASS: on-disk main dispatch non-empty
+  PASS: on-disk main has open_app
+  PASS: on-disk main has enter_standby
+  PASS: on-disk executor dispatch non-empty
+  PASS: on-disk executor has open_app
+  PASS: on-disk safety non-empty
+  PASS: on-disk send_message HIGH
+  PASS: on-disk shutdown_era LOW
+  PASS: on-disk confirm_pending LOW
+  PASS: close_era NOT in TOOL_DECLARATIONS
+  PASS: exit_era NOT in TOOL_DECLARATIONS
+  PASS: shutdown_era IS in TOOL_DECLARATIONS
+  PASS: shutdown_era LOW safety
+  PASS: generated_code NOT in TOOL_DECLARATIONS
+  PASS: generated_code in _INTERNAL_TOOLS
+  --- Full on-disk validation ---
+  PASS: no ERROR issues in real registry
+  PASS: generated_code does not produce executor-only WARN
+
+  Registry health: 10 issues (0 errors, 1 warnings, 9 info)
+  WARNING categories:
+    [main_only] Tools dispatchable in main.py but missing from executor.py: audio_control, autonomous_development, capability_check, community_manager, crew, gmail_control, manage_offer, manage_preference, manage_schedule, protocol_one, protocol_zero, record_feedback, run_feature, scheduled_task, self_diagnosis, self_heal, self_improve, set_microphone, set_voice, set_wake_word, spotify_bridge, vault_bridge, vault_note, visual_engine, voice_lock
+  INFO categories:
+    [no_safety] Tool 'audio_control' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'capability_check' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'community_manager' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'manage_offer' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'manage_schedule' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'set_voice' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'set_wake_word' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'spotify_bridge' has no explicit safety classification (defaults to LOW)
+    [no_safety] Tool 'voice_lock' has no explicit safety classification (defaults to LOW)
+
+========================================
+Results: 74 passed, 0 failed out of 74
+All tests passed.
+========================================
+============================================================
+  Logging System Tests
+============================================================
+
+[Sensitive keys masked]
+  [PASS] password masked
+  [PASS] token masked
+  [PASS] api_key masked
+
+[Normal keys pass through]
+  [PASS] receiver preserved
+  [PASS] app_name preserved
+
+[Long values truncated]
+  [PASS] long value truncated
+  [PASS] ends with ellipsis
+
+[Message text gets length]
+  [PASS] message_text preserved
+  [PASS] message_text_length added
+
+[Long message text truncated]
+  [PASS] long message_text truncated
+  [PASS] message_length tracks original
+
+[Attachments summarized]
+  [PASS] attachments summarized
+
+[Empty attachments]
+  [PASS] empty attachments
+
+[Original dict not mutated]
+  [PASS] original dict unchanged
+
+[Sanitize list of dicts]
+  [PASS] list item password masked
+  [PASS] list item token masked
+  [PASS] list item name preserved
+
+[Sensitive key detection]
+  [PASS] password is sensitive
+  [PASS] PASSWORD is sensitive
+  [PASS] api_key is sensitive
+  [PASS] auth_token is sensitive
+  [PASS] name is not sensitive
+  [PASS] receiver is not sensitive
+
+[Truncate short string]
+  [PASS] short string unchanged
+
+[Truncate long string]
+  [PASS] long truncated
+  [PASS] long ends with ...
+
+[Truncate exact length]
+  [PASS] exact max_len preserved
+
+[Logger propagate=False]
+  [PASS] propagate is False
+
+[Logger does not pollute root]
+  [PASS] root handlers unchanged
+
+[ERA_LOG_DIR env var]
+  [PASS] log_dir uses ERA_LOG_DIR
+  [PASS] log_dir exists
+
+[Log file is written]
+  [PASS] log file exists
+  [PASS] log file not empty
+  [PASS] line has ts
+  [PASS] line has level
+  [PASS] line has event
+  [PASS] line has tool
+
+[Every line is valid JSON]
+  [PASS] every line is valid JSON
+  [PASS] expected line count
+
+[Log rotation]
+  [PASS] active log exists
+  [PASS] backup count <= 6
+
+[send_message params truncated]
+  [PASS] receiver preserved
+  [PASS] message_text truncated
+  [PASS] message_text_length tracks original
+  [PASS] platform preserved
+
+[Logger no root handlers]
+  [PASS] root handlers not polluted
+
+[Module loggers exist]
+  [PASS] main_logger exists
+  [PASS] executor_logger exists
+  [PASS] memory_logger exists
+
+[safe_log_path relative]
+  [PASS] path under cwd is relative
+
+[safe_log_path forward slash]
+  [PASS] uses forward slash
+
+[safe_log_path outside repo]
+  [PASS] outside repo shows tagged filename
+
+[safe_log_path rejects user home]
+  [PASS] nested outside leaks no directory
+  [PASS] nested outside leaks no home path
+
+[safe_log_path external is distinguishable]
+  [PASS] test fixture is tagged external
+  [PASS] real memory file keeps its directory
+  [PASS] the two are distinguishable
+
+============================================================
+Logging tests: 27 passed, 0 failed out of 27
+============================================================
+[2026-10-13 10:48:01] [WARNING] [era_one.memory] {"ts": "2026-10-13T09:48:01.063Z", "level": "WARNING", "logger": "era_one.memory", "event": "memory.jsonl.repaired", "path": "<external>/test.jsonl", "backup": "<external>/test.1791884881062.13252.0003.jsonbak", "invalid_lines": 1}
+[2026-10-13 10:48:01] [WARNING] [era_one.memory] {"ts": "2026-10-13T09:48:01.083Z", "level": "WARNING", "logger": "era_one.memory", "event": "memory.jsonl.repaired", "path": "<external>/test.jsonl", "backup": "<external>/test.1791884881081.13252.0004.jsonbak", "invalid_lines": 2}
+[2026-10-13 10:48:01] [WARNING] [era_one.memory] {"ts": "2026-10-13T09:48:01.112Z", "level": "WARNING", "logger": "era_one.memory", "event": "memory.backup.recovered", "path": "<external>/test.json", "backup": "<external>/test.1791884881102.13252.0005.jsonbak"}
+[2026-10-13 10:48:01] [ERROR] [era_one.memory] {"ts": "2026-10-13T09:48:01.416Z", "level": "ERROR", "logger": "era_one.memory", "event": "memory.corruption.detected", "path": "<external>/test.json", "status": "CORRUPTED_NO_BACKUP"}
+[2026-10-13 10:48:01] [WARNING] [era_one.memory] {"ts": "2026-10-13T09:48:01.484Z", "level": "WARNING", "logger": "era_one.memory", "event": "memory.corruption.detected", "path": "<external>/test.json", "status": "CORRUPTED_RECOVERED", "backup": "<external>/test.1791884881423.13252.0003.jsonbak"}
+[2026-10-13 10:48:06] [ERROR] [era_one.memory] {"ts": "2026-10-13T09:48:06.587Z", "level": "ERROR", "logger": "era_one.memory", "event": "memory.corruption.detected", "path": "<external>/long_term.json", "status": "CORRUPTED_NO_BACKUP"}
+
+[safe_write_json] Basic write...
+  PASS: file exists
+  PASS: content correct
+
+[safe_write_json] Overwrite creates backup...
+  PASS: backup exists
+  PASS: backup has old data
+  PASS: current has new data
+
+[safe_write_json] Nested directories created...
+  PASS: nested dirs created
+
+[safe_write_json] Write None...
+  PASS: None is serialized as null
+
+[safe_write_json] Write list...
+  PASS: list round-trips
+
+[safe_write_jsonl] Basic write...
+  PASS: file exists
+  PASS: two lines
+  PASS: line 1 valid
+  PASS: line 2 valid
+
+[safe_write_jsonl] Overwrite with backup...
+  PASS: backup exists
+  PASS: backup has old line
+
+[safe_append_jsonl] Append to new file...
+  PASS: file created
+  PASS: one line
+
+[safe_append_jsonl] Append multiple...
+  PASS: three lines
+
+[safe_append_jsonl] Repairs invalid lines...
+  PASS: no backup before append
+  PASS: backup created after repair
+  PASS: valid lines preserved + new
+  PASS: line 1 valid
+  PASS: line 2 valid
+  PASS: line 3 is new
+
+[safe_append_jsonl] All invalid preserved via backup...
+  PASS: backup created
+  PASS: backup preserves original
+  PASS: invalid lines removed
+  PASS: new line present
+
+[safe_append_jsonl] Empty file append...
+  PASS: append to empty file works
+
+[recover_from_backup] Recovery...
+  PASS: file is corrupted
+  PASS: recovery succeeded
+  PASS: recovered to first version
+
+[recover_from_backup] No backup...
+  PASS: no backup to recover
+
+[cleanup_backups] Keeps N most recent...
+  PASS: removed 1 old backups
+  PASS: kept 2 backups
+
+[cleanup_backups] Per-stem isolation...
+  PASS: alpha cleaned
+  PASS: beta cleaned
+  PASS: alpha has 1 backup
+  PASS: beta has 1 backup
+
+[backup uniqueness] Rapid writes produce unique filenames...
+  PASS: all 19 backup names unique under rapid writes
+
+[backup uniqueness] No backup overwrites (same-millisecond simulation)...
+  PASS: versioned backup returns 10 unique paths
+
+[backup log noise] memory.backup.created suppressed without env var...
+  PASS: backup.created not logged without env var
+
+[validate_json_file] OK...
+  PASS: status OK
+  PASS: file_size > 0
+
+[validate_json_file] MISSING...
+  PASS: status MISSING
+  PASS: file_size 0
+
+[validate_json_file] CORRUPTED_NO_BACKUP...
+  PASS: status CORRUPTED_NO_BACKUP
+  PASS: file_size > 0
+
+[validate_json_file] CORRUPTED_RECOVERED...
+  PASS: status CORRUPTED_RECOVERED
+  PASS: file recovered from backup
+
+[validate_json_file] List root is OK...
+  PASS: list root status OK
+
+[concurrent writes] Final file must be valid...
+  PASS: final file is valid JSON
+
+[rank_memory_entries] Ranked retrieval...
+  PASS: ranked: keyword match returns results
+  PASS: ranked: keyword match first
+  PASS: ranked: top_k respected
+  PASS: ranked: empty query returns stable order
+  PASS: ranked: empty query first by recency
+  PASS: ranked: empty memory no crash
+
+[score_memory_entry] Scoring...
+  PASS: score: keyword match scores higher
+  PASS: score: no crash on old entry
+  PASS: score: no crash on missing value
+  PASS: score: access_count bonus increases score
+  PASS: score: recency affects score
+  PASS: score: updated_at float works
+  PASS: score: result clamped 0-1
+
+[is_near_duplicate] Dedup detection...
+  PASS: dedup: exact duplicate
+  PASS: dedup: near duplicate
+  PASS: dedup: not similar
+  PASS: dedup: empty value
+  PASS: dedup: threshold higher should be stricter
+
+[find_duplicate_memory] In-memory dedup...
+  PASS: find_dup: same key verbatim restatement is a duplicate
+  PASS: find_dup: same key refined value is NOT a duplicate
+  PASS: find_dup: different key high sim
+  PASS: find_dup: different key low sim not merged
+
+[update_memory] Dedup integration...
+[Memory] Saved: ['notes']
+  PASS: dedup: first save works
+[Memory] Saved: ['notes']
+  PASS: dedup: same-key correction overwrites
+[Memory] Saved: ['notes']
+  PASS: dedup: genuinely new is saved
+  PASS: dedup: new value correct
+
+[compact_memory_preview] Preview formatting...
+  PASS: preview: returns string
+  PASS: preview: contains relevant result
+  PASS: preview: max 2000 chars
+  PASS: preview: empty memory returns empty
+  PASS: preview: truncates long values
+
+[format_memory_for_prompt_ranked] Ranked prompt formatting...
+  PASS: ranked prompt: non-empty for valid memory
+  PASS: ranked prompt: empty memory returns empty
+  PASS: ranked prompt: recent before older
+  PASS: ranked prompt: top_k=3 shows exactly 3 entries
+  PASS: ranked prompt: <= 2000 chars
+  PASS: ranked prompt: identity header values present
+  PASS: ranked prompt: Preferences: header present
+  PASS: ranked prompt: invalid timestamps no crash
+  PASS: ranked prompt: uses provided memory, no disk reload
+
+[list_memory_keys] Tests with TemporaryDirectory...
+  PASS: list: empty memory returns (empty)
+  PASS: list: contains notes category
+  PASS: list: contains preferences category
+  PASS: list: contains key color
+  PASS: list: contains key food
+  PASS: list: does NOT expose values
+  PASS: list: filtered category header
+  PASS: list: filtered has theme key
+  PASS: list: filtered excludes notes keys
+  PASS: list: invalid category returns error
+  PASS: list: empty category returns (empty)
+
+[list_memory_keys 14.1] Pagination and counts...
+  PASS: 14.1: pagination shows 50 of 60
+  PASS: 14.1: continuation hint offset 50
+  PASS: 14.1: total count shown
+  PASS: 14.1: values not exposed in pagination
+  PASS: 14.1: full=True shows all 60
+  PASS: 14.1: full=True no pagination needed
+  PASS: 14.1: full=True values not exposed
+  PASS: 14.1: offset 30 shows cat_b only
+  PASS: 14.1: offset 30 has cat_b
+  PASS: 14.1: offset pagination hint offset 50
+  PASS: 14.1: show_counts=False hides Total
+  PASS: 14.1: full='true' works
+  PASS: 14.1: string limit=10 works
+  PASS: 14.1: string offset=5 works
+  PASS: 14.1: show_counts='false' hides Total
+  PASS: 14.1: string params values not exposed
+
+[list_memory_keys 14.1] Legacy/unknown categories...
+  PASS: 14.1: known category notes listed
+  PASS: 14.1: known extra category user_feedback listed
+  PASS: 14.1: unknown category other_notes listed
+  PASS: 14.1: notes before user_feedback
+  PASS: 14.1: user_feedback before other_notes
+  PASS: 14.1: filter legacy user_feedback
+  PASS: 14.1: legacy filter shows key rating
+  PASS: 14.1: legacy filter no values
+  PASS: 14.1: invalid category rejected
+  PASS: 14.1: legacy listing no values
+
+[forget_memory 14.1] Legacy category acceptance...
+  PASS: 14.1: forget legacy category works
+  PASS: 14.1: forget legacy result path
+  PASS: 14.1: forget non-existent legacy rejected
+  PASS: 14.1: forget still rejects wildcard *
+  PASS: 14.1: forget still rejects wildcard all
+
+[forget_memory] Harden input validation...
+  PASS: forget: empty key returns error
+  PASS: forget: empty category returns error
+
+[forget_memory] Invalid category...
+  PASS: forget: invalid category
+
+[forget_memory] Wildcard rejection...
+  PASS: forget: wildcard * rejected
+  PASS: forget: wildcard all rejected
+  PASS: forget: wildcard **all** rejected
+  PASS: forget: wildcard everything rejected
+
+[forget_memory] Integration with TemporaryDirectory...
+  PASS: forget: existing key returns Forgotten
+  PASS: forget: result includes category/key
+  PASS: forget: color key removed
+  PASS: forget: food key preserved
+  PASS: forget: preferences intact
+  PASS: forget: non-existent returns Not found
+  PASS: forget: JSON file remains valid
+  PASS: forget: backup created
+
+[V9A] Stable memory save writes to long_term.json...
+  PASS: V9A: stable save writes key
+
+[V9A] Transient key last_media_source blocked...
+  PASS: V9A: last_media_source is transient
+  PASS: V9A: last_media_title is transient
+  PASS: V9A: last_media_platform is transient
+  PASS: V9A: preferred_browser is NOT transient
+  PASS: V9A: voice_style is NOT transient
+  PASS: V9A: user_name is NOT transient
+
+[V9A] Transient key last_media_title under wishes blocked...
+[Memory] Blocked transient key: wishes/last_media_title
+  PASS: V9A: transient wishes/last_media_title blocked
+
+[V9A] agent/executor.py path blocks transient keys...
+  PASS: V9A: executor path blocks last_media_source
+
+[V9A] Every allowed long-term write creates a backup...
+  PASS: V9A: backup created on save
+
+[V9A] Every allowed write creates audit entry...
+  PASS: V9A: audit entry created on save
+
+[V9A] forget/delete creates backup and audit entry...
+  PASS: V9A: backup created on forget
+  PASS: V9A: audit entry created on forget
+
+[V9A] _trim_to_limit creates backup and audit entries...
+[Memory] Trimmed notes/trim_key_0
+[Memory] Trimmed notes/trim_key_1
+[Memory] Trimmed notes/trim_key_2
+[Memory] Trimmed notes/trim_key_3
+[Memory] Trimmed notes/trim_key_4
+[Memory] Trimmed notes/trim_key_5
+[Memory] Trimmed notes/trim_key_6
+[Memory] Trimmed notes/trim_key_7
+[Memory] Trimmed notes/trim_key_8
+[Memory] Trimmed notes/trim_key_9
+[Memory] Trimmed notes/trim_key_10
+[Memory] Trimmed notes/trim_key_11
+[Memory] Trimmed notes/trim_key_12
+[Memory] Trimmed notes/trim_key_13
+[Memory] Trimmed notes/trim_key_14
+[Memory] Trimmed notes/trim_key_15
+[Memory] Trimmed notes/trim_key_16
+[Memory] Trimmed notes/trim_key_17
+[Memory] Trimmed notes/trim_key_18
+  PASS: V9A: backup created before trim
+  PASS: V9A: audit entry created on trim
+
+[V9A] dedup replacement creates audit entry...
+  PASS: V9A: audit entry created on dedup
+
+[V9A] append_feedback writes to feedback_memory.jsonl...
+  PASS: V9A: feedback file created
+  PASS: V9A: feedback file has 1 line
+  PASS: V9A: feedback has timestamp
+  PASS: V9A: feedback has user_text
+
+[V9A] Corrupt long_term.json recovery still works...
+[Memory] Load error: Expecting value: line 1 column 1 (char 0)
+  PASS: V9A: corrupt file returns empty memory (graceful)
+  PASS: V9A: corrupt file does not crash
+
+[V9A] run_all_checks remains READY (syntax check)...
+  PASS: V9A: run_all_checks.py compiles
+  PASS: V9A: memory_audit.py compiles
+  PASS: V9A: transient_filter.py compiles
+========================================
+[ToolResult] Testing ToolResult.from_any()...
+  PASS: from_any(True).success is True
+  PASS: from_any(False).success is False
+  PASS: from_any('Done').success is True
+  PASS: from_any('Error: failed').success is False
+  PASS: from_any(dict).success is True
+  PASS: from_any(fail dict).success is False
+  PASS: from_any(None).success is True
+  PASS: from_any(ToolResult) passthrough
+
+[safety_guard] Testing classify_action()...
+  PASS: file_controller delete requires confirmation
+  PASS: send_message requires confirmation
+  PASS: open_app does not require confirmation
+  PASS: file_controller delete in protected path is BLOCKED
+
+[verification] Testing verify_tool_result()...
+  PASS: verify_tool_result(ok) returns NOT_VERIFIED with no expected
+  PASS: verify_tool_result(fail) returns FAILED
+
+[ToolResult] Testing utility methods...
+  PASS: to_dict has success key
+  PASS: to_dict has message key
+  PASS: __bool__ returns success
+  PASS: __bool__ for failure
+  PASS: short_message truncates
+  PASS: ok().success is True
+  PASS: fail().success is False
+  PASS: fail().error is set
+
+========================================
+Results: 22 passed, 0 failed out of 22
+Execution layer diagnostics passed.
+[ToolResult] New field defaults...
+  PASS: verified defaults to False
+  PASS: verifier_name defaults to None
+  PASS: verification_message defaults to ''
+  PASS: to_dict includes verified
+  PASS: to_dict includes verifier_name
+  PASS: to_dict includes verification_message
+  PASS: append_verification_phrase appends not verified
+  PASS: append_verification_phrase unchanged when verified
+  PASS: append_verification_phrase unchanged when failed
+
+[action_verifiers] verify_action_result routing...
+  PASS: open_app verifier sets verified=True
+  PASS: open_app sets verifier_name
+  PASS: open_app sets verification_status=VERIFIED
+  PASS: open_app does not fail on 'could not locate' (open_app is lenient)
+  PASS: browser_control fails on 'Unknown action'
+  PASS: browser_control sets status FAILED
+  PASS: browser_control sets success=False
+  PASS: file_controller fails on 'Could not'
+  PASS: send_message fails on 'not installed'
+  PASS: computer_control fails on 'Unknown action'
+  PASS: computer_settings fails on 'missing'
+  PASS: web_search fails on 'No results'
+  PASS: weather fails on 'missing'
+  PASS: media verifier sets verified=True
+  PASS: unknown tool returns verified=False
+  PASS: unknown tool verifier_name is None
+  PASS: unknown tool has message about no verifier
+  PASS: verify_action_result short-circuits on failure
+
+[verification] verify_tool_result with tool kwarg...
+  PASS: verify_tool_result with tool routes to verifier
+  PASS: verify_tool_result with tool routes to web_search verifier
+  PASS: verify_tool_result without tool returns NOT_VERIFIED
+  PASS: verify_tool_result with callable expected
+
+========================================
+Verification layer: 31 passed, 0 failed out of 31
+All verification layer checks passed.
+
+[fc_args_to_dict] Testing arg extraction...
+  PASS: normal args to dict
+  PASS: args=None -> {}
+  PASS: missing args attr -> {}
+
+[tool_result_to_response_payload] Testing payload conversion...
+  PASS: success payload has result
+  PASS: success payload has success=True
+  PASS: success payload has duration_ms
+  PASS: success payload has risk_level
+  PASS: success payload has verification_status
+  PASS: fail payload success=False
+  PASS: fail payload error_type
+  PASS: fail payload error
+  PASS: blocked payload risk_level
+  PASS: confirm payload risk_level
+  PASS: confirm payload requires_confirmation
+  PASS: unknown tool payload error_type
+  PASS: unknown tool payload contains name
+  PASS: payload carries risk_level
+  PASS: payload carries requires_confirmation
+  PASS: payload carries verified
+  PASS: payload carries verification_status
+  PASS: large data excluded from payload
+
+[build_function_response] Testing response builder...
+  PASS: normal fc id
+  PASS: normal fc name
+  PASS: normal response result
+  PASS: normal response success
+  PASS: no silent flag for normal tool
+  PASS: save_memory fc id
+  PASS: save_memory response result
+  PASS: save_memory silent flag
+
+[classify_action] Integration tests...
+  PASS: open_app is LOW
+  PASS: web_search is LOW
+  PASS: weather_report is LOW
+  PASS: send_message is HIGH
+  PASS: send_message requires confirmation
+  PASS: shutdown_era is LOW
+  PASS: shutdown_era does NOT require confirmation
+  PASS: close_era is LOW
+  PASS: close_era does NOT require confirmation
+  PASS: exit_era is LOW
+  PASS: exit_era does NOT require confirmation
+  PASS: enter_standby is LOW
+  PASS: save_memory is LOW
+  PASS: unknown tool defaults to LOW
+  PASS: browser search is LOW
+
+[ToolResult -> payload] Simulated _execute_tool_result outputs...
+  PASS: unknown tool payload error_type
+  PASS: unknown tool payload success=False
+  PASS: blocked payload risk_level
+  PASS: blocked payload success=False
+  PASS: confirm required error_type
+  PASS: confirm required risk_level
+  PASS: all expected payload keys present
+
+[Dangerous actions] Confirmation still required...
+  PASS: computer shutdown requires confirmation
+  PASS: computer restart requires confirmation
+  PASS: file delete requires confirmation
+  PASS: send message requires confirmation
+
+[Confirmation tools] Testing safety classification...
+  PASS: confirm_pending_confirmation is LOW
+  PASS: confirm_pending_confirmation no confirmation
+  PASS: cancel_pending_confirmation is LOW
+  PASS: cancel_pending_confirmation no confirmation
+
+[TOOL_DECLARATIONS] Verifying new tool declarations exist...
+  PASS: TOOL_DECLARATIONS contains confirm_pending_confirmation
+  PASS: TOOL_DECLARATIONS contains cancel_pending_confirmation
+  PASS: both confirmation tools declared in TOOL_DECLARATIONS
+
+[ConfirmationManager] Testing request_confirmation...
+  PASS: shutdown_era LOW returns True
+  PASS: send_message HIGH unconfirmed returns False
+  PASS: send_message HIGH confirmed returns True
+  PASS: LOW risk returns True
+
+[record_tool_result] Verifying second arg is always a dict...
+  PASS: second arg is dict for normal fc
+  PASS: second arg contains expected key
+  PASS: second arg is dict for args=None
+  PASS: second arg is dict for missing args
+
+[cancel_pending_confirmation] Testing honest cancellation...
+  PASS: cancel with no pending -> no pending msg
+  PASS: cancel with active pending clears
+  PASS: after clear -> no pending
+
+[shutdown_era] Testing duplicate guard...
+  PASS: first shutdown returns normal
+  PASS: second shutdown returns already in progress
+  PASS: shutdown_era remains LOW
+  PASS: shutdown_era no confirmation
+  PASS: computer shutdown still requires confirmation
+  PASS: computer restart still requires confirmation
+
+[_safe_preview_value] Testing safe value formatting...
+  PASS: safe preview empty
+  PASS: safe preview normal
+  PASS: safe preview long truncated
+  PASS: safe preview long ends with ...
+  PASS: safe preview password masked
+  PASS: safe preview token masked
+  PASS: safe preview secret masked
+
+[_build_suggested_confirmation_question] Testing confirmation preview...
+  PASS: success returns empty
+  PASS: blocked returns empty
+  PASS: default question
+  PASS: send_message preview contains platform
+  PASS: send_message preview contains receiver
+  PASS: send_message preview contains message
+  PASS: long message truncated
+  PASS: sensitive field not leaked
+  PASS: file_controller preview contains action
+  PASS: file_controller preview contains name
+  PASS: computer_settings preview contains action
+  PASS: forget_memory preview contains category
+  PASS: forget_memory preview contains key
+  PASS: forget_memory preview does NOT leak value
+
+[retrieve_memory_context] Verifying tool declaration and safety...
+  PASS: TOOL_DECLARATIONS contains retrieve_memory_context
+  PASS: retrieve_memory_context classified as LOW
+  PASS: retrieve_memory_context no confirmation required
+  PASS: retrieve_memory_context reason mentions read-only
+  PASS: retrieve_memory: relevant result contains 'blue' or 'Blue'
+  PASS: retrieve_memory: result non-empty for matching query
+  PASS: retrieve_memory: no-match still returns entries (ranked, not filtered)
+  PASS: retrieve_memory: preview lines are bare 'category/key: value'
+  PASS: retrieve_memory: preview carries no decorative header
+
+[YouTube volume routing] Testing canonicalize_tool_call...
+  PASS: youtube_video volume_up stays youtube_video
+  PASS: youtube_video volume_up preserves action
+  PASS: youtube_video volume_up defaults amount to 10
+  PASS: youtube_video volume_up with custom amount
+  PASS: youtube_video volume_down stays youtube_video
+  PASS: youtube_video volume_down preserves action
+  PASS: youtube_video volume_down defaults amount to 10
+  PASS: generic volume_up goes computer_settings
+  PASS: generic volume_down goes computer_settings
+  PASS: youtube_volume_up spec exists
+  PASS: youtube_volume_up spec maps to youtube_video
+  PASS: youtube_volume_down spec exists
+  PASS: youtube_volume_down spec maps to youtube_video
+  PASS: generic volume_up spec maps to computer_settings
+  PASS: generic volume_down spec maps to computer_settings
+  PASS: volume_up spec tool is computer_settings (unchanged)
+  PASS: alias 'louder' routes to computer_settings volume_up
+  PASS: alias 'quieter' routes to computer_settings volume_down
+
+========================================
+Main tool bridge tests: 127 passed, 0 failed out of 127
+========================================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-w5l8g9p6
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 163 items
+
+tools/test_confirmation_flow.py::test_store_returns_confirmation_id PASSED [  0%]
+tools/test_confirmation_flow.py::test_get_with_valid_id PASSED           [  1%]
+tools/test_confirmation_flow.py::test_get_with_wrong_id PASSED           [  1%]
+tools/test_confirmation_flow.py::test_get_with_no_pending PASSED         [  2%]
+tools/test_confirmation_flow.py::test_confirm_returns_pending_and_clears PASSED [  3%]
+tools/test_confirmation_flow.py::test_confirm_with_wrong_id PASSED       [  3%]
+tools/test_confirmation_flow.py::test_confirm_with_no_pending PASSED     [  4%]
+tools/test_confirmation_flow.py::test_confirm_with_expired PASSED        [  4%]
+tools/test_confirmation_flow.py::test_cancel_returns_true_and_clears PASSED [  5%]
+tools/test_confirmation_flow.py::test_cancel_with_wrong_id PASSED        [  6%]
+tools/test_confirmation_flow.py::test_cancel_with_no_pending PASSED      [  6%]
+tools/test_confirmation_flow.py::test_is_pending_returns_true_when_active PASSED [  7%]
+tools/test_confirmation_flow.py::test_is_pending_returns_false_when_expired PASSED [  7%]
+tools/test_confirmation_flow.py::test_clear_removes_pending PASSED       [  8%]
+tools/test_confirmation_flow.py::test_expire_all_removes_expired PASSED  [  9%]
+tools/test_confirmation_flow.py::test_expire_all_noop_when_none_expired PASSED [  9%]
+tools/test_confirmation_flow.py::test_store_refuses_to_displace_a_live_confirmation PASSED [ 10%]
+tools/test_confirmation_flow.py::test_store_replaces_only_when_asked_explicitly PASSED [ 11%]
+tools/test_confirmation_flow.py::test_an_expired_confirmation_does_not_block_a_new_one PASSED [ 11%]
+tools/test_confirmation_flow.py::test_peek_without_id_returns_active PASSED [ 12%]
+tools/test_confirmation_flow.py::test_peek_with_valid_id PASSED          [ 12%]
+tools/test_confirmation_flow.py::test_peek_with_wrong_id PASSED          [ 13%]
+tools/test_confirmation_flow.py::test_peek_does_not_consume PASSED       [ 14%]
+tools/test_confirmation_flow.py::test_peek_with_no_pending PASSED        [ 14%]
+tools/test_confirmation_flow.py::test_peek_expired PASSED                [ 15%]
+tools/test_confirmation_flow.py::test_confirm_pending_without_id PASSED  [ 15%]
+tools/test_confirmation_flow.py::test_confirm_pending_no_active_returns_none PASSED [ 16%]
+tools/test_confirmation_flow.py::test_simulated_confirm_pending_tool_flow PASSED [ 17%]
+tools/test_confirmation_flow.py::test_confirm_pending_executes_stored_tool PASSED [ 17%]
+tools/test_confirmation_flow.py::test_confirm_pending_wrong_tool_mismatch PASSED [ 18%]
+tools/test_confirmation_flow.py::test_cancel_pending_confirmation_clears PASSED [ 19%]
+tools/test_confirmation_flow.py::test_confirm_pending_low_risk PASSED    [ 19%]
+tools/test_confirmation_flow.py::test_cancel_pending_low_risk PASSED     [ 20%]
+tools/test_confirmation_flow.py::test_thread_safety PASSED               [ 20%]
+tools/test_confirmation_flow.py::test_pending_confirmation_defaults PASSED [ 21%]
+tools/test_confirmation_flow.py::test_pending_confirmation_custom_id PASSED [ 22%]
+tools/test_confirmation_flow.py::test_toolresult_confirmation_id_default PASSED [ 22%]
+tools/test_confirmation_flow.py::test_toolresult_confirmation_id_ok PASSED [ 23%]
+tools/test_confirmation_flow.py::test_toolresult_confirmation_id_fail PASSED [ 23%]
+tools/test_confirmation_flow.py::test_toolresult_to_dict_includes_confirmation_id PASSED [ 24%]
+tools/test_confirmation_flow.py::test_toolresult_to_dict_confirmation_id_none PASSED [ 25%]
+tools/test_confirmation_flow.py::test_payload_includes_confirmation_id PASSED [ 25%]
+tools/test_confirmation_flow.py::test_payload_confirmation_id_none PASSED [ 26%]
+tools/test_confirmation_flow.py::test_payload_no_suggested_question_when_no_confirmation_id PASSED [ 26%]
+tools/test_confirmation_flow.py::test_payload_suggested_question_for_confirmation_required PASSED [ 27%]
+tools/test_confirmation_flow.py::test_payload_suggested_question_uses_action_name PASSED [ 28%]
+tools/test_confirmation_flow.py::test_build_suggested_question_with_confirmation_required PASSED [ 28%]
+tools/test_confirmation_flow.py::test_build_suggested_question_with_success PASSED [ 29%]
+tools/test_confirmation_flow.py::test_build_suggested_question_with_blocked PASSED [ 30%]
+tools/test_confirmation_flow.py::test_simulated_first_call_stores_pending PASSED [ 30%]
+tools/test_confirmation_flow.py::test_simulated_confirm_with_valid_id PASSED [ 31%]
+tools/test_confirmation_flow.py::test_simulated_confirm_with_wrong_id PASSED [ 31%]
+tools/test_confirmation_flow.py::test_simulated_confirm_with_expired_id PASSED [ 32%]
+tools/test_confirmation_flow.py::test_simulated_confirmed_true_no_confirmation_id PASSED [ 33%]
+tools/test_confirmation_flow.py::test_simulated_param_mismatch PASSED    [ 33%]
+tools/test_confirmation_flow.py::test_simulated_param_match PASSED       [ 34%]
+tools/test_confirmation_flow.py::test_simulated_no_pending_confirmation PASSED [ 34%]
+tools/test_confirmation_flow.py::test_simulated_cancel_pending PASSED    [ 35%]
+tools/test_confirmation_flow.py::test_simulated_cancel_does_not_execute PASSED [ 36%]
+tools/test_confirmation_flow.py::test_simulated_cancel_pending_confirmation_tool PASSED [ 36%]
+tools/test_confirmation_flow.py::test_simulated_confirm_different_tool PASSED [ 37%]
+tools/test_confirmation_flow.py::test_simulated_confirm_tool_match PASSED [ 38%]
+tools/test_confirmation_flow.py::test_safety_guard_send_message_is_high PASSED [ 38%]
+tools/test_confirmation_flow.py::test_safety_guard_cancel_pending_is_low PASSED [ 39%]
+tools/test_confirmation_flow.py::test_safety_guard_shutdown_era_is_low PASSED [ 39%]
+tools/test_confirmation_flow.py::test_cancel_active_pending_clears PASSED [ 40%]
+tools/test_confirmation_flow.py::test_cancel_no_pending_noop PASSED      [ 41%]
+tools/test_confirmation_flow.py::test_confirm_consumes_pending_then_cancel_finds_none PASSED [ 41%]
+tools/test_confirmation_flow.py::test_cancel_after_confirm_no_pending PASSED [ 42%]
+tools/test_confirmation_flow.py::test_desktop_direct_actions_are_not_gated_as_planner_calls PASSED [ 42%]
+tools/test_confirmation_flow.py::test_desktop_explicit_task_action_still_confirms PASSED [ 43%]
+tools/test_confirmation_flow.py::test_desktop_bare_task_parameter_confirms PASSED [ 44%]
+tools/test_confirmation_flow.py::test_desktop_bare_description_parameter_confirms PASSED [ 44%]
+tools/test_confirmation_flow.py::test_desktop_unrecognised_action_string_confirms PASSED [ 45%]
+tools/test_confirmation_flow.py::test_desktop_empty_call_is_not_gated PASSED [ 46%]
+tools/test_confirmation_flow.py::test_desktop_direct_actions_match_the_dispatch_chain PASSED [ 46%]
+tools/test_confirmation_flow.py::test_window_verb_carrying_a_task_is_gated PASSED [ 47%]
+tools/test_confirmation_flow.py::test_bare_window_verb_is_not_planned_and_not_gated PASSED [ 47%]
+tools/test_confirmation_flow.py::test_bare_window_verb_dispatches_without_planning PASSED [ 48%]
+tools/test_confirmation_flow.py::test_close_waiver_does_not_authorise_a_file_plan PASSED [ 49%]
+tools/test_confirmation_flow.py::test_classify_action_survives_non_string_params PASSED [ 49%]
+tools/test_confirmation_flow.py::test_preview_resolves_the_plan_and_describes_it PASSED [ 50%]
+tools/test_confirmation_flow.py::test_question_shows_the_steps_not_the_generic_fallback PASSED [ 50%]
+tools/test_confirmation_flow.py::test_nothing_runs_before_approval PASSED [ 51%]
+tools/test_confirmation_flow.py::test_approval_runs_the_stored_plan_without_replanning PASSED [ 52%]
+tools/test_confirmation_flow.py::test_model_cannot_swap_the_plan_it_echoes_back PASSED [ 52%]
+tools/test_confirmation_flow.py::test_caller_supplied_approved_plan_is_stripped PASSED [ 53%]
+tools/test_confirmation_flow.py::test_a_failing_preview_never_skips_the_confirmation PASSED [ 53%]
+tools/test_confirmation_flow.py::test_unplannable_task_is_approved_as_a_refusal_not_a_fresh_plan PASSED [ 54%]
+tools/test_confirmation_flow.py::test_spoken_yes_path_runs_the_shown_plan PASSED [ 55%]
+tools/test_confirmation_flow.py::test_execution_without_an_approved_plan_refuses_and_never_plans PASSED [ 55%]
+tools/test_confirmation_flow.py::test_a_preview_that_raises_does_not_reopen_the_planner PASSED [ 56%]
+tools/test_confirmation_flow.py::test_a_scheduled_task_cannot_carry_a_preapproved_plan PASSED [ 57%]
+tools/test_confirmation_flow.py::test_plan_description_cannot_forge_its_own_steps PASSED [ 57%]
+tools/test_confirmation_flow.py::test_control_characters_are_rejected_in_a_pattern PASSED [ 58%]
+tools/test_confirmation_flow.py::test_a_long_argument_cannot_bury_a_later_step PASSED [ 58%]
+tools/test_confirmation_flow.py::test_plan_is_spoken_verbatim_not_left_to_the_model PASSED [ 59%]
+tools/test_confirmation_flow.py::test_model_is_told_not_to_reword_an_announced_question PASSED [ 60%]
+tools/test_confirmation_flow.py::test_announcement_survives_a_missing_speak_handle PASSED [ 60%]
+tools/test_confirmation_flow.py::test_a_speak_failure_never_breaks_the_confirmation PASSED [ 61%]
+tools/test_confirmation_flow.py::test_announcing_does_not_execute_anything PASSED [ 61%]
+tools/test_confirmation_flow.py::test_second_call_in_a_turn_cannot_swap_what_yes_approves PASSED [ 62%]
+tools/test_confirmation_flow.py::test_answering_frees_the_slot_for_the_next_confirmation PASSED [ 63%]
+tools/test_confirmation_flow.py::test_bulk_desktop_moves_require_confirmation PASSED [ 63%]
+tools/test_confirmation_flow.py::test_readonly_desktop_actions_gain_no_new_friction PASSED [ 64%]
+tools/test_confirmation_flow.py::test_bulk_preview_states_the_real_count_and_destination PASSED [ 65%]
+tools/test_confirmation_flow.py::test_bulk_preview_does_not_touch_the_disk PASSED [ 65%]
+tools/test_confirmation_flow.py::test_preview_count_matches_what_the_handler_moves PASSED [ 66%]
+tools/test_confirmation_flow.py::test_bulk_preview_is_honest_about_an_empty_desktop PASSED [ 66%]
+tools/test_confirm_self_approval.py::test_self_confirm_in_the_arming_batch_is_refused PASSED [ 67%]
+tools/test_confirm_self_approval.py::test_confirm_of_an_action_armed_before_the_batch_reaches_the_handler PASSED [ 68%]
+tools/test_confirm_self_approval.py::test_confirm_without_any_user_utterance_is_refused PASSED [ 68%]
+tools/test_confirm_self_approval.py::test_yes_said_before_arming_does_not_count PASSED [ 69%]
+tools/test_confirm_self_approval.py::test_typed_yes_after_arming_runs_the_armed_action PASSED [ 69%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[go ahead] PASSED [ 70%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[yes please] PASSED [ 71%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[oui] PASSED [ 71%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[Oui, vas-y.] PASSED [ 72%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[of course] PASSED [ 73%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[yes sir] PASSED [ 73%]
+tools/test_confirm_self_approval.py::test_spoken_yes_still_in_flight_confirms[confirm] PASSED [ 74%]
+tools/test_confirm_self_approval.py::test_in_flight_utterance_begun_before_arming_does_not_count PASSED [ 74%]
+tools/test_confirm_self_approval.py::test_yes_then_no_dont_is_refused PASSED [ 75%]
+tools/test_confirm_self_approval.py::test_non_answers_are_refused[okay, delete everything in Documents] PASSED [ 76%]
+tools/test_confirm_self_approval.py::test_non_answers_are_refused[can I approve it later?] PASSED [ 76%]
+tools/test_confirm_self_approval.py::test_non_answers_are_refused[yes wait] PASSED [ 77%]
+tools/test_confirm_self_approval.py::test_non_answers_are_refused[always] PASSED [ 77%]
+tools/test_confirm_self_approval.py::test_non_answers_are_refused[stop asking] PASSED [ 78%]
+tools/test_confirm_self_approval.py::test_local_guard_uses_the_same_rule PASSED [ 79%]
+tools/test_confirm_self_approval.py::test_confirmed_recall_with_the_shown_id_is_refused_without_a_yes PASSED [ 79%]
+tools/test_confirm_self_approval.py::test_confirmed_recall_after_the_users_yes_runs PASSED [ 80%]
+tools/test_confirm_self_approval.py::test_an_agent_step_cannot_confirm_a_crew_staged_replace PASSED [ 80%]
+tools/test_confirm_self_approval.py::test_an_agent_step_cannot_recall_the_gated_tool_with_the_shown_id PASSED [ 81%]
+tools/test_confirm_self_approval.py::test_a_probe_that_says_no_refuses_even_with_the_right_id PASSED [ 82%]
+tools/test_confirm_self_approval.py::test_a_probe_that_raises_fails_closed PASSED [ 82%]
+tools/test_confirm_self_approval.py::test_the_users_yes_lets_the_executor_consume_exactly_the_checked_action PASSED [ 83%]
+tools/test_confirm_self_approval.py::test_eralive_registers_the_real_probe PASSED [ 84%]
+tools/test_telegram_approvals.py::test_cancel_exact_action_and_clear_buttons PASSED [ 84%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[sender] PASSED [ 85%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[chat] PASSED [ 85%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[group] PASSED [ 86%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[message] PASSED [ 87%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[token] PASSED [ 87%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[inline] PASSED [ 88%]
+tools/test_telegram_approvals.py::test_wrong_owner_or_card_cannot_consume[date] PASSED [ 88%]
+tools/test_telegram_approvals.py::test_unavailable_engine_leaves_action_retryable PASSED [ 89%]
+tools/test_telegram_approvals.py::test_stale_buttons_refuse_execution[expire] PASSED [ 90%]
+tools/test_telegram_approvals.py::test_stale_buttons_refuse_execution[voice] PASSED [ 90%]
+tools/test_telegram_approvals.py::test_stale_buttons_refuse_execution[replace] PASSED [ 91%]
+tools/test_telegram_approvals.py::test_stale_buttons_refuse_execution[restart] PASSED [ 92%]
+tools/test_telegram_approvals.py::test_unknown_send_has_no_retry_or_usable_card PASSED [ 92%]
+tools/test_telegram_approvals.py::test_no_secret_payload_in_card PASSED  [ 93%]
+tools/test_telegram_approvals.py::test_repeated_click_schedules_once_and_reports_outcome PASSED [ 93%]
+tools/test_telegram_approvals.py::test_atomic_generation_check_cannot_take_reused_id PASSED [ 94%]
+tools/test_telegram_approvals.py::test_remote_action_uses_real_classifier_verifier_and_continuation PASSED [ 95%]
+tools/test_telegram_approvals.py::test_replaced_pending_cannot_use_remote_grant PASSED [ 95%]
+tools/test_telegram_approvals.py::test_newly_blocked_action_never_executes PASSED [ 96%]
+tools/test_telegram_approvals.py::test_callback_transport_is_owner_restricted PASSED [ 96%]
+tools/test_telegram_approvals.py::test_voice_consumption_wins_before_button_execution PASSED [ 97%]
+tools/test_telegram_approvals.py::test_remote_grant_is_scoped_and_downgraded_risk_still_consumes PASSED [ 98%]
+tools/test_telegram_approvals.py::test_poll_dispatches_callback_and_advances_cursor PASSED [ 98%]
+tools/test_telegram_approvals.py::test_interrupted_approved_action_resolves_parked_job PASSED [ 99%]
+tools/test_telegram_approvals.py::test_remote_approval_resumes_standby_without_voice_unmute PASSED [100%]
+
+============================== warnings summary ===============================
+..\..\..\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 163 passed, 1 warning in 10.89s =======================
+
+[End-to-end] Running doctor via subprocess...
+  PASS: doctor exits with code 0 or 1
+  PASS: doctor produces stdout
+  PASS: doctor has no stderr (no crash)
+
+[Status validation] Checking status values...
+  PASS: status 'OK' is valid for 'Python version'
+  PASS: status 'OK' is valid for 'Required directories/files'
+  PASS: status 'OK' is valid for 'Core module imports'
+  PASS: status 'WARN' is valid for 'API key config'
+  PASS: status 'OK' is valid for 'Voice verification readiness'
+  PASS: status 'OK' is valid for 'Cloudinary media host config'
+  PASS: status 'OK' is valid for 'Tool registry consistency'
+  PASS: status 'OK' is valid for 'LLM alias registry'
+  PASS: status 'OK' is valid for 'LLM provider reachability'
+  PASS: status 'OK' is valid for 'Existing test files'
+  PASS: status 'OK' is valid for 'Action module imports'
+  PASS: status 'OK' is valid for 'memory/long_term.json'
+  PASS: status 'OK' is valid for 'Memory backups'
+  PASS: status 'OK' is valid for 'Logs folder'
+  PASS: status 'OK' is valid for 'Root cleanliness'
+  PASS: status 'OK' is valid for 'memory/feedback_memory.jsonl'
+  PASS: status 'OK' is valid for 'Obsidian vault (CM context)'
+  PASS: status 'WARN' is valid for 'Vault consistency (PARA/brand filing)'
+  PASS: status 'OK' is valid for 'Era day log (01 - Daily Notes)'
+  PASS: status 'OK' is valid for 'CM learned feedback'
+  PASS: status 'OK' is valid for 'logs/memory_audit.jsonl'
+  PASS: status 'WARN' is valid for 'Optional packages'
+  PASS: status 'OK' is valid for 'Vosk model'
+  PASS: subprocess output has PASS/WARN/FAIL markers
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'WARN' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'WARN' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'PASS' in output is valid
+  PASS: status 'WARN' in output is valid
+  PASS: status 'PASS' in output is valid
+
+[Secrets check] Verifying no API key leaked in output...
+  PASS: no Gemini API key string in output
+  PASS: no 'gemini_api_key:' leaked pattern
+  PASS: no 'api_key:' leaked pattern
+  PASS: no '"api_key"' leaked pattern
+
+[Config check] Testing invalid JSON detection...
+  PASS: invalid JSON returns ERROR
+  PASS: detail mentions invalid JSON
+
+[Optional packages] Checking soft failure...
+  PASS: optional packages returns OK or WARN (not ERROR)
+
+[Memory check] Verifying memory content not leaked...
+
+[Registry check] Testing registry consistency...
+  PASS: duplicate detection returns ERROR
+  PASS: detail mentions duplicate name
+  PASS: production registry has no ERROR issues
+  PASS: detail mentions issues
+
+[Summary check] Verifying READY/NOT READY...
+  PASS: output contains READY or NOT READY
+
+[Individual checks] Testing each function...
+  PASS: Python version check passes
+  PASS: core imports check passes
+  PASS: directories check passes
+  PASS: action modules check returns OK or WARN
+  PASS: long_term valid shows OK
+  PASS: feedback_memory check returns OK or WARN
+  PASS: vosk model check returns OK or WARN
+  PASS: test files check returns OK or WARN or ERROR
+
+==================================================
+Results: 70 passed, 0 failed
+All Era One doctor tests PASSED.
+[2026-10-13 10:48:49] [ERROR] [era_one.executor] {"ts": "2026-10-13T09:48:49.381Z", "level": "ERROR", "logger": "era_one.executor", "event": "tool.execution.failed", "tool": "confirm_pending_confirmation", "duration_ms": 0, "error_type": "RuntimeError", "error": "There is no pending action to confirm."}
+[2026-10-13 10:48:49] [ERROR] [era_one.executor] {"ts": "2026-10-13T09:48:49.439Z", "level": "ERROR", "logger": "era_one.executor", "event": "tool.execution.failed", "tool": "retrieve_memory_context", "duration_ms": 0, "error_type": "RuntimeError", "error": "No query provided."}
+[2026-10-13 10:48:49] [ERROR] [era_one.executor] {"ts": "2026-10-13T09:48:49.441Z", "level": "ERROR", "logger": "era_one.executor", "event": "tool.execution.failed", "tool": "confirm_pending_confirmation", "duration_ms": 0, "error_type": "RuntimeError", "error": "There is no pending action to confirm."}
+[2026-10-13 10:48:49] [ERROR] [era_one.executor] {"ts": "2026-10-13T09:48:49.444Z", "level": "ERROR", "logger": "era_one.executor", "event": "tool.execution.failed", "tool": "confirm_pending_confirmation", "duration_ms": 0, "error_type": "RuntimeError", "error": "There is no pending action to confirm."}
+
+=== [Scenario A] LOW risk: enter_standby ===
+[Executor] 🛡️ safety: LOW — Standard tool: enter_standby
+[Executor] ⏱️ enter_standby completed in 1ms
+  PASS: enter_standby success True
+  PASS: enter_standby correct message
+  PASS: enter_standby risk_level LOW
+  PASS: LOW: tool.safety.classified exists
+  PASS: LOW: tool.execution.completed exists
+  PASS: LOW: no confirmation events (LOW risk)
+
+=== [Scenario B] HIGH risk: confirm then execute ===
+[Executor] 🛡️ safety: HIGH — Sending a message requires confirmation.
+[Executor] ⚠️ confirmation required (HIGH)
+[Executor] ⏳ pending confirmation: send_message id=8682f23a
+  PASS: B: first call success False
+  PASS: B: error_type ConfirmationRequired
+  PASS: B: confirmation_id exists
+  PASS: B: confirmation_id is non-empty string
+  PASS: B: tool.confirmation.created exists
+  PASS: B: no execution.completed yet
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ✅ pending confirmation accepted: send_message id=8682f23a
+[Executor] 🛡️ safety: HIGH — Sending a message requires confirmation.
+[Executor] ⚠️ confirmation required (HIGH)
+[Executor] ⏱️ send_message completed in 0ms
+  PASS: B: confirm success True
+  PASS: B: confirm message contains Fake_OK
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ❌ confirm_pending_confirmation failed after 0ms: RuntimeError: There is no pending action to confirm.
+  PASS: B: repeated confirm success False
+  PASS: B: repeated confirm says no pending or invalid
+  PASS: B: tool.confirmation.accepted exists
+  PASS: B: tool.execution.completed for send_message
+  PASS: B: tool.safety.classified for send_message
+  PASS: B: exactly 1 execution (repeated confirm did not re-execute)
+
+=== [Scenario C] HIGH risk: cancel ===
+[Executor] 🛡️ safety: HIGH — Sending a message requires confirmation.
+[Executor] ⚠️ confirmation required (HIGH)
+[Executor] ⏳ pending confirmation: send_message id=e4c36ef3
+  PASS: C: first call success False
+  PASS: C: error_type ConfirmationRequired
+  PASS: C: confirmation_id exists
+  PASS: C: confirmation.created for cancel path
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ❌ pending confirmation cancelled
+[Executor] ⏱️ cancel_pending_confirmation completed in 0ms
+  PASS: C: cancel success True
+  PASS: C: cancel message
+  PASS: C: pending IS cleared
+  PASS: C: tool.confirmation.cancelled exists
+  PASS: C: no send_message execution after cancel
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ℹ️ no pending confirmation to cancel
+[Executor] ⏱️ cancel_pending_confirmation completed in 0ms
+  PASS: C: second cancel success True
+  PASS: C: second cancel no-pending message
+  PASS: C: still no pending
+
+=== [Scenario D] Doctor registry check ===
+  PASS: D: registry OK
+  PASS: D: detail mentions issues
+
+=== [Scenario E] Log safety ===
+  PASS: E: at least one log line exists
+  PASS: E: all log lines parse as JSON
+  PASS: E: full long message NOT in logs
+  PASS: E: no secrets leaked in logs
+  PASS: E: lifecycle event 'tool.safety.classified' present
+  PASS: E: lifecycle event 'tool.confirmation.created' present
+  PASS: E: lifecycle event 'tool.confirmation.accepted' present
+  PASS: E: lifecycle event 'tool.confirmation.cancelled' present
+  PASS: E: lifecycle event 'tool.execution.completed' present
+  PASS: E: all logs have event/ts/level fields
+
+=== [Scenario F] LOW risk: retrieve_memory_context ===
+[Executor] 🛡️ safety: LOW — Read-only memory retrieval.
+[Executor] ⏱️ retrieve_memory_context completed in 0ms
+  PASS: F: retrieve_memory_context success True
+  PASS: F: retrieve_memory_context risk_level LOW
+  PASS: F: retrieve_memory_context result contains memory
+  PASS: F: no confirmation required
+[Executor] 🛡️ safety: LOW — Read-only memory retrieval.
+[Executor] ⏱️ retrieve_memory_context completed in 0ms
+  PASS: F: no-match returns No relevant memories
+[Executor] 🛡️ safety: LOW — Read-only memory retrieval.
+[Executor] ❌ retrieve_memory_context failed after 0ms: RuntimeError: No query provided.
+  PASS: F: empty query returns error
+
+=== [Scenario G] HIGH risk: forget_memory confirm then execute ===
+[Executor] 🛡️ safety: HIGH — Deleting memory requires confirmation.
+[Executor] ⚠️ confirmation required (HIGH)
+[Executor] ⏳ pending confirmation: forget_memory id=272d94aa
+  PASS: G: first call success False
+  PASS: G: error_type ConfirmationRequired
+  PASS: G: confirmation_id exists
+  PASS: G: forget NOT called on first attempt
+  PASS: G: confirmation_id is non-empty string
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ✅ pending confirmation accepted: forget_memory id=272d94aa
+[Executor] 🛡️ safety: HIGH — Deleting memory requires confirmation.
+[Executor] ⚠️ confirmation required (HIGH)
+[Executor] ⏱️ forget_memory completed in 0ms
+  PASS: G: confirm success True
+  PASS: G: confirm message contains Forgotten
+  PASS: G: forget called exactly once
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ❌ confirm_pending_confirmation failed after 0ms: RuntimeError: There is no pending action to confirm.
+  PASS: G: repeated confirm success False
+  PASS: G: repeated confirm says no pending or invalid
+  PASS: G: forget still called exactly once (no re-execute)
+
+=== [Scenario H] HIGH risk: forget_memory cancel ===
+[Executor] 🛡️ safety: HIGH — Deleting memory requires confirmation.
+[Executor] ⚠️ confirmation required (HIGH)
+[Executor] ⏳ pending confirmation: forget_memory id=2e602b1d
+  PASS: H: first call success False
+  PASS: H: error_type ConfirmationRequired
+  PASS: H: confirmation_id exists
+  PASS: H: forget NOT called before cancel
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ❌ pending confirmation cancelled
+[Executor] ⏱️ cancel_pending_confirmation completed in 0ms
+  PASS: H: cancel success True
+  PASS: H: cancel message
+  PASS: H: no forget called after cancel
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ℹ️ no pending confirmation to cancel
+[Executor] ⏱️ cancel_pending_confirmation completed in 0ms
+  PASS: H: second cancel success True
+  PASS: H: second cancel no-pending message
+[Executor] 🛡️ safety: LOW — Confirmation management action.
+[Executor] ❌ confirm_pending_confirmation failed after 0ms: RuntimeError: There is no pending action to confirm.
+  PASS: H: confirm after cancel fails
+  PASS: H: forget still not called after cancelled confirm
+
+==================================================
+Smoke E2E: 72 passed, 0 failed out of 72
+SMOKE_E2E_OK
+==================================================
+=== _parse_json_result ===
+  PASS  valid JSON list
+  PASS  empty input -> []
+  PASS  None -> []
+  PASS  malformed JSON -> []
+  PASS  Error prefix -> []
+  PASS  Exception prefix -> []
+  PASS  list input passes through
+  PASS  dict input -> []
+  PASS  __PROFILE_PAGE__ -> []
+
+=== validate_youtube_href ===
+  PASS  valid watch URL
+  PASS  shorts rejected
+  PASS  non-YouTube rejected
+  PASS  empty rejected
+  PASS  None rejected
+  PASS  non-string rejected
+  PASS  youtu.be accepted
+
+=== validate_netflix_href ===
+  PASS  valid Netflix URL
+  PASS  empty rejected
+  PASS  None rejected
+  PASS  non-string rejected
+  PASS  non-Netflix rejected
+
+=== _group_by_row ===
+  PASS  num cards preserved
+  PASS  row0 col0
+  PASS  row0 col1
+  PASS  row1 col0
+  PASS  row1 col1
+  PASS  row_index correct
+  PASS  col_index correct
+
+=== _build_cards ===
+  PASS  builds two cards
+  PASS  title 0
+  PASS  href 1
+  PASS  platform set
+  PASS  empty raw -> empty
+  PASS  missing title/href skipped
+  PASS  non-dict skipped
+
+=== Title matching ===
+  PASS  exact match finds card
+  PASS  exact case insensitive
+  PASS  partial match string in title
+  PASS  partial match title in string
+  PASS  partial not found
+  PASS  token same
+  PASS  token partial
+  PASS  token none
+  PASS  token match finds results
+  PASS  best is Breaking Bad
+
+=== choose_card: confidence thresholds ===
+[BrowserIntel] youtube selection: status=selected confidence=1.00 exact='The Big Bang Theory'
+  PASS  exact -> selected
+  PASS  exact -> correct card
+  PASS  exact -> confidence 1.0
+[BrowserIntel] youtube selection: status=selected confidence=0.85 partial='Bang'
+  PASS  partial -> selected
+  PASS  partial -> confidence 0.85
+[BrowserIntel] youtube selection: status=selected confidence=0.75 token
+  PASS  token >= 0.70 -> selected
+  PASS  token >= 0.70 -> confidence >= 0.70
+[BrowserIntel] youtube selection: status=candidates confidence=0.40
+  PASS  token 0.30-0.69 -> candidates
+  PASS  token 0.30-0.69 -> list non-empty
+  PASS  token 0.30-0.69 -> confidence in range
+[BrowserIntel] youtube selection: status=candidates low=0.25
+  PASS  token < 0.30 -> candidates
+  PASS  token < 0.30 -> list non-empty
+  PASS  token < 0.30 -> confidence < 0.30
+[BrowserIntel] youtube selection: status=not_found query='XYZ QRS'
+  PASS  no match -> not_found
+  PASS  empty cards -> not_found
+
+=== choose_card: position selection ===
+[BrowserIntel] youtube selection: status=selected position=first
+  PASS  first -> Alpha
+[BrowserIntel] youtube selection: status=selected position=third
+  PASS  third -> Gamma
+[BrowserIntel] youtube selection: status=selected position=top right
+  PASS  top right -> Gamma
+[BrowserIntel] youtube selection: status=selected position=2
+  PASS  2 -> Beta
+[BrowserIntel] youtube selection: status=not_found position='invalid_pos'
+  PASS  invalid position -> not_found
+[BrowserIntel] youtube selection: status=selected row=0
+  PASS  row 0 -> Alpha
+[BrowserIntel] youtube selection: status=selected row=1
+  PASS  row 1 -> Delta
+[BrowserIntel] youtube selection: status=not_found row=99
+  PASS  bad row -> not_found
+[BrowserIntel] youtube selection: status=selected default=first
+  PASS  default first card
+
+=== choose_card: title in result ===
+[BrowserIntel] youtube selection: status=selected confidence=1.00 exact='The Big Bang Theory'
+  PASS  selected card has title
+[BrowserIntel] youtube selection: status=selected position=third
+  PASS  card title in position result
+
+=== Netflix position selection ===
+[BrowserIntel] netflix selection: status=selected position=top right
+  PASS  Netflix top right
+[BrowserIntel] netflix selection: status=selected position=bottom left
+  PASS  Netflix bottom left
+[BrowserIntel] netflix selection: status=selected confidence=1.00 exact='One Piece'
+  PASS  Netflix title match
+
+=== scroll_page (no-click verification) ===
+  PASS  no browser -> scrolled=False
+  PASS  no browser -> has error
+  PASS  bad platform -> scrolled=False
+  PASS  bad direction -> scrolled=False
+
+=== Duplicate video ID handling ===
+  PASS  same ID cards both survive _build_cards
+
+=== normalize_query ===
+  PASS  3rd video -> position=3
+  PASS  2nd video -> position=2
+  PASS  1st -> position=1
+  PASS  4th result -> position=4
+  PASS  video 3 -> position=3
+  PASS  number 2 -> position=2
+  PASS  item 1 -> position=1
+  PASS  first -> position=1
+  PASS  second -> position=2
+  PASS  third -> position=3
+  PASS  the first video -> position=1
+  PASS  the third one -> position=3
+  PASS  top right -> position=top right
+  PASS  bottom left -> position=bottom left
+  PASS  center -> position=center
+  PASS  query unchanged -> no position
+  PASS  empty unchanged
+  PASS  None unchanged
+  PASS  fifth video -> position=5
+  PASS  fifth -> position=5
+
+=== choose_card: low confidence = candidates (no silent select) ===
+[BrowserIntel] youtube selection: status=candidates low=0.25
+  PASS  low confidence -> candidates not selected
+  PASS  low confidence -> no card selected
+  PASS  low confidence -> list non-empty
+
+=== choose_card: position selects directly ===
+[BrowserIntel] youtube selection: status=selected position=2
+  PASS  position=2 selects card #2
+  PASS  position selected -> confidence 1.0
+
+=== choose_card: default first card ===
+[BrowserIntel] youtube selection: status=selected default=first
+  PASS  no params -> first card
+
+=== scroll_page: no click (verified with mock) ===
+  PASS  no click on scroll
+  PASS  no click has error
+  PASS  dict has no 'clicked' key
+  PASS  no cards key in error case
+
+=== validate_youtube_href: shorts and unsafe ===
+  PASS  http accepted
+  PASS  no protocol rejected
+  PASS  shorts path rejected
+  PASS  non-youtube rejected
+
+=== Netflix row/col integration ===
+[BrowserIntel] netflix selection: status=selected position=top left
+  PASS  Netflix row 0 col 0
+[BrowserIntel] netflix selection: status=selected position=bottom right
+  PASS  Netflix row 1 col 1
+[BrowserIntel] netflix selection: status=selected confidence=1.00 exact='Title C'
+  PASS  Netflix exact title
+
+=== focus_or_open_domain: no browser ===
+[BrowserIntel] focus_or_open: browser not available
+  PASS  no browser -> returns False
+
+==================================================
+  Results: 117 passed, 0 failed
+==================================================
+=== _domain_matches ===
+  PASS  youtube.com https://www.youtube.com/watch?v=x
+  PASS  youtube.com https://m.youtube.com/watch?v=x
+  PASS  youtube.com https://youtube.com
+  PASS  youtube.com http://youtube.com
+  PASS  youtube.com.fake.com rejected
+  PASS  fake-youtube.com rejected
+  PASS  youtubexyz.com rejected
+  PASS  facebook.com rejected for youtube
+  PASS  youtu.be not matched as youtube.com directly
+  PASS  netflix.com https://www.netflix.com/browse
+  PASS  netflix.com https://netflix.com
+  PASS  netflix.com.fake.com rejected
+  PASS  fake-netflix.com rejected
+  PASS  empty url rejected
+  PASS  about:blank rejected
+  PASS  no scheme handled
+
+=== _domain_family_matches ===
+  PASS  yt family https://www.youtube.com/watch?v=x
+  PASS  yt family https://m.youtube.com/feed
+  PASS  yt family https://youtube.com
+  PASS  yt family https://youtu.be/abc123
+  PASS  yt family youtube.com.fake.com rejected
+  PASS  yt family fake-youtube.com rejected
+  PASS  yt family facebook.com rejected
+  PASS  nf family https://www.netflix.com/browse
+  PASS  nf family https://netflix.com
+  PASS  nf family netflix.com.fake.com rejected
+  PASS  nf family fake-netflix.com rejected
+
+=== _expected_domain_family_from_url ===
+  PASS  yt url returns youtube.com
+  PASS  youtu.be url returns youtube.com
+  PASS  netflix url returns netflix.com
+  PASS  facebook url returns None
+  PASS  google url returns None
+
+=== _find_tab_by_keywords ===
+  PASS  yt keywords picks www.youtube.com over facebook with yt in title
+  PASS  yt keywords finds a youtube tab
+  PASS  nf keywords picks netflix.com over google
+  PASS  non-domain kw matches title
+  PASS  domain kw does NOT match via title only
+  PASS  closed tab skipped, no match
+  PASS  closed tab skipped, netflix found
+
+========================================
+Results: 39/39 passed, 0/39 failed
+..............................................                           [100%]
+============================== warnings summary ===============================
+tools/test_standby_policy.py::test_toggle_works_without_cloud_and_does_not_wake_standby[typed]
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+46 passed, 1 warning in 5.30s
+........................................................................ [ 16%]
+........................................................................ [ 33%]
+........................................................................ [ 49%]
+........................................................................ [ 66%]
+........................................................................ [ 83%]
+........................................................................ [ 99%]
+.                                                                        [100%]
+============================== warnings summary ===============================
+..\..\..\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+433 passed, 1 warning in 19.88s
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-islvxhcx
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 64 items
+
+tools/test_vision_silent.py::TestVisionSilentMode::test_analyze_image_once_returns_str PASSED [  1%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_analyze_image_once_uses_vision_text_model PASSED [  3%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_candidates_fallback_extraction PASSED [  4%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_capture_error_returns_fallback PASSED [  6%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_empty_question_returns_fallback PASSED [  7%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_empty_response_returns_fallback PASSED [  9%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_genai_client_is_imported PASSED [ 10%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_genai_client_used_in_analyze PASSED [ 12%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_genai_configure_called PASSED [ 14%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_google_generativeai_import PASSED [ 15%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_live_connect_session PASSED [ 17%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_native_audio_live_session_for_vision PASSED [ 18%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_native_audio_model_for_vision PASSED [ 20%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_output_audio_transcription PASSED [ 21%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_real_screenshot PASSED [ 23%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_response_modalities_anywhere PASSED [ 25%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_response_modalities_text_with_native_audio PASSED [ 26%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_sounddevice_import PASSED [ 28%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_speak_tts_audio_called PASSED [ 29%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_speech_config PASSED [ 31%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_no_voice_config PASSED [ 32%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_non_data_response_no_crash PASSED [ 34%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_one_shot_failure_returns_fallback PASSED [ 35%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_one_shot_timeout_returns_quick_fallback PASSED [ 37%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_result_returned_once PASSED [ 39%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_returns_analysis_text PASSED [ 40%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_screen_process_returns_str_not_bool PASSED [ 42%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_sounddevice_not_instantiated PASSED [ 43%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_types_part_from_bytes_used PASSED [ 45%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_unsupported_modality_does_not_reconnect PASSED [ 46%]
+tools/test_vision_silent.py::TestVisionSilentMode::test_vision_text_model_configurable PASSED [ 48%]
+tools/test_vision_silent.py::TestVisionClientReuse::test_get_vision_client_not_in_logs PASSED [ 50%]
+tools/test_vision_silent.py::TestVisionClientReuse::test_get_vision_client_returns_singleton PASSED [ 51%]
+tools/test_vision_silent.py::TestVisionImageOptimization::test_compress_image_fallback_on_error PASSED [ 53%]
+tools/test_vision_silent.py::TestVisionImageOptimization::test_compress_image_returns_valid_tuple PASSED [ 54%]
+tools/test_vision_silent.py::TestVisionCache::test_cache_key_includes_angle PASSED [ 56%]
+tools/test_vision_silent.py::TestVisionCache::test_cache_returns_same_result PASSED [ 57%]
+tools/test_vision_silent.py::TestVisionConcisePrompt::test_concise_prompt_in_analyze PASSED [ 59%]
+tools/test_vision_silent.py::TestVisionResponseTruncation::test_long_response_truncated PASSED [ 60%]
+tools/test_vision_silent.py::TestVisionTimeout::test_timeout_env_default PASSED [ 62%]
+tools/test_vision_silent.py::TestVisionTimeout::test_timeout_env_respected PASSED [ 64%]
+tools/test_vision_silent.py::TestVisionKeyResolution::test_dedicated_vision_key_used_when_present PASSED [ 65%]
+tools/test_vision_silent.py::TestVisionKeyResolution::test_env_var_fallback PASSED [ 67%]
+tools/test_vision_silent.py::TestVisionKeyResolution::test_main_key_falls_back_when_vision_key_missing PASSED [ 68%]
+tools/test_vision_silent.py::TestVisionKeyResolution::test_raises_when_no_key_anywhere PASSED [ 70%]
+tools/test_vision_silent.py::TestVisionKeyResolution::test_uppercase_config_aliases PASSED [ 71%]
+tools/test_vision_silent.py::TestVisionKeyResolution::test_vision_client_uses_dedicated_key PASSED [ 73%]
+tools/test_vision_silent.py::TestVisionProviderChain::test_every_provider_unavailable_returns_message PASSED [ 75%]
+tools/test_vision_silent.py::TestVisionProviderChain::test_ollama_accepts_then_errors_falls_through_to_gemini PASSED [ 76%]
+tools/test_vision_silent.py::TestVisionProviderChain::test_ollama_available_takes_job_and_remotes_never_called PASSED [ 78%]
+tools/test_vision_silent.py::TestVisionProviderChain::test_ollama_daemon_down_skips_to_gemini PASSED [ 79%]
+tools/test_vision_silent.py::TestVisionProviderChain::test_ollama_empty_result_falls_through PASSED [ 81%]
+tools/test_vision_silent.py::TestVisionProviderChain::test_ollama_success_returns_truncated PASSED [ 82%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_configured_order_is_honored_over_default PASSED [ 84%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_default_order_puts_ollama_first PASSED [ 85%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_gemini_timeout_falls_through_to_openai PASSED [ 87%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_missing_openai_key_marks_provider_unavailable PASSED [ 89%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_no_dangerous_imports_in_openai_provider PASSED [ 90%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_openai_provider_does_not_log_api_key PASSED [ 92%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_provider_absent_from_order_is_never_called PASSED [ 93%]
+tools/test_vision_silent.py::TestVisionProviderSelection::test_unknown_provider_name_is_skipped PASSED [ 95%]
+tools/test_vision_silent.py::TestVisionOllamaSafety::test_no_click_type_press_scroll PASSED [ 96%]
+tools/test_vision_silent.py::TestVisionOllamaSafety::test_no_computer_control_import PASSED [ 98%]
+tools/test_vision_silent.py::TestVisionOllamaSafety::test_no_pyautogui_import PASSED [100%]
+
+============================== warnings summary ===============================
+tools/test_vision_silent.py::TestVisionSilentMode::test_analyze_image_once_returns_str
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 64 passed, 1 warning in 12.23s ========================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-gxrypd_j
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 21 items
+
+tools/test_vision_worker.py::TestVisionWorker::test_async_screen_process_returns_request_id PASSED [  4%]
+tools/test_vision_worker.py::TestVisionWorker::test_cancel_queued_request PASSED [  9%]
+tools/test_vision_worker.py::TestVisionWorker::test_cancel_running_returns_false PASSED [ 14%]
+tools/test_vision_worker.py::TestVisionWorker::test_cancelled_queued_request_skipped_by_worker PASSED [ 19%]
+tools/test_vision_worker.py::TestVisionWorker::test_clear_old_completed_requests PASSED [ 23%]
+tools/test_vision_worker.py::TestVisionWorker::test_completed_request_metadata_worker_fields PASSED [ 28%]
+tools/test_vision_worker.py::TestVisionWorker::test_completed_request_returns_vision_result PASSED [ 33%]
+tools/test_vision_worker.py::TestVisionWorker::test_duplicate_request_returns_same_id_done_recently PASSED [ 38%]
+tools/test_vision_worker.py::TestVisionWorker::test_duplicate_request_returns_same_id_while_queued PASSED [ 42%]
+tools/test_vision_worker.py::TestVisionWorker::test_failed_request_returns_ok_false PASSED [ 47%]
+tools/test_vision_worker.py::TestVisionWorker::test_get_result_none_while_queued PASSED [ 52%]
+tools/test_vision_worker.py::TestVisionWorker::test_get_result_none_while_running PASSED [ 57%]
+tools/test_vision_worker.py::TestVisionWorker::test_list_requests_returns_submitted_requests PASSED [ 61%]
+tools/test_vision_worker.py::TestVisionWorker::test_old_blocking_screen_process_works PASSED [ 66%]
+tools/test_vision_worker.py::TestVisionWorker::test_only_one_worker_thread PASSED [ 71%]
+tools/test_vision_worker.py::TestVisionWorker::test_request_status_includes_required_fields PASSED [ 76%]
+tools/test_vision_worker.py::TestVisionWorker::test_reset_helper_clears_state PASSED [ 80%]
+tools/test_vision_worker.py::TestVisionWorker::test_submit_returns_request_id_immediately PASSED [ 85%]
+tools/test_vision_worker.py::TestVisionWorker::test_worker_never_imports_computer_control PASSED [ 90%]
+tools/test_vision_worker.py::TestVisionWorker::test_worker_never_imports_pyautogui PASSED [ 95%]
+tools/test_vision_worker.py::TestVisionWorker::test_worker_no_click_type_press_scroll PASSED [100%]
+
+============================== warnings summary ===============================
+tools/test_vision_worker.py::TestVisionWorker::test_async_screen_process_returns_request_id
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 21 passed, 1 warning in 2.58s ========================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-mbjrc6bo
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 32 items
+
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_action_result_defaults_to_latest PASSED [  3%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_action_result_request_id_latest PASSED [  6%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_action_screen_alias_performs_analysis PASSED [  9%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_action_screen_with_async_starts_async PASSED [ 12%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_action_status_defaults_to_latest PASSED [ 15%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_alias_check_status_works PASSED [ 18%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_alias_cleanup_works PASSED [ 21%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_alias_get_result_works PASSED [ 25%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_alias_requests_works PASSED [ 28%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_async_start_returns_request_id PASSED [ 31%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_blocking_fallback_stores_latest PASSED [ 34%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_clear_removes_old_completed_requests PASSED [ 37%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_invalid_action_returns_help_message PASSED [ 40%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_list_returns_request_ids PASSED [ 43%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_no_computer_control_import PASSED [ 46%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_no_dangerous_call_patterns PASSED [ 50%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_no_pyautogui_import PASSED [ 53%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_old_blocking_still_works PASSED [ 56%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_done_returns_formatted_summary PASSED [ 59%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_includes_needs_confirmation PASSED [ 62%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_includes_screen_state PASSED [ 65%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_limits_elements_to_3 PASSED [ 68%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_no_elements_when_empty PASSED [ 71%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_queued_returns_queued_message PASSED [ 75%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_running_returns_running_message PASSED [ 78%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_result_unknown_id_returns_not_found PASSED [ 81%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_screen_process_failure_no_netflix_cooldown PASSED [ 84%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_status_returns_required_fields PASSED [ 87%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_status_unknown_id_returns_not_found PASSED [ 90%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_unknown_action_with_text_falls_back PASSED [ 93%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_unknown_action_without_text_returns_help PASSED [ 96%]
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_vision_result_imported PASSED [100%]
+
+============================== warnings summary ===============================
+tools/test_vision_screen_process_async.py::TestVisionScreenProcessAsync::test_action_result_defaults_to_latest
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 32 passed, 1 warning in 2.41s ========================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-nu0ii98r
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 18 items
+
+tools/test_vision_policy.py::TestVisionPolicy::test_browser_control_mutation_blocked PASSED [  5%]
+tools/test_vision_policy.py::TestVisionPolicy::test_browser_state_blocks_computer_control PASSED [ 11%]
+tools/test_vision_policy.py::TestVisionPolicy::test_desktop_low_risk_safe_to_describe PASSED [ 16%]
+tools/test_vision_policy.py::TestVisionPolicy::test_desktop_non_mutation_allowed PASSED [ 22%]
+tools/test_vision_policy.py::TestVisionPolicy::test_empty_elements_safe_to_describe PASSED [ 27%]
+tools/test_vision_policy.py::TestVisionPolicy::test_error_state_ask_user PASSED [ 33%]
+tools/test_vision_policy.py::TestVisionPolicy::test_high_risk_element PASSED [ 38%]
+tools/test_vision_policy.py::TestVisionPolicy::test_high_risk_overrides_medium PASSED [ 44%]
+tools/test_vision_policy.py::TestVisionPolicy::test_media_page_blocks_computer_control PASSED [ 50%]
+tools/test_vision_policy.py::TestVisionPolicy::test_medium_risk_element PASSED [ 55%]
+tools/test_vision_policy.py::TestVisionPolicy::test_needs_confirmation_sets_ask_user PASSED [ 61%]
+tools/test_vision_policy.py::TestVisionPolicy::test_no_computer_control_import PASSED [ 66%]
+tools/test_vision_policy.py::TestVisionPolicy::test_no_pyautogui_import PASSED [ 72%]
+tools/test_vision_policy.py::TestVisionPolicy::test_result_not_ok_blocks PASSED [ 77%]
+tools/test_vision_policy.py::TestVisionPolicy::test_safety_guard_classify_vision_risk PASSED [ 83%]
+tools/test_vision_policy.py::TestVisionPolicy::test_safety_guard_fallback_blocks_mutation PASSED [ 88%]
+tools/test_vision_policy.py::TestVisionPolicy::test_safety_guard_fallback_requires_confirmation PASSED [ 94%]
+tools/test_vision_policy.py::TestVisionPolicy::test_use_dom_first_blocks_computer_control_click PASSED [100%]
+
+============================= 18 passed in 0.52s ==============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-enguowco
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 33 items
+
+tools/test_vision_router_policy.py::TestVisionContext::test_clear_latest_works PASSED [  3%]
+tools/test_vision_router_policy.py::TestVisionContext::test_expired_latest_returns_none PASSED [  6%]
+tools/test_vision_router_policy.py::TestVisionContext::test_store_and_retrieve_latest PASSED [  9%]
+tools/test_vision_router_policy.py::TestVisionContext::test_vision_context_no_computer_control PASSED [ 12%]
+tools/test_vision_router_policy.py::TestVisionContext::test_vision_context_no_pyautogui PASSED [ 15%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_browser_control_blocked_when_high_risk PASSED [ 18%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_browser_control_not_blocked_by_use_dom_first_alone PASSED [ 21%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_browser_state_blocks_computer_control_click PASSED [ 24%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_desktop_low_risk_leaves_routing_unchanged PASSED [ 27%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_high_risk_blocks_computer_control_click PASSED [ 30%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_media_page_blocks_computer_control_click PASSED [ 33%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_needs_confirmation_blocks_silent_mutation PASSED [ 36%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_no_recent_vision_leaves_routing_unchanged PASSED [ 39%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_non_mutation_action_ignored PASSED [ 42%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_use_dom_first_blocks_computer_control_click PASSED [ 45%]
+tools/test_vision_router_policy.py::TestVisionRouterGuard::test_vision_policy_failure_fails_closed PASSED [ 48%]
+tools/test_vision_router_policy.py::TestScreenProcessorRequestIdLatest::test_blocking_path_stores_vision_result PASSED [ 51%]
+tools/test_vision_router_policy.py::TestScreenProcessorRequestIdLatest::test_request_id_latest_no_result PASSED [ 54%]
+tools/test_vision_router_policy.py::TestScreenProcessorRequestIdLatest::test_request_id_latest_returns_formatted_result PASSED [ 57%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_action_screen PASSED [ 60%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_action_screen_with_text PASSED [ 63%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_async PASSED [ 66%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_clear PASSED [ 69%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_empty_action_with_text PASSED [ 72%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_list PASSED [ 75%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_result PASSED [ 78%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_status PASSED [ 81%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_with_netflix_active PASSED [ 84%]
+tools/test_vision_router_policy.py::TestScreenProcessRouterGuard::test_router_preserves_screen_process_with_text PASSED [ 87%]
+tools/test_vision_router_policy.py::TestRecordToolResultNetflixPollution::test_browser_control_netflix_collision_sets_failure PASSED [ 90%]
+tools/test_vision_router_policy.py::TestRecordToolResultNetflixPollution::test_netflix_control_failure_sets_netflix_failure PASSED [ 93%]
+tools/test_vision_router_policy.py::TestRecordToolResultNetflixPollution::test_screen_process_503_no_netflix_cooldown PASSED [ 96%]
+tools/test_vision_router_policy.py::TestRecordToolResultNetflixPollution::test_screen_process_error_no_netflix_failure PASSED [100%]
+
+============================== warnings summary ===============================
+tools/test_vision_router_policy.py::TestScreenProcessorRequestIdLatest::test_blocking_path_stores_vision_result
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 33 passed, 1 warning in 2.15s ========================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-vs1jeqac
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 76 items
+
+tools/test_scroll_control.py::TestResolveAmount::test_small_preset PASSED [  1%]
+tools/test_scroll_control.py::TestResolveAmount::test_sm_alias PASSED    [  2%]
+tools/test_scroll_control.py::TestResolveAmount::test_normal_preset PASSED [  3%]
+tools/test_scroll_control.py::TestResolveAmount::test_md_alias PASSED    [  5%]
+tools/test_scroll_control.py::TestResolveAmount::test_med_alias PASSED   [  6%]
+tools/test_scroll_control.py::TestResolveAmount::test_large_preset PASSED [  7%]
+tools/test_scroll_control.py::TestResolveAmount::test_lg_alias PASSED    [  9%]
+tools/test_scroll_control.py::TestResolveAmount::test_page_with_viewport PASSED [ 10%]
+tools/test_scroll_control.py::TestResolveAmount::test_page_fallback_no_viewport PASSED [ 11%]
+tools/test_scroll_control.py::TestResolveAmount::test_page_zero_viewport PASSED [ 13%]
+tools/test_scroll_control.py::TestResolveAmount::test_numeric_string PASSED [ 14%]
+tools/test_scroll_control.py::TestResolveAmount::test_integer_amount PASSED [ 15%]
+tools/test_scroll_control.py::TestResolveAmount::test_negative_integer_clamped_to_zero PASSED [ 17%]
+tools/test_scroll_control.py::TestResolveAmount::test_unknown_amount_defaults_to_normal PASSED [ 18%]
+tools/test_scroll_control.py::TestResolveAmount::test_case_insensitivity PASSED [ 19%]
+tools/test_scroll_control.py::TestResolveAmount::test_page_small_viewport PASSED [ 21%]
+tools/test_scroll_control.py::TestResolveDirection::test_down PASSED     [ 22%]
+tools/test_scroll_control.py::TestResolveDirection::test_up PASSED       [ 23%]
+tools/test_scroll_control.py::TestResolveDirection::test_left PASSED     [ 25%]
+tools/test_scroll_control.py::TestResolveDirection::test_right PASSED    [ 26%]
+tools/test_scroll_control.py::TestResolveDirection::test_case_insensitive PASSED [ 27%]
+tools/test_scroll_control.py::TestResolveDirection::test_unknown_falls_back_to_down PASSED [ 28%]
+tools/test_scroll_control.py::TestClampRepeat::test_default PASSED       [ 30%]
+tools/test_scroll_control.py::TestClampRepeat::test_max_ten PASSED       [ 31%]
+tools/test_scroll_control.py::TestClampRepeat::test_clamps_above_max PASSED [ 32%]
+tools/test_scroll_control.py::TestClampRepeat::test_clamps_below_min PASSED [ 34%]
+tools/test_scroll_control.py::TestClampRepeat::test_negative PASSED      [ 35%]
+tools/test_scroll_control.py::TestClampRepeat::test_mid_range PASSED     [ 36%]
+tools/test_scroll_control.py::TestResolveBehavior::test_smooth PASSED    [ 38%]
+tools/test_scroll_control.py::TestResolveBehavior::test_auto PASSED      [ 39%]
+tools/test_scroll_control.py::TestResolveBehavior::test_instant_maps_to_auto PASSED [ 40%]
+tools/test_scroll_control.py::TestResolveBehavior::test_case_insensitive PASSED [ 42%]
+tools/test_scroll_control.py::TestResolveBehavior::test_unknown_falls_back_to_smooth PASSED [ 43%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_contains_scrollBy PASSED [ 44%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_correct_top_amount_down PASSED [ 46%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_correct_top_amount_up PASSED [ 47%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_correct_left_amount_right PASSED [ 48%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_correct_left_amount_left PASSED [ 50%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_behavior_in_script PASSED [ 51%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_instant_mapped_to_auto PASSED [ 52%]
+tools/test_scroll_control.py::TestBuildScrollScript::test_returns_json_stringify PASSED [ 53%]
+tools/test_scroll_control.py::TestScrollEngine::test_basic_scroll_down_normal PASSED [ 55%]
+tools/test_scroll_control.py::TestScrollEngine::test_scroll_up_reverses_sign PASSED [ 56%]
+tools/test_scroll_control.py::TestScrollEngine::test_repeat_multiplies_total PASSED [ 57%]
+tools/test_scroll_control.py::TestScrollEngine::test_repeat_clamped_to_max_ten PASSED [ 59%]
+tools/test_scroll_control.py::TestScrollEngine::test_behavior_mapping PASSED [ 60%]
+tools/test_scroll_control.py::TestScrollEngine::test_custom_source PASSED [ 61%]
+tools/test_scroll_control.py::TestScrollEngine::test_page_evaluate_called_with_js PASSED [ 63%]
+tools/test_scroll_control.py::TestScrollEngine::test_page_evaluate_for_left PASSED [ 64%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_small_at_least_7_clicks PASSED [ 65%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_normal_at_least_17_clicks PASSED [ 67%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_large_at_least_30_clicks PASSED [ 68%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_up_returns_negative_clicks PASSED [ 69%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_scroll_down_default_return_contains_px PASSED [ 71%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_scroll_up_default_return_contains_px PASSED [ 72%]
+tools/test_scroll_control.py::TestPyautoguiFallback::test_no_real_pyautogui_movement PASSED [ 73%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_js_has_largest_scrollable_container PASSED [ 75%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_reports_changed PASSED [ 76%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_reports_target PASSED [ 77%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_fallback_pyautogui PASSED [ 78%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_js_window_method PASSED [ 80%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_js_container_method PASSED [ 81%]
+tools/test_scroll_control.py::TestSmartScrollJS::test_smart_scroll_pyautogui_method_in_return PASSED [ 82%]
+tools/test_scroll_control.py::TestScrollAmountNormalization::test_generic_amount_10_normalizes_to_700 PASSED [ 84%]
+tools/test_scroll_control.py::TestScrollAmountNormalization::test_explicit_10_px_preserved PASSED [ 85%]
+tools/test_scroll_control.py::TestScrollTargetPlatform::test_scroll_handler_reads_target_param PASSED [ 86%]
+tools/test_scroll_control.py::TestScrollTargetPlatform::test_scroll_with_youtube_target_falls_back_pyautogui PASSED [ 88%]
+tools/test_scroll_control.py::TestScrollTargetPlatform::test_scroll_with_netflix_target_falls_back_pyautogui PASSED [ 89%]
+tools/test_scroll_control.py::TestScrollTargetPlatform::test_scroll_without_target_still_works PASSED [ 90%]
+tools/test_scroll_control.py::TestEdgeCases::test_preset_values_map_correctly PASSED [ 92%]
+tools/test_scroll_control.py::TestEdgeCases::test_page_fallback_is_900 PASSED [ 93%]
+tools/test_scroll_control.py::TestEdgeCases::test_all_aliases_resolve_correctly PASSED [ 94%]
+tools/test_scroll_control.py::TestEdgeCases::test_down_direction_positive_y PASSED [ 96%]
+tools/test_scroll_control.py::TestEdgeCases::test_up_direction_negative_y PASSED [ 97%]
+tools/test_scroll_control.py::TestEdgeCases::test_left_negative_x PASSED [ 98%]
+tools/test_scroll_control.py::TestEdgeCases::test_right_positive_x PASSED [100%]
+
+============================= 76 passed in 1.87s ==============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-qhgc0lg4
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 131 items
+
+tools/test_media_selection.py::TestNormalizeTitle::test_empty_string PASSED [  0%]
+tools/test_media_selection.py::TestNormalizeTitle::test_none_empty PASSED [  1%]
+tools/test_media_selection.py::TestNormalizeTitle::test_lowercase PASSED [  2%]
+tools/test_media_selection.py::TestNormalizeTitle::test_removes_punctuation PASSED [  3%]
+tools/test_media_selection.py::TestNormalizeTitle::test_collapses_whitespace PASSED [  3%]
+tools/test_media_selection.py::TestNormalizeTitle::test_removes_special_chars PASSED [  4%]
+tools/test_media_selection.py::TestTokenOverlapScore::test_identical_tokens PASSED [  5%]
+tools/test_media_selection.py::TestTokenOverlapScore::test_partial_overlap PASSED [  6%]
+tools/test_media_selection.py::TestTokenOverlapScore::test_no_overlap PASSED [  6%]
+tools/test_media_selection.py::TestTokenOverlapScore::test_empty_query PASSED [  7%]
+tools/test_media_selection.py::TestTokenOverlapScore::test_empty_title PASSED [  8%]
+tools/test_media_selection.py::TestTokenOverlapScore::test_case_insensitive PASSED [  9%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_accepts_watch_url PASSED [  9%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_rejects_shorts_url PASSED [ 10%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_rejects_playlist_url PASSED [ 11%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_rejects_channel_url PASSED [ 12%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_rejects_empty PASSED [ 12%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_rejects_none PASSED [ 13%]
+tools/test_media_selection.py::TestIsYouTubeWatchUrl::test_rejects_non_youtube PASSED [ 14%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_rejects_shorts PASSED [ 15%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_accepts_watch_with_list_param PASSED [ 16%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_rejects_playlist_page PASSED [ 16%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_rejects_channel PASSED [ 17%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_accepts_watch_url PASSED [ 18%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_accepts_empty_returns_true PASSED [ 19%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_rejects_c_channel PASSED [ 19%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_rejects_user PASSED [ 20%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_accepts_watch_with_tracking_list_param PASSED [ 21%]
+tools/test_media_selection.py::TestIsYouTubeRejectedUrl::test_accepts_watch_with_multiple_params PASSED [ 22%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_music PASSED [ 22%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_highlights PASSED [ 23%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_single_keyword PASSED [ 24%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_two_words_both_generic PASSED [ 25%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_specific_artist_song PASSED [ 25%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_specific_title PASSED [ 26%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_specific_quoted PASSED [ 27%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_cooking PASSED [ 28%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_specific_movie_trailer PASSED [ 29%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_chill_music PASSED [ 29%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_relaxing_music PASSED [ 30%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_lofi PASSED [ 31%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_lofi_music PASSED [ 32%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_generic_single_word_generic PASSED [ 32%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_empty_query_is_generic PASSED [ 33%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_single_non_generic_word_is_specific PASSED [ 34%]
+tools/test_media_selection.py::TestIsGenericMediaQuery::test_mixed_specific_and_generic PASSED [ 35%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_exact_match_scores_one PASSED [ 35%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_query_in_title PASSED [ 36%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_title_in_query PASSED [ 37%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_high_token_overlap PASSED [ 38%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_unrelated_low_score PASSED [ 38%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_empty_query PASSED [ 39%]
+tools/test_media_selection.py::TestScoreMediaCandidate::test_empty_title PASSED [ 40%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_exact_match_selected PASSED [ 41%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_ambiguous_close_candidates PASSED [ 41%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_no_candidates PASSED [ 42%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_low_confidence PASSED [ 43%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_youtube_despacito_selects_first_safe_when_ambiguous PASSED [ 44%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_youtube_luis_fonsi_selects_first_safe_when_valid PASSED [ 45%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_youtube_tie_break_rejects_shorts PASSED [ 45%]
+tools/test_media_selection.py::TestSelectBestMediaCandidate::test_youtube_tie_break_rejects_ads PASSED [ 46%]
+tools/test_media_selection.py::TestNetflixStrictAmbiguity::test_netflix_ambiguous_candidates_remain_ambiguous PASSED [ 47%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_accepts_watch_video PASSED [ 48%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_rejects_shorts PASSED [ 48%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_accepts_watch_with_list_param PASSED [ 49%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_rejects_ad PASSED [ 50%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_rejects_channel_url PASSED [ 51%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_rejects_channel_kind PASSED [ 51%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_rejects_non_youtube_url PASSED [ 52%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_accepts_valid_video PASSED [ 53%]
+tools/test_media_selection.py::TestFilterYouTubeCandidates::test_empty_input PASSED [ 54%]
+tools/test_media_selection.py::TestNetflixCandidateSelection::test_netflix_strong_title_match_accepted PASSED [ 54%]
+tools/test_media_selection.py::TestNetflixCandidateSelection::test_netflix_weak_title_match_rejected PASSED [ 55%]
+tools/test_media_selection.py::TestNetflixCandidateSelection::test_netflix_ambiguous_candidates_none_selected PASSED [ 56%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_relaxing_music_is_generic PASSED [ 57%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_football_highlights_is_generic PASSED [ 58%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_quran_recitation_is_generic PASSED [ 58%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_cooking_video_is_generic PASSED [ 59%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_funny_cats_is_generic PASSED [ 60%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_generic_query_selects_first_safe_candidate PASSED [ 61%]
+tools/test_media_selection.py::TestGenericYouTubeQueries::test_specific_query_detected PASSED [ 61%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_house_music_2026_is_generic PASSED [ 62%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_deep_house_mix_2026_is_generic PASSED [ 63%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_best_deep_house_2026_is_generic PASSED [ 64%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_ibiza_summer_mix_is_generic PASSED [ 64%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_relaxing_music_remains_generic PASSED [ 65%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_despacito_remains_specific PASSED [ 66%]
+tools/test_media_selection.py::TestGenericKeywordExpansion::test_luis_fonsi_despacito_remains_specific PASSED [ 67%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_cleans_list_and_start_radio PASSED [ 67%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_cleans_relative_url PASSED [ 68%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_accepts_clean_watch_url PASSED [ 69%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_rejects_shorts PASSED [ 70%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_accepts_youtu_be PASSED [ 70%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_empty_returns_empty PASSED [ 71%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_invalid_url_returns_empty PASSED [ 72%]
+tools/test_media_selection.py::TestCleanYouTubeWatchUrl::test_cleans_pp_param PASSED [ 73%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_play_first_video PASSED [ 74%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_play_first_video_no_the PASSED [ 74%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_open_second_result PASSED [ 75%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_play_third_video PASSED [ 76%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_result_number_three PASSED [ 77%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_fourth_item PASSED [ 77%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_1st_video PASSED [ 78%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_non_ordinal_returns_none PASSED [ 79%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_despacito_returns_none PASSED [ 80%]
+tools/test_media_selection.py::TestParseOrdinalMediaCommand::test_empty_returns_none PASSED [ 80%]
+tools/test_media_selection.py::TestFuzzyScoring::test_exact_match_1_0 PASSED [ 81%]
+tools/test_media_selection.py::TestFuzzyScoring::test_fuzzy_near_match PASSED [ 82%]
+tools/test_media_selection.py::TestFuzzyScoring::test_fuzzy_slight_miss PASSED [ 83%]
+tools/test_media_selection.py::TestFuzzyScoring::test_fuzzy_does_not_match_unrelated PASSED [ 83%]
+tools/test_media_selection.py::TestFuzzyScoring::test_fuzzy_short_query_boost PASSED [ 84%]
+tools/test_media_selection.py::TestFuzzyScoring::test_token_overlap_still_dominates_exact PASSED [ 85%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_official_music_video_gets_boost PASSED [ 86%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_official_video_gets_boost PASSED [ 87%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_official_audio_gets_boost PASSED [ 87%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_music_video_gets_boost PASSED [ 88%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_official_lyric_video_gets_boost PASSED [ 89%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_boost_does_not_cap_above_1_0 PASSED [ 90%]
+tools/test_media_selection.py::TestOfficialVideoBoost::test_boost_precise_value PASSED [ 90%]
+tools/test_media_selection.py::TestArtistSongBoost::test_artist_song_dash_boost PASSED [ 91%]
+tools/test_media_selection.py::TestArtistSongBoost::test_artist_song_boost_when_no_dash PASSED [ 92%]
+tools/test_media_selection.py::TestArtistSongBoost::test_artist_song_boost_works_with_dash PASSED [ 93%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_top_boy_not_generic PASSED [ 93%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_top_boy_netflix_not_generic PASSED [ 94%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_mr_robot_not_generic PASSED [ 95%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_top_10_still_generic PASSED [ 96%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_top_videos_still_generic PASSED [ 96%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_best_songs_still_generic PASSED [ 97%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_music_video_still_generic PASSED [ 98%]
+tools/test_media_selection.py::TestGenericDetectionTighten::test_despacito_still_specific PASSED [ 99%]
+tools/test_media_selection.py::TestNewFunctionsImported::test_is_likely_proper_noun_not_exported PASSED [100%]
+
+============================= 131 passed in 1.12s =============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-a5sjl331
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 231 items
+
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_play_one_piece_on_netflix PASSED [  0%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_search_one_piece_on_netflix PASSED [  0%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_find_breaking_bad_on_netflix PASSED [  1%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_params_query_takes_priority PASSED [  1%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_params_title_fallback PASSED [  2%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_params_value_fallback PASSED [  2%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_play_netflix_no_query PASSED [  3%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_open_netflix_no_query PASSED [  3%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_play_despacito_on_youtube PASSED [  3%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_play_youtube_no_query PASSED [  4%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_search_standalone_without_platform PASSED [  4%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_find_standalone_without_platform PASSED [  5%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_empty_params_no_text_returns_none PASSED [  5%]
+tools/test_browser_media_routing.py::TestExtractMediaQuery::test_none_params_returns_none PASSED [  6%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_serie_champis_sur_netflix PASSED [  6%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_serie_champis_sur_netflix_lowercase PASSED [  6%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_film_berlin_sur_netflix PASSED [  7%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_regarde_one_piece_sur_netflix PASSED [  7%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_cherche_one_piece_sur_netflix PASSED [  8%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_regarde_berlin_sur_netflix_lowercase PASSED [  8%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_one_piece_on_netflix_still_works PASSED [  9%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_play_one_piece_on_netflix_still_works PASSED [  9%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_serie_not_used_as_query PASSED [  9%]
+tools/test_browser_media_routing.py::TestFrenchNetflixQueryExtraction::test_film_not_used_as_query PASSED [ 10%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_params_action_scroll_down PASSED [ 10%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_params_action_scroll_up PASSED [ 11%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_params_action_scroll_no_direction_defaults_down PASSED [ 11%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_user_text_scroll_down PASSED [ 12%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_user_text_scroll_up PASSED [ 12%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_user_text_scroll_left PASSED [ 12%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_user_text_scroll_right PASSED [ 13%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_user_text_precise_matching PASSED [ 13%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_no_scroll_intent PASSED [ 14%]
+tools/test_browser_media_routing.py::TestDetectScrollIntent::test_scroll_down_exact_word_boundary PASSED [ 14%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_open_youtube PASSED [ 15%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_open_netflix PASSED [ 15%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_focus_netflix PASSED [ 16%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_list_tabs PASSED [ 16%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_close_youtube_tab PASSED [ 16%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_close_youtube_in_brave_closes_tab_not_browser PASSED [ 17%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_close_netflix_on_brave_closes_tab PASSED [ 17%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_close_brave_alone_still_falls_through PASSED [ 18%]
+tools/test_browser_media_routing.py::TestRouteBrowserIntent::test_unknown_command_returns_none PASSED [ 18%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_play_one_piece_routes_to_netflix_with_query PASSED [ 19%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_netflix_play_preserves_existing_query PASSED [ 19%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_netflix_play_no_query PASSED [ 19%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_search_one_piece_on_netflix PASSED [ 20%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_play_despacito_on_youtube PASSED [ 20%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_search_despacito_on_youtube PASSED [ 21%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_play_youtube_no_query PASSED [ 21%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_down_routes_to_computer_control PASSED [ 22%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_up_routes_to_computer_control PASSED [ 22%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_params_only PASSED [ 22%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_from_user_text_when_params_empty PASSED [ 23%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_open_youtube_routes_to_go_to PASSED [ 23%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_open_netflix_routes_to_go_to PASSED [ 24%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_focus_netflix_routes_to_go_to PASSED [ 24%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_list_tabs_routes_to_browser_control PASSED [ 25%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_close_tab_routes_to_browser_control PASSED [ 25%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_netflix_play_without_user_text_does_not_invent_query PASSED [ 25%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_netflix_play_user_text_logged_when_present PASSED [ 26%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_media_coordinator_explicit_youtube_target_preserved PASSED [ 26%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_media_coordinator_explicit_netflix_target_preserved PASSED [ 27%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_media_coordinator_explicit_spotify_target_preserved PASSED [ 27%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_media_coordinator_missing_target_falls_back_to_spotify PASSED [ 28%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_amount_10_normalized_to_700 PASSED [ 28%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_amount_500_preserved_when_large PASSED [ 29%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_scroll_amount_10_with_px_user_text_preserved PASSED [ 29%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_open_app_netflix_with_media_query_routes_to_netflix_control PASSED [ 29%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_open_app_netflix_with_search_intent_no_query_routes_to_netflix_control PASSED [ 30%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_open_app_netflix_without_media_intent_routes_to_netflix_control PASSED [ 30%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_open_app_youtube_with_media_query_routes_to_youtube_video PASSED [ 31%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_netflix_play_title_never_routes_to_open_app PASSED [ 31%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_browser_control_go_to_netflix_search_routes_to_netflix_control PASSED [ 32%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_browser_control_go_to_youtube_search_routes_to_youtube_video PASSED [ 32%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_browser_control_go_to_netflix_home_not_rerouted PASSED [ 32%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_search_berlin_on_netflix_does_not_become_browser_control_go_to PASSED [ 33%]
+tools/test_browser_media_routing.py::TestRouteToolCall::test_no_routing_path_produces_finding_action_failed PASSED [ 33%]
+tools/test_browser_media_routing.py::TestYoutubeVideoVerification::test_verify_watch_url_returns_true PASSED [ 34%]
+tools/test_browser_media_routing.py::TestYoutubeVideoVerification::test_verify_chatgpt_url_returns_false PASSED [ 34%]
+tools/test_browser_media_routing.py::TestYoutubeVideoVerification::test_verify_youtu_be_returns_true PASSED [ 35%]
+tools/test_browser_media_routing.py::TestYoutubeVideoVerification::test_verify_exception_returns_false_empty_url PASSED [ 35%]
+tools/test_browser_media_routing.py::TestYoutubeVideoVerification::test_get_page_url_returns_url PASSED [ 35%]
+tools/test_browser_media_routing.py::TestYoutubeVideoVerification::test_get_page_url_exception_returns_empty PASSED [ 36%]
+tools/test_browser_media_routing.py::TestOpenAppHardBlock::test_open_app_netflix_with_query_routes_to_netflix_control PASSED [ 36%]
+tools/test_browser_media_routing.py::TestOpenAppHardBlock::test_open_app_netflix_play_no_query_routes_to_play PASSED [ 37%]
+tools/test_browser_media_routing.py::TestOpenAppHardBlock::test_open_app_netflix_no_media_intent_routes_to_netflix_control PASSED [ 37%]
+tools/test_browser_media_routing.py::TestOpenAppHardBlock::test_open_app_youtube_with_query_routes_to_youtube_video PASSED [ 38%]
+tools/test_browser_media_routing.py::TestOpenAppHardBlock::test_open_app_youtube_no_media_intent_routes_to_browser_control PASSED [ 38%]
+tools/test_browser_media_routing.py::TestOpenAppHardBlock::test_open_app_netflix_never_stays_open_app PASSED [ 38%]
+tools/test_browser_media_routing.py::TestBrowserControlNewTabConversion::test_new_tab_youtube_converts_to_go_to PASSED [ 39%]
+tools/test_browser_media_routing.py::TestBrowserControlNewTabConversion::test_new_tab_netflix_converts_to_go_to PASSED [ 39%]
+tools/test_browser_media_routing.py::TestBrowserControlNewTabConversion::test_new_tab_non_platform_stays_new_tab PASSED [ 40%]
+tools/test_browser_media_routing.py::TestRouteOrdinalCommand::test_second_video_returns_params PASSED [ 40%]
+tools/test_browser_media_routing.py::TestRouteOrdinalCommand::test_first_netflix_title PASSED [ 41%]
+tools/test_browser_media_routing.py::TestRouteOrdinalCommand::test_third_youtube_video PASSED [ 41%]
+tools/test_browser_media_routing.py::TestRouteOrdinalCommand::test_non_ordinal_returns_none PASSED [ 41%]
+tools/test_browser_media_routing.py::TestRouteOrdinalCommand::test_empty_returns_none PASSED [ 42%]
+tools/test_browser_media_routing.py::TestOrdinalRoutingInRouteToolCall::test_second_video_from_unknown_tool PASSED [ 42%]
+tools/test_browser_media_routing.py::TestOrdinalRoutingInRouteToolCall::test_first_netflix_title_from_browser_control PASSED [ 43%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_no_context_returns_none PASSED [ 43%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_user_text_youtube_hint PASSED [ 44%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_user_text_netflix_hint PASSED [ 44%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_params_with_youtube_url PASSED [ 45%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_params_with_netflix_url PASSED [ 45%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_params_with_youtube_target PASSED [ 45%]
+tools/test_browser_media_routing.py::TestInferScrollTarget::test_no_match_returns_none PASSED [ 46%]
+tools/test_browser_media_routing.py::TestScrollTargetInjection::test_scroll_down_with_youtube_user_text PASSED [ 46%]
+tools/test_browser_media_routing.py::TestScrollTargetInjection::test_scroll_up_with_netflix_user_text PASSED [ 47%]
+tools/test_browser_media_routing.py::TestScrollTargetInjection::test_scroll_without_platform_does_not_inject_target PASSED [ 47%]
+tools/test_browser_media_routing.py::TestNextVideoRouting::test_next_video_routes_to_youtube PASSED [ 48%]
+tools/test_browser_media_routing.py::TestNextVideoRouting::test_next_on_youtube_routes_to_youtube PASSED [ 48%]
+tools/test_browser_media_routing.py::TestNextVideoRouting::test_next_episode_on_netflix_does_not_route_to_youtube PASSED [ 48%]
+tools/test_browser_media_routing.py::TestQuestionFormQueryExtraction::test_is_one_piece_on_netflix PASSED [ 49%]
+tools/test_browser_media_routing.py::TestQuestionFormQueryExtraction::test_esta_one_piece_en_netflix PASSED [ 49%]
+tools/test_browser_media_routing.py::TestQuestionFormQueryExtraction::test_esta_english_one_piece_on_netflix PASSED [ 50%]
+tools/test_browser_media_routing.py::TestQuestionFormQueryExtraction::test_is_something_on_youtube PASSED [ 50%]
+tools/test_browser_media_routing.py::TestQuestionFormQueryExtraction::test_question_form_no_match_for_plain_play PASSED [ 51%]
+tools/test_browser_media_routing.py::TestOrdinalContinuationRoute::test_i_mean_the_second_title_routes_to_netflix_grid_play PASSED [ 51%]
+tools/test_browser_media_routing.py::TestOrdinalContinuationRoute::test_the_second_one_routes_to_netflix_grid_play PASSED [ 51%]
+tools/test_browser_media_routing.py::TestOrdinalContinuationRoute::test_choose_number_2_routes_to_netflix_grid_play PASSED [ 52%]
+tools/test_browser_media_routing.py::TestIMeanOnPlatform::test_i_mean_on_youtube_reuses_last_query PASSED [ 52%]
+tools/test_browser_media_routing.py::TestIMeanOnPlatform::test_i_mean_on_netflix_reuses_last_query PASSED [ 53%]
+tools/test_browser_media_routing.py::TestIMeanOnPlatform::test_i_mean_on_spotify_bypasses_router PASSED [ 53%]
+tools/test_browser_media_routing.py::TestIMeanOnPlatform::test_i_mean_on_platform_no_previous_query_falls_through PASSED [ 54%]
+tools/test_browser_media_routing.py::TestIMeanOnPlatformDoesNotStealOrdinal::test_i_mean_the_second_title_still_routes_ordinal PASSED [ 54%]
+tools/test_browser_media_routing.py::TestIMeanOnPlatformDoesNotStealOrdinal::test_i_mean_the_first_one_still_routes_ordinal PASSED [ 54%]
+tools/test_browser_media_routing.py::TestRecentPlatformPreference::test_recent_youtube_context_defaults_to_youtube PASSED [ 55%]
+tools/test_browser_media_routing.py::TestRecentPlatformPreference::test_recent_netflix_context_defaults_to_netflix PASSED [ 55%]
+tools/test_browser_media_routing.py::TestRecentPlatformPreference::test_no_recent_context_falls_to_spotify PASSED [ 56%]
+tools/test_browser_media_routing.py::TestRecentPlatformPreference::test_explicit_platform_still_wins PASSED [ 56%]
+tools/test_browser_media_routing.py::TestNetflixVisionGuard::test_screen_process_without_netflix_keywords_passes_through PASSED [ 57%]
+tools/test_browser_media_routing.py::TestNetflixVisionGuard::test_screen_process_without_cooldown_passes_through PASSED [ 57%]
+tools/test_browser_media_routing.py::TestNetflixVisionGuard::test_screen_process_with_netflix_grid_suppressed_during_cooldown PASSED [ 58%]
+tools/test_browser_media_routing.py::TestNetflixVisionGuard::test_screen_process_with_visible_titles_suppressed_during_cooldown PASSED [ 58%]
+tools/test_browser_media_routing.py::TestNetflixVisionGuard::test_screen_process_play_title_again_suppressed_during_cooldown PASSED [ 58%]
+tools/test_browser_media_routing.py::TestNetflixVisionGuard::test_screen_process_grid_layout_suppressed_during_cooldown PASSED [ 59%]
+tools/test_browser_media_routing.py::TestGenericScreenProcessSuppressedOnNetflix::test_generic_prompt_suppressed_when_scroll_context_netflix PASSED [ 59%]
+tools/test_browser_media_routing.py::TestGenericScreenProcessSuppressedOnNetflix::test_generic_prompt_suppressed_when_intent_memory_netflix PASSED [ 60%]
+tools/test_browser_media_routing.py::TestGenericScreenProcessSuppressedOnNetflix::test_generic_prompt_passes_through_when_no_failure_no_cooldown PASSED [ 60%]
+tools/test_browser_media_routing.py::TestGenericScreenProcessSuppressedOnNetflix::test_generic_prompt_passes_through_when_not_netflix_active PASSED [ 61%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_action_list_stays_screen_process PASSED [ 61%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_action_result_stays_screen_process PASSED [ 61%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_action_get_result_stays_screen_process PASSED [ 62%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_action_status_stays_screen_process PASSED [ 62%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_async_stays_screen_process PASSED [ 63%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_bare_action_no_text_stays_screen_process PASSED [ 63%]
+tools/test_browser_media_routing.py::TestScreenProcessNarrowGuard::test_empty_action_with_text_flows_to_guard PASSED [ 64%]
+tools/test_browser_media_routing.py::TestVagueGridPlayExpandedPhrases::test_select_the_first_title_routes PASSED [ 64%]
+tools/test_browser_media_routing.py::TestVagueGridPlayExpandedPhrases::test_choose_the_first_title_routes PASSED [ 64%]
+tools/test_browser_media_routing.py::TestVagueGridPlayExpandedPhrases::test_berlin_top_left_routes PASSED [ 65%]
+tools/test_browser_media_routing.py::TestVagueGridPlayExpandedPhrases::test_try_again_top_left_routes PASSED [ 65%]
+tools/test_browser_media_routing.py::TestVagueGridPlayExpandedPhrases::test_pick_the_first_title_routes PASSED [ 66%]
+tools/test_browser_media_routing.py::TestMediaCoordinatorNoFullscreenAfterSearch::test_search_with_query_no_fullscreen PASSED [ 66%]
+tools/test_browser_media_routing.py::TestMediaCoordinatorNoFullscreenAfterSearch::test_no_query_with_saved_grid_delegates_to_netflix_control PASSED [ 67%]
+tools/test_browser_media_routing.py::TestMediaCoordinatorNoFullscreenAfterSearch::test_no_query_no_grid_uses_play PASSED [ 67%]
+tools/test_browser_media_routing.py::TestFrenchNetflixE2E::test_serie_champis_sur_netflix_e2e PASSED [ 67%]
+tools/test_browser_media_routing.py::TestFrenchNetflixE2E::test_film_berlin_sur_netflix_e2e PASSED [ 68%]
+tools/test_browser_media_routing.py::TestFrenchNetflixE2E::test_regarde_one_piece_sur_netflix_e2e PASSED [ 68%]
+tools/test_browser_media_routing.py::TestFrenchNetflixE2E::test_cherche_one_piece_sur_netflix_e2e PASSED [ 69%]
+tools/test_browser_media_routing.py::TestFrenchNetflixE2E::test_lance_one_piece_sur_netflix_e2e PASSED [ 69%]
+tools/test_browser_media_routing.py::TestFrenchNetflixE2E::test_one_piece_on_netflix_e2e PASSED [ 70%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_fallback_suppressed PASSED [ 70%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_fallback_explicit_english PASSED [ 70%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_fallback_explicit_french PASSED [ 71%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_fallback_no_failure PASSED [ 71%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_fallback_computer_control PASSED [ 72%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_fallback_computer_control_allowed PASSED [ 72%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_action_key_blocked PASSED [ 73%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_action_key_allowed_with_explicit_text PASSED [ 73%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_action_key_allowed_with_french_text PASSED [ 74%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_action_keyboard_blocked PASSED [ 74%]
+tools/test_browser_media_routing.py::TestNetflixEnterFallbackGuard::test_netflix_enter_action_type_key_blocked PASSED [ 74%]
+tools/test_browser_media_routing.py::TestNoOldFallbackPatterns::test_no_old_netflix_search_and_play PASSED [ 75%]
+tools/test_browser_media_routing.py::TestNoOldFallbackPatterns::test_no_screen_process_fallback_for_netflix PASSED [ 75%]
+tools/test_browser_media_routing.py::TestNoOldFallbackPatterns::test_matching_candidate_autoplays PASSED [ 76%]
+tools/test_browser_media_routing.py::TestNoOldFallbackPatterns::test_unrelated_candidates_rejected PASSED [ 76%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_click_suppressed_when_scroll_context_netflix PASSED [ 77%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_click_suppressed_when_intent_memory_netflix PASSED [ 77%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_smart_click_suppressed_when_scroll_context_netflix PASSED [ 77%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_smart_click_vague_text_grid_play PASSED [ 78%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_type_suppressed_when_scroll_context_netflix PASSED [ 78%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_type_suppressed_when_intent_memory_netflix PASSED [ 79%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_press_tab_suppressed_when_scroll_context_netflix PASSED [ 79%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_press_arrow_suppressed_when_scroll_context_netflix PASSED [ 80%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_hotkey_suppressed_when_scroll_context_netflix PASSED [ 80%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_hotkey_suppressed_when_intent_memory_netflix PASSED [ 80%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_press_enter_preserved_when_scroll_context_netflix PASSED [ 81%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_click_passes_through_when_scroll_context_youtube PASSED [ 81%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_click_passes_through_when_no_context PASSED [ 82%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_click_passes_through_when_intent_memory_spotify PASSED [ 82%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_explicit_netflix_still_caught_by_part_a PASSED [ 83%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_netflix_url_still_caught_by_part_a5 PASSED [ 83%]
+tools/test_browser_media_routing.py::TestV8BNetflixBrowserControlClickGuard::test_enter_fallback_guard_still_works PASSED [ 83%]
+tools/test_browser_media_routing.py::TestNormalizeSearchQuery::test_cest_le_one_piece PASSED [ 84%]
+tools/test_browser_media_routing.py::TestNormalizeSearchQuery::test_cest_ou_one_piece_en_netflix PASSED [ 84%]
+tools/test_browser_media_routing.py::TestNormalizeSearchQuery::test_regarde_le_one_piece_sur_netflix PASSED [ 85%]
+tools/test_browser_media_routing.py::TestNormalizeSearchQuery::test_play_the_one_piece_on_netflix PASSED [ 85%]
+tools/test_browser_media_routing.py::TestNormalizeSearchQuery::test_unchanged_query_preserved PASSED [ 86%]
+tools/test_browser_media_routing.py::TestV8CComputerControlGuard::test_computer_control_type_netflix_context_reroutes PASSED [ 86%]
+tools/test_browser_media_routing.py::TestV8CComputerControlGuard::test_computer_control_click_netflix_context_reroutes PASSED [ 87%]
+tools/test_browser_media_routing.py::TestV8CComputerControlGuard::test_computer_control_press_netflix_context_reroutes_to_status PASSED [ 87%]
+tools/test_browser_media_routing.py::TestV8CComputerControlGuard::test_computer_control_passes_through_when_not_netflix PASSED [ 87%]
+tools/test_browser_media_routing.py::TestV8CComputerControlGuard::test_computer_control_type_dirty_query_normalized PASSED [ 88%]
+tools/test_browser_media_routing.py::TestV8CComputerControlGuard::test_computer_control_press_enter_with_netflix_failure PASSED [ 88%]
+tools/test_browser_media_routing.py::TestV8CVagueFollowUpRouting::test_play_it_with_netflix_context_reroutes PASSED [ 89%]
+tools/test_browser_media_routing.py::TestV8CVagueFollowUpRouting::test_yes_with_netflix_context_reroutes PASSED [ 89%]
+tools/test_browser_media_routing.py::TestV8CVagueFollowUpRouting::test_that_one_with_netflix_context_reroutes PASSED [ 90%]
+tools/test_browser_media_routing.py::TestV8CVagueFollowUpRouting::test_play_it_without_netflix_context_not_rerouted PASSED [ 90%]
+tools/test_browser_media_routing.py::TestNetflixDomDiagnostic::test_diagnostic_rejects_chrome_anchors PASSED [ 90%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_play_filler PASSED [ 91%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_can_you PASSED [ 91%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_please_prefix PASSED [ 92%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_platform_suffix PASSED [ 92%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_question_form PASSED [ 93%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_no_filler_returns_title PASSED [ 93%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_empty_returns_none PASSED [ 93%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_ordinal_command_returns_none PASSED [ 94%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_search_for_prefix PASSED [ 94%]
+tools/test_browser_media_routing.py::TestV9C2CleanNetflixMediaQuery::test_clean_look_for_prefix PASSED [ 95%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_do_you_have PASSED [ 95%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_search_for PASSED [ 96%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_find PASSED [ 96%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_look_for PASSED [ 96%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_show_me PASSED [ 97%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_play_not_availability PASSED [ 97%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_watch_not_availability PASSED [ 98%]
+tools/test_browser_media_routing.py::TestV9C2AvailabilityIntent::test_empty_text PASSED [ 98%]
+tools/test_browser_media_routing.py::TestV9C2RouterRoutesCleanedQuery::test_dirty_query_cleaned_in_search PASSED [ 99%]
+tools/test_browser_media_routing.py::TestV9C2RouterRoutesCleanedQuery::test_availability_sets_no_autoplay PASSED [ 99%]
+tools/test_browser_media_routing.py::TestV9C2RouterRoutesCleanedQuery::test_play_preserves_autoplay PASSED [100%]
+
+============================= 231 passed in 4.19s =============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-ulekhb7h
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 140 items
+
+tools/test_grid_selection.py::TestOrdinalToIndex::test_first_word PASSED [  0%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_second_word PASSED [  1%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_third_word PASSED [  2%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_fourth_word PASSED [  2%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_fifth_word PASSED [  3%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_sixth_word PASSED [  4%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_seventh_word PASSED [  5%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_eighth_word PASSED [  5%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_ninth_word PASSED [  6%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_tenth_word PASSED [  7%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_first_with_the PASSED [  7%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_first_video PASSED [  8%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_the_second_result PASSED [  9%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_1st PASSED        [ 10%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_2nd PASSED        [ 10%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_3rd PASSED        [ 11%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_4th PASSED        [ 12%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_10th PASSED       [ 12%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_number_4 PASSED   [ 13%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_result_number_3 PASSED [ 14%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_video_2 PASSED    [ 15%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_title_5 PASSED    [ 15%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_item_1 PASSED     [ 16%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_last PASSED       [ 17%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_out_of_range_11 PASSED [ 17%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_out_of_range_0 PASSED [ 18%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_non_ordinal_text PASSED [ 19%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_empty PASSED      [ 20%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_whitespace PASSED [ 20%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_none PASSED       [ 21%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_number_one PASSED [ 22%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_number_two PASSED [ 22%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_video_number_one PASSED [ 23%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_top_video PASSED  [ 24%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_top_result PASSED [ 25%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_top PASSED        [ 25%]
+tools/test_grid_selection.py::TestOrdinalToIndex::test_the_top_one PASSED [ 26%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_play_first_video PASSED [ 27%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_play_second_result PASSED [ 27%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_third_title PASSED [ 28%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_fourth_item PASSED [ 29%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_video_number_3 PASSED [ 30%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_result_number_4 PASSED [ 30%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_1st_video PASSED [ 31%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_2nd_result PASSED [ 32%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_last_one PASSED [ 32%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_netflix_platform_hint PASSED [ 33%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_youtube_platform_hint PASSED [ 34%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_no_ordinal_returns_none PASSED [ 35%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_play_it_returns_none PASSED [ 35%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_open_youtube_returns_none PASSED [ 36%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_empty_returns_none PASSED [ 37%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_whitespace_returns_none PASSED [ 37%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_just_first_word_returns_ordinal PASSED [ 38%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_first_without_target_returns_none PASSED [ 39%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_play_first PASSED [ 40%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_i_mean_the_second_title PASSED [ 40%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_I_mean_the_third_video PASSED [ 41%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_choose_number_2 PASSED [ 42%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_the_second_one PASSED [ 42%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_number_three PASSED [ 43%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_title_number_2 PASSED [ 44%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_number_one_command PASSED [ 45%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_top_video_command PASSED [ 45%]
+tools/test_grid_selection.py::TestParseOrdinalCommand::test_video_number_one_command PASSED [ 46%]
+tools/test_grid_selection.py::TestDetectPlatformHint::test_youtube_explicit PASSED [ 47%]
+tools/test_grid_selection.py::TestDetectPlatformHint::test_netflix_explicit PASSED [ 47%]
+tools/test_grid_selection.py::TestDetectPlatformHint::test_yt_abbreviation PASSED [ 48%]
+tools/test_grid_selection.py::TestDetectPlatformHint::test_nf_abbreviation PASSED [ 49%]
+tools/test_grid_selection.py::TestDetectPlatformHint::test_both_ambiguous PASSED [ 50%]
+tools/test_grid_selection.py::TestDetectPlatformHint::test_none PASSED   [ 50%]
+tools/test_grid_selection.py::TestDetectTargetType::test_video PASSED    [ 51%]
+tools/test_grid_selection.py::TestDetectTargetType::test_result PASSED   [ 52%]
+tools/test_grid_selection.py::TestDetectTargetType::test_title PASSED    [ 52%]
+tools/test_grid_selection.py::TestDetectTargetType::test_item PASSED     [ 53%]
+tools/test_grid_selection.py::TestDetectTargetType::test_one PASSED      [ 54%]
+tools/test_grid_selection.py::TestDetectTargetType::test_none PASSED     [ 55%]
+tools/test_grid_selection.py::TestGridCandidate::test_minimal PASSED     [ 55%]
+tools/test_grid_selection.py::TestGridCandidate::test_full PASSED        [ 56%]
+tools/test_grid_selection.py::TestGridSnapshot::test_minimal PASSED      [ 57%]
+tools/test_grid_selection.py::TestGridSnapshot::test_with_candidates PASSED [ 57%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_save_and_get_youtube PASSED [ 58%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_save_and_get_netflix PASSED [ 59%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_get_nonexistent_platform PASSED [ 60%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_get_expired PASSED [ 60%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_save_invalid_platform PASSED [ 61%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_save_none PASSED  [ 62%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_load_recent_grids PASSED [ 62%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_load_recent_grids_with_expired PASSED [ 63%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_clear_expired_removes_old PASSED [ 64%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_clear_expired_keeps_fresh PASSED [ 65%]
+tools/test_grid_selection.py::TestSaveAndGetGrid::test_clear_all_for_tests PASSED [ 65%]
+tools/test_grid_selection.py::TestScrollContext::test_set_and_get_youtube PASSED [ 66%]
+tools/test_grid_selection.py::TestScrollContext::test_set_and_get_netflix PASSED [ 67%]
+tools/test_grid_selection.py::TestScrollContext::test_set_invalid_platform_ignored PASSED [ 67%]
+tools/test_grid_selection.py::TestScrollContext::test_expired_returns_none PASSED [ 68%]
+tools/test_grid_selection.py::TestScrollContext::test_most_recent_wins PASSED [ 69%]
+tools/test_grid_selection.py::TestScrollContext::test_clear_for_tests PASSED [ 70%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_canonical_domain_youtube PASSED [ 70%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_canonical_domain_yt PASSED [ 71%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_canonical_domain_netflix PASSED [ 72%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_canonical_domain_nf PASSED [ 72%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_canonical_domain_unknown PASSED [ 73%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_home_youtube PASSED [ 74%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_home_netflix PASSED [ 75%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_home_unknown PASSED [ 75%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_is_platform_url_youtube_match PASSED [ 76%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_is_platform_url_netflix_match PASSED [ 77%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_is_platform_url_no_match PASSED [ 77%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_is_platform_url_empty PASSED [ 78%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_is_platform_url_none PASSED [ 79%]
+tools/test_grid_selection.py::TestPlatformHelpers::test_platform_tab_result_dataclass PASSED [ 80%]
+tools/test_grid_selection.py::TestLastUserQuery::test_set_and_get PASSED [ 80%]
+tools/test_grid_selection.py::TestLastUserQuery::test_default_empty PASSED [ 81%]
+tools/test_grid_selection.py::TestLastUserQuery::test_clear PASSED       [ 82%]
+tools/test_grid_selection.py::TestLastUserQuery::test_overwrite PASSED   [ 82%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_bottom_left PASSED [ 83%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_bottom_right PASSED [ 84%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_empty_text PASSED [ 85%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_grid_item_digit PASSED [ 85%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_no_match PASSED [ 86%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_row_col_pattern PASSED [ 87%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_row_col_pattern_b PASSED [ 87%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_row_only PASSED [ 88%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_simple_ordinal PASSED [ 89%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_top_left PASSED [ 90%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_top_right PASSED [ 90%]
+tools/test_grid_selection.py::TestV9C3GridPositionParser::test_word_numbers PASSED [ 91%]
+tools/test_grid_selection.py::TestV9C3GridPositionRouting::test_dirty_query_cleaned_when_not_grid_position PASSED [ 92%]
+tools/test_grid_selection.py::TestV9C3GridPositionRouting::test_dirty_query_not_cleaned_when_grid_position PASSED [ 92%]
+tools/test_grid_selection.py::TestV9C3GridPositionRouting::test_row_col_routes_to_netflix PASSED [ 93%]
+tools/test_grid_selection.py::TestV9C3GridPositionRouting::test_simple_ordinal_routes_to_netflix PASSED [ 94%]
+tools/test_grid_selection.py::TestV9C3GridPositionRouting::test_top_left_routes_to_netflix PASSED [ 95%]
+tools/test_grid_selection.py::TestV9C3GridCache::test_cache_expired PASSED [ 95%]
+tools/test_grid_selection.py::TestV9C3GridCache::test_find_card_at_row_col PASSED [ 96%]
+tools/test_grid_selection.py::TestV9C3GridCache::test_find_card_not_found PASSED [ 97%]
+tools/test_grid_selection.py::TestV9C3GridCache::test_save_load_cache PASSED [ 97%]
+tools/test_grid_selection.py::TestV9C3GridPlayRowCol::test_click_cached_card_invalid_coords PASSED [ 98%]
+tools/test_grid_selection.py::TestV9C3GridPlayRowCol::test_click_cached_card_no_page PASSED [ 99%]
+tools/test_grid_selection.py::TestV9C3GridPlayRowCol::test_handle_grid_play_row_col_no_page PASSED [100%]
+
+============================= 140 passed in 1.01s =============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-z8guag2d
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 53 items
+
+tools/test_netflix_vision_fallback.py::TestVisionCooldownState::test_reset_vision_attempted_clears_flag PASSED [  1%]
+tools/test_netflix_vision_fallback.py::TestVisionCooldownState::test_reset_vision_attempted_preserves_cooldown PASSED [  3%]
+tools/test_netflix_vision_fallback.py::TestVisionCooldownState::test_netflix_control_calls_reset_at_start PASSED [  5%]
+tools/test_netflix_vision_fallback.py::TestVisionCooldownState::test_vision_attempted_flag_false_after_netflix_control_play PASSED [  7%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_first_call_allowed PASSED [  9%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_second_call_blocked PASSED [ 11%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_cooldown_active_skips_call PASSED [ 13%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_429_response_sets_cooldown PASSED [ 15%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_resource_exhausted_sets_cooldown PASSED [ 16%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_timeout_signal_sets_cooldown PASSED [ 18%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_exception_in_screen_process_sets_cooldown PASSED [ 20%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_screen_process_import_safety PASSED [ 22%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_503_response_sets_cooldown PASSED [ 24%]
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_retry_delay_in_exception_extends_cooldown PASSED [ 26%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_cooldown_not_active_when_not_set PASSED [ 28%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_cooldown_active_when_set PASSED [ 30%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_custom_duration_sets_correctly PASSED [ 32%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_cooldown_expires PASSED [ 33%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_handle_status_returns_controlled_during_cooldown PASSED [ 35%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_handle_status_returns_normal_outside_cooldown PASSED [ 37%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_grid_play_no_candidates_no_cooldown PASSED [ 39%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_grid_play_no_cards_from_scanner_no_cooldown PASSED [ 41%]
+tools/test_netflix_vision_fallback.py::TestNetflixVisionGuard::test_search_no_cards_no_cooldown PASSED [ 43%]
+tools/test_netflix_vision_fallback.py::TestClickNetflixPlayButton::test_detects_and_clicks_visible_button PASSED [ 45%]
+tools/test_netflix_vision_fallback.py::TestClickNetflixPlayButton::test_follows_watch_href_link PASSED [ 47%]
+tools/test_netflix_vision_fallback.py::TestClickNetflixPlayButton::test_no_button_found_returns_error PASSED [ 49%]
+tools/test_netflix_vision_fallback.py::TestClickNetflixPlayButton::test_js_failure_returns_error PASSED [ 50%]
+tools/test_netflix_vision_fallback.py::TestClickNetflixPlayButton::test_click_but_no_playback_returns_error PASSED [ 52%]
+tools/test_netflix_vision_fallback.py::TestClickNetflixPlayButton::test_netflix_play_button_js_defined PASSED [ 54%]
+tools/test_netflix_vision_fallback.py::TestCheckLocalSignals::test_detects_play_button PASSED [ 56%]
+tools/test_netflix_vision_fallback.py::TestCheckLocalSignals::test_detects_video_element PASSED [ 58%]
+tools/test_netflix_vision_fallback.py::TestCheckLocalSignals::test_detects_watch_url PASSED [ 60%]
+tools/test_netflix_vision_fallback.py::TestCheckLocalSignals::test_detects_player_controls PASSED [ 62%]
+tools/test_netflix_vision_fallback.py::TestCheckLocalSignals::test_js_eval_error_returns_defaults PASSED [ 64%]
+tools/test_netflix_vision_fallback.py::TestCheckLocalSignals::test_returns_all_keys PASSED [ 66%]
+tools/test_netflix_vision_fallback.py::TestVerifyPlaybackStarted::test_watch_with_active_video_returns_true PASSED [ 67%]
+tools/test_netflix_vision_fallback.py::TestVerifyPlaybackStarted::test_watch_with_paused_video_returns_false PASSED [ 69%]
+tools/test_netflix_vision_fallback.py::TestVerifyPlaybackStarted::test_no_watch_url_returns_false PASSED [ 71%]
+tools/test_netflix_vision_fallback.py::TestStandardPlayDOMFirst::test_already_playing_returns_immediately PASSED [ 73%]
+tools/test_netflix_vision_fallback.py::TestStandardPlayDOMFirst::test_dom_play_button_clicked_before_cdp PASSED [ 75%]
+tools/test_netflix_vision_fallback.py::TestStandardPlayDOMFirst::test_cdp_video_play_fallback_when_no_dom_button PASSED [ 77%]
+tools/test_netflix_vision_fallback.py::TestStandardPlayDOMFirst::test_no_dom_no_cdp_no_vision_returns_clear_failure PASSED [ 79%]
+tools/test_netflix_vision_fallback.py::TestGridPlayUsesDomNotVision::test_grid_play_calls_click_play_button_after_nav PASSED [ 81%]
+tools/test_netflix_vision_fallback.py::TestGridPlayUsesDomNotVision::test_grid_play_play_button_fail_returns_clear_error PASSED [ 83%]
+tools/test_netflix_vision_fallback.py::TestGridPlayUsesDomNotVision::test_grid_play_no_screen_process_fallback PASSED [ 84%]
+tools/test_netflix_vision_fallback.py::TestNetflixArchitecture::test_screen_process_only_in_call_screen_process_narrow PASSED [ 86%]
+tools/test_netflix_vision_fallback.py::TestNetflixArchitecture::test_netflix_control_imports_at_function_level PASSED [ 88%]
+tools/test_netflix_vision_fallback.py::TestNetflixArchitecture::test_vision_cooldown_state_module_level PASSED [ 90%]
+tools/test_netflix_vision_fallback.py::TestNoFalseSuccess::test_play_returns_failure_if_no_playback_verified PASSED [ 92%]
+tools/test_netflix_vision_fallback.py::TestNoFalseSuccess::test_grid_play_ordinal_no_false_success PASSED [ 94%]
+tools/test_netflix_vision_fallback.py::TestNoFalseSuccess::test_search_auto_play_no_false_success PASSED [ 96%]
+tools/test_netflix_vision_fallback.py::TestVisionFallbackOptional::test_play_succeeds_without_vision_when_dom_works PASSED [ 98%]
+tools/test_netflix_vision_fallback.py::TestVisionFallbackOptional::test_vision_fallback_not_called_when_dom_succeeds PASSED [100%]
+
+============================== warnings summary ===============================
+tools/test_netflix_vision_fallback.py::TestCallScreenProcessNarrow::test_first_call_allowed
+  C:\Users\nesri\AppData\Roaming\Python\Python314\site-packages\google\genai\types.py:42: DeprecationWarning: '_UnionGenericAlias' is deprecated and slated for removal in Python 3.17
+    VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 53 passed, 1 warning in 45.94s ========================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-5vl61b26
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 10 items
+
+tools/test_regression_14b1.py::TestNetflixTimeImport::test_netflix_control_compiles PASSED [ 10%]
+tools/test_regression_14b1.py::TestNetflixTimeImport::test_netflix_control_no_local_time_shadowing PASSED [ 20%]
+tools/test_regression_14b1.py::TestNetflixSafeSearchFallback::test_safe_search_exception_with_query_returns_error PASSED [ 30%]
+tools/test_regression_14b1.py::TestNetflixSafeSearchFallback::test_safe_search_exception_without_query_allows_fallback PASSED [ 40%]
+tools/test_regression_14b1.py::TestTransientMemoryBlock::test_save_memory_last_media_title_blocked PASSED [ 50%]
+tools/test_regression_14b1.py::TestTransientMemoryBlock::test_save_memory_last_browser_platform_blocked PASSED [ 60%]
+tools/test_regression_14b1.py::TestTransientMemoryBlock::test_non_transient_key_passes_through PASSED [ 70%]
+tools/test_regression_14b1.py::TestTransientMemoryBlock::test_runtime_state_path_available PASSED [ 80%]
+tools/test_regression_14b1.py::TestNetflixNoVisionFallback::test_netflix_search_uses_dom_not_vision PASSED [ 90%]
+tools/test_regression_14b1.py::TestNetflixNoVisionFallback::test_netflix_search_prefers_dom_over_vision PASSED [100%]
+
+============================= 10 passed in 6.98s ==============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-f1nlv3mz
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 149 items
+
+tools/test_netflix_play.py::TestStateDetection::test_browse_no_modal_is_browse PASSED [  0%]
+tools/test_netflix_play.py::TestStateDetection::test_title_url_is_details PASSED [  1%]
+tools/test_netflix_play.py::TestStateDetection::test_watch_url_is_player PASSED [  2%]
+tools/test_netflix_play.py::TestStateDetection::test_search_url_is_search_results PASSED [  2%]
+tools/test_netflix_play.py::TestStateDetection::test_browse_with_modal_is_details PASSED [  3%]
+tools/test_netflix_play.py::TestNoDefaultFirstResult::test_grid_play_no_ordinal_returns_list PASSED [  4%]
+tools/test_netflix_play.py::TestNoDefaultFirstResult::test_grid_play_no_ordinal_no_candidates PASSED [  4%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_seconde_is_2 PASSED [  5%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_deuxieme_is_2 PASSED [  6%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_troisieme_is_3 PASSED [  6%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_quatrieme_is_4 PASSED [  7%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_premier_is_1 PASSED [  8%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_premiere_is_1 PASSED [  8%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_et_de_seconde_parse PASSED [  9%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_parse_ordinal_seconde PASSED [ 10%]
+tools/test_netflix_play.py::TestFrenchOrdinals::test_parse_ordinal_second_in_french PASSED [ 10%]
+tools/test_netflix_play.py::TestNormalizeCandidate::test_dict_with_url PASSED [ 11%]
+tools/test_netflix_play.py::TestNormalizeCandidate::test_dict_with_href PASSED [ 12%]
+tools/test_netflix_play.py::TestNormalizeCandidate::test_object_with_href PASSED [ 12%]
+tools/test_netflix_play.py::TestNormalizeCandidate::test_no_title_returns_none PASSED [ 13%]
+tools/test_netflix_play.py::TestNormalizeCandidate::test_card_dataclass PASSED [ 14%]
+tools/test_netflix_play.py::TestGridSourceOfTruth::test_saved_grid_ordinal_2_selects_second PASSED [ 14%]
+tools/test_netflix_play.py::TestGridSourceOfTruth::test_saved_grid_ordinal_4_out_of_range PASSED [ 15%]
+tools/test_netflix_play.py::TestRouterSmartClickOrdinal::test_smart_click_ordinal_routes_to_grid_play PASSED [ 16%]
+tools/test_netflix_play.py::TestRouterSmartClickOrdinal::test_smart_click_no_ordinal_routes_to_search PASSED [ 16%]
+tools/test_netflix_play.py::TestRouterSmartClickOrdinal::test_smart_click_without_netflix_context_passes_through PASSED [ 17%]
+tools/test_netflix_play.py::TestPlayButtonScoping::test_selected_title_in_response PASSED [ 18%]
+tools/test_netflix_play.py::TestPlayButtonScoping::test_selected_title_not_raw_page_text PASSED [ 18%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_strips_disponible_maintenant PASSED [ 19%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_strips_nouveaute PASSED [ 20%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_strips_saison_number PASSED [ 20%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_keeps_real_title PASSED [ 21%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_keeps_title_with_adjacent_metadata PASSED [ 22%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_empty_input PASSED [ 22%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_whitespace_input PASSED [ 23%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_short_remaining_becomes_empty PASSED [ 24%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_strips_episode_prefix PASSED [ 24%]
+tools/test_netflix_play.py::TestCleanNetflixTitle::test_strips_classement PASSED [ 25%]
+tools/test_netflix_play.py::TestNoSetPlayingOnFailure::test_handle_play_no_set_playing_on_failure PASSED [ 26%]
+tools/test_netflix_play.py::TestNoSetPlayingOnFailure::test_handle_grid_play_no_set_playing_on_failure PASSED [ 26%]
+tools/test_netflix_play.py::TestHomeBrowseAction::test_home_action_returns_correct_message PASSED [ 27%]
+tools/test_netflix_play.py::TestHomeBrowseAction::test_browse_action_returns_correct_message PASSED [ 28%]
+tools/test_netflix_play.py::TestHomeBrowseAction::test_go_home_action_returns_correct_message PASSED [ 28%]
+tools/test_netflix_play.py::TestHomeBrowseAction::test_home_navigates_to_browse_url PASSED [ 29%]
+tools/test_netflix_play.py::TestSearchNoAutoPlay::test_search_returns_list_by_default PASSED [ 30%]
+tools/test_netflix_play.py::TestSearchNoAutoPlay::test_search_with_auto_play_false_explicitly PASSED [ 30%]
+tools/test_netflix_play.py::TestPlayAmbiguousListsGrid::test_ambiguous_match_lists_grid PASSED [ 31%]
+tools/test_netflix_play.py::TestRescanZeroFallsBackToSavedGrid::test_rescan_zero_uses_saved_grid PASSED [ 32%]
+tools/test_netflix_play.py::TestRescanZeroFallsBackToSavedGrid::test_rescan_zero_no_saved_grid_returns_empty PASSED [ 32%]
+tools/test_netflix_play.py::TestSearchAutoPlayDefault::test_search_with_query_auto_plays PASSED [ 33%]
+tools/test_netflix_play.py::TestSearchAutoPlayDefault::test_search_no_query_lists PASSED [ 34%]
+tools/test_netflix_play.py::TestWatchActionConvertsToSearch::test_watch_mapped_to_search_in_aliases PASSED [ 34%]
+tools/test_netflix_play.py::TestWatchActionConvertsToSearch::test_netflix_control_watch_with_query_sets_auto_play PASSED [ 35%]
+tools/test_netflix_play.py::TestGridPlayOrdinalSkipsSafetyFilter::test_ordinal_skips_filter PASSED [ 36%]
+tools/test_netflix_play.py::TestPlayOnSearchResultsWithSavedGrid::test_play_search_results_with_saved_grid_plays_first PASSED [ 36%]
+tools/test_netflix_play.py::TestPlayOnSearchResultsWithSavedGrid::test_play_search_results_no_saved_grid_asks PASSED [ 37%]
+tools/test_netflix_play.py::TestPlayOnSearchResultsNoFullscreen::test_fullscreen_on_search_results_blocked PASSED [ 38%]
+tools/test_netflix_play.py::TestPlayOnSearchResultsNoFullscreen::test_fullscreen_on_player_not_blocked PASSED [ 38%]
+tools/test_netflix_play.py::TestListOnlyPhraseDetected::test_list_phrase_returns_list PASSED [ 39%]
+tools/test_netflix_play.py::TestSearchRejectsUnrelatedCandidates::test_unrelated_candidates_rejected_for_autoplay PASSED [ 40%]
+tools/test_netflix_play.py::TestSearchRejectsUnrelatedCandidates::test_mixed_candidates_filtered_to_matching PASSED [ 40%]
+tools/test_netflix_play.py::TestSearchAutoPlayMatchingCandidate::test_matching_candidate_autoplays PASSED [ 41%]
+tools/test_netflix_play.py::TestPlayWatchSearchAutoplay::test_play_with_query_sets_action_search_in_params PASSED [ 42%]
+tools/test_netflix_play.py::TestPlayWatchSearchAutoplay::test_watch_with_query_sets_action_search_in_params PASSED [ 42%]
+tools/test_netflix_play.py::TestNoGridSaveForNotificationCandidates::test_no_grid_save_when_scan_empty PASSED [ 43%]
+tools/test_netflix_play.py::TestNoGridSaveForNotificationCandidates::test_no_grid_save_when_all_candidates_rejected PASSED [ 44%]
+tools/test_netflix_play.py::TestNoOldBrowserControlNetflixPath::test_safety_belt_blocks_netflix_actions PASSED [ 44%]
+tools/test_netflix_play.py::TestNoOldBrowserControlNetflixPath::test_go_to_netflix_search_blocked PASSED [ 45%]
+tools/test_netflix_play.py::TestNoScreenProcessFallback::test_screen_process_import_only_in_bounded_fallback PASSED [ 46%]
+tools/test_netflix_play.py::TestNoScreenProcessFallback::test_netflix_control_has_no_computer_control_import PASSED [ 46%]
+tools/test_netflix_play.py::TestNoScreenProcessFallback::test_no_old_browser_control_netflix_macro_restored PASSED [ 47%]
+tools/test_netflix_play.py::TestNoScreenProcessFallback::test_no_screen_process_in_handle_search PASSED [ 48%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_title_number_two PASSED [ 48%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_grid_item_digit PASSED [ 49%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_grid_number_word PASSED [ 50%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_grid_digit PASSED [ 51%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_select_title_number_two_on_grid PASSED [ 51%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_result_number_three PASSED [ 52%]
+tools/test_netflix_play.py::TestV9COrdinalDetection::test_title_five PASSED [ 53%]
+tools/test_netflix_play.py::TestV9CNoHrefCards::test_convert_cards_keeps_no_href PASSED [ 53%]
+tools/test_netflix_play.py::TestV9CNoHrefCards::test_convert_cards_deduplicates_no_href PASSED [ 54%]
+tools/test_netflix_play.py::TestV9CNoHrefCards::test_normalize_keeps_no_url PASSED [ 55%]
+tools/test_netflix_play.py::TestV9CDomClickFallback::test_click_success PASSED [ 55%]
+tools/test_netflix_play.py::TestV9CDomClickFallback::test_click_failure_returns_false PASSED [ 56%]
+tools/test_netflix_play.py::TestV9CDomClickFallback::test_click_none_page_returns_false PASSED [ 57%]
+tools/test_netflix_play.py::TestV9CGridPlayDomFallback::test_grid_play_dom_click_when_no_href PASSED [ 57%]
+tools/test_netflix_play.py::TestV9CGridPlayDomFallback::test_grid_play_dom_click_fails PASSED [ 58%]
+tools/test_netflix_play.py::TestV9CAutoPlayScope::test_search_only_no_auto_play PASSED [ 59%]
+tools/test_netflix_play.py::TestV9C1GridPlayNoCardsGeometryClick::test_no_cards_tries_geometry_click PASSED [ 59%]
+tools/test_netflix_play.py::TestV9C1GridPlayNoCardsGeometryClick::test_no_cards_geometry_click_failure_returns_clean_error PASSED [ 60%]
+tools/test_netflix_play.py::TestV9C1GridPlayNoCardsGeometryClick::test_no_cards_geo_click_succeeds_play_fails PASSED [ 61%]
+tools/test_netflix_play.py::TestV9C1AutoplayNoHrefVisibleClick::test_autoplay_no_href_uses_visible_click PASSED [ 61%]
+tools/test_netflix_play.py::TestV9C1AutoplayNoHrefVisibleClick::test_autoplay_no_href_geometry_fails PASSED [ 62%]
+tools/test_netflix_play.py::TestV9C1OrdinalRouteNotSearchQuery::test_ordinal_phrase_routes_to_grid_play PASSED [ 63%]
+tools/test_netflix_play.py::TestV9C1NoVisionCooldownOnDomFailure::test_no_cooldown_on_scan_failure PASSED [ 63%]
+tools/test_netflix_play.py::TestV9C1SearchUrlIsSearchPage::test_search_url_detected PASSED [ 64%]
+tools/test_netflix_play.py::TestV9C1SearchUrlIsSearchPage::test_search_url_without_q_param PASSED [ 65%]
+tools/test_netflix_play.py::TestV9C1GeometryExcludesNav::test_is_bad_chrome_filters_nav PASSED [ 65%]
+tools/test_netflix_play.py::TestV9C1GeometryClickFunctionExists::test_function_signature PASSED [ 66%]
+tools/test_netflix_play.py::TestV9C1GeometryClickFunctionExists::test_returns_bool PASSED [ 67%]
+tools/test_netflix_play.py::TestV9C1GeometryClickFunctionExists::test_ordinal_zero_returns_false PASSED [ 67%]
+tools/test_netflix_play.py::TestV9C2DirtyQueryGuard::test_do_you_have_is_dirty PASSED [ 68%]
+tools/test_netflix_play.py::TestV9C2DirtyQueryGuard::test_can_you_is_dirty PASSED [ 69%]
+tools/test_netflix_play.py::TestV9C2DirtyQueryGuard::test_playing_is_dirty PASSED [ 69%]
+tools/test_netflix_play.py::TestV9C2DirtyQueryGuard::test_on_netflix_is_dirty PASSED [ 70%]
+tools/test_netflix_play.py::TestV9C2DirtyQueryGuard::test_clean_query_not_dirty PASSED [ 71%]
+tools/test_netflix_play.py::TestV9C2DirtyQueryGuard::test_empty_not_dirty PASSED [ 71%]
+tools/test_netflix_play.py::TestV9C2AutoplayDirtyQueryBlocks::test_dirty_query_blocks_autoplay_no_href PASSED [ 72%]
+tools/test_netflix_play.py::TestV9C2AutoplayDirtyQueryBlocks::test_clean_query_passes_autoplay PASSED [ 73%]
+tools/test_netflix_play.py::TestV9C2DocumentFallbackPromotion::test_promoted_candidates_have_titles PASSED [ 73%]
+tools/test_netflix_play.py::TestV9C2DocumentFallbackPromotion::test_strict_cards_returned_when_available PASSED [ 74%]
+tools/test_netflix_play.py::TestV9C21TitleVerification::test_war_machine_does_not_match_watchmen PASSED [ 75%]
+tools/test_netflix_play.py::TestV9C21TitleVerification::test_war_machine_does_not_match_the_guardians PASSED [ 75%]
+tools/test_netflix_play.py::TestV9C21TitleVerification::test_war_machine_matches_war_machine PASSED [ 76%]
+tools/test_netflix_play.py::TestV9C21TitleVerification::test_empty_title_fails PASSED [ 77%]
+tools/test_netflix_play.py::TestV9C21TitleVerification::test_no_title_key_fails PASSED [ 77%]
+tools/test_netflix_play.py::TestV9C21TitleVerification::test_one_piece_matches_one_piece_film_red PASSED [ 78%]
+tools/test_netflix_play.py::TestV9C21AutoplayWrongTitleBlocked::test_autoplay_no_href_war_machine_wrong_title_does_not_click PASSED [ 79%]
+tools/test_netflix_play.py::TestV9C21AutoplayWrongTitleBlocked::test_autoplay_no_href_war_machine_exact_title_can_click PASSED [ 79%]
+tools/test_netflix_play.py::TestV9C21AutoplayWrongTitleBlocked::test_autoplay_no_href_unknown_title_does_not_click PASSED [ 80%]
+tools/test_netflix_play.py::TestV9C21AutoplayWrongTitleBlocked::test_explicit_grid_play_can_click_unknown_title_but_not_claim_query PASSED [ 81%]
+tools/test_netflix_play.py::TestV9C21QueryCleaning::test_netflix_search_query_war_machine_on_netflix_cleaned PASSED [ 81%]
+tools/test_netflix_play.py::TestV9C21QueryCleaning::test_netflix_search_query_play_war_machine_on_netflix_cleaned PASSED [ 82%]
+tools/test_netflix_play.py::TestV9C21QueryCleaning::test_router_routes_cleaned_war_machine_query PASSED [ 83%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_click_cached_netflix_card_bad_coords PASSED [ 83%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_find_card_at_row_col_exact PASSED [ 84%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_invalid_row_col_falls_through PASSED [ 85%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_ordinal_still_works_without_row_col PASSED [ 85%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_row_col_triggers_fast_path PASSED [ 86%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_row_zero_col_zero_falls_through PASSED [ 87%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_save_load_cache_roundtrip PASSED [ 87%]
+tools/test_netflix_play.py::TestV9C3GridPlayRowCol::test_scan_visible_grid_no_page PASSED [ 88%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_cookie_banner_rejected PASSED [ 89%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_empty_string_accepted PASSED [ 89%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_gpc_opt_out_rejected PASSED [ 90%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_legal_footer_rejected PASSED [ 91%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_navigation_rejected PASSED [ 91%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_privacy_center_rejected PASSED [ 92%]
+tools/test_netflix_play.py::TestV9C31BadElementFilter::test_real_card_title_accepted PASSED [ 93%]
+tools/test_netflix_play.py::TestV9C31ModalClose::test_close_button_clicked PASSED [ 93%]
+tools/test_netflix_play.py::TestV9C31ModalClose::test_no_modal_falls_back_to_escape PASSED [ 94%]
+tools/test_netflix_play.py::TestV9C31ModalClose::test_no_page_returns_silently PASSED [ 95%]
+tools/test_netflix_play.py::TestV9C31CachedClickValidation::test_bad_element_at_point_returns_none PASSED [ 95%]
+tools/test_netflix_play.py::TestV9C31CachedClickValidation::test_valid_element_succeeds PASSED [ 96%]
+tools/test_netflix_play.py::TestV9C31ExplicitSelectionResponse::test_no_href_ordinal_says_card_number PASSED [ 97%]
+tools/test_netflix_play.py::TestV9C31GridPlayClosesModal::test_modal_closed_before_cached_click PASSED [ 97%]
+tools/test_netflix_play.py::TestV9C31GridPlayClosesModal::test_modal_closed_even_when_card_not_found PASSED [ 98%]
+tools/test_netflix_play.py::TestV9C31PromotedCandidatesFilter::test_bad_token_filtered_from_promotion PASSED [ 99%]
+tools/test_netflix_play.py::TestV9C31OrdinalClickFiltersBadTokens::test_is_bad_netflix_element_variants PASSED [100%]
+
+======================= 149 passed in 192.26s (0:03:12) =======================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-noifa9tv
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 33 items
+
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_browser_control_netflix_search_url_reroutes PASSED [  3%]
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_browser_control_netflix_title_url_reroutes PASSED [  6%]
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_browser_control_netflix_watch_url_reroutes PASSED [  9%]
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_browser_control_legacy_netflix_search_and_play_cannot_execute PASSED [ 12%]
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_no_live_path_produces_thumbnail_locator_error PASSED [ 15%]
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_browser_control_netflix_home_reroutes_to_browse PASSED [ 18%]
+tools/test_netflix_browser_hard_lock.py::TestBrowserControlNetflixReroute::test_browser_control_click_type_on_netflix_reroutes PASSED [ 21%]
+tools/test_netflix_browser_hard_lock.py::TestOpenAppNetflix::test_open_app_netflix_routes_to_netflix_control_browse PASSED [ 24%]
+tools/test_netflix_browser_hard_lock.py::TestOpenAppNetflix::test_open_app_netflix_with_search_query_routes_to_search PASSED [ 27%]
+tools/test_netflix_browser_hard_lock.py::TestOpenAppNetflix::test_open_app_netflix_with_play_intent_routes_to_search PASSED [ 30%]
+tools/test_netflix_browser_hard_lock.py::TestOpenAppNetflix::test_open_app_netflix_with_media_play_no_query_routes_to_netflix_control PASSED [ 33%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_screen_process_what_is_on_netflix_suppressed PASSED [ 36%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_screen_process_what_titles_visible_suppressed PASSED [ 39%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_screen_process_analyze_netflix_grid_suppressed PASSED [ 42%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_screen_process_netflix_titles_suppressed PASSED [ 45%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_screen_process_non_netflix_not_suppressed PASSED [ 48%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_vision_cooldown_suppresses_netflix_screen_process PASSED [ 51%]
+tools/test_netflix_browser_hard_lock.py::TestScreenProcessSuppression::test_failure_context_suppresses_netflix_status PASSED [ 54%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_browser_control_netflix_failure_sets_context PASSED [ 57%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_netflix_control_failure_sets_context PASSED [ 60%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_vision_quota_sets_cooldown PASSED [ 63%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_resource_exhausted_sets_cooldown PASSED [ 66%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_generic_screen_process_503_no_cooldown_without_netflix_context PASSED [ 69%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_failure_context_ttl_expires PASSED [ 72%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_normal_non_netflix_result_does_not_set_failure PASSED [ 75%]
+tools/test_netflix_browser_hard_lock.py::TestFailureContextAndCooldown::test_youtube_failure_does_not_set_netflix_context PASSED [ 78%]
+tools/test_netflix_browser_hard_lock.py::TestSearchOnePieceOnNetflix::test_search_one_piece_routes_to_netflix_control_search PASSED [ 81%]
+tools/test_netflix_browser_hard_lock.py::TestSearchOnePieceOnNetflix::test_search_one_piece_does_not_route_to_browser_control PASSED [ 84%]
+tools/test_netflix_browser_hard_lock.py::TestSearchOnePieceOnNetflix::test_search_one_piece_does_not_trigger_screen_process PASSED [ 87%]
+tools/test_netflix_browser_hard_lock.py::TestSourceCodeGuardrails::test_browser_control_safety_belt_present PASSED [ 90%]
+tools/test_netflix_browser_hard_lock.py::TestSourceCodeGuardrails::test_browser_control_go_to_netflix_blocked PASSED [ 93%]
+tools/test_netflix_browser_hard_lock.py::TestSourceCodeGuardrails::test_router_has_netflix_failure_context PASSED [ 96%]
+tools/test_netflix_browser_hard_lock.py::TestSourceCodeGuardrails::test_router_has_vision_cooldown_call PASSED [100%]
+
+============================= 33 passed in 0.75s ==============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-skj5sli1
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 4 items
+
+tools/test_youtube_grid_match.py::TestYouTubeGridMatch::test_strong_title_match_auto_plays PASSED [ 25%]
+tools/test_youtube_grid_match.py::TestYouTubeGridMatch::test_weak_match_asks_for_number PASSED [ 50%]
+tools/test_youtube_grid_match.py::TestYouTubeGridMatch::test_no_grid_asks_for_search PASSED [ 75%]
+tools/test_youtube_grid_match.py::TestYouTubeGridMatch::test_threshold_is_060 PASSED [100%]
+
+============================== 4 passed in 2.23s ==============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-3x_9qpfs
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 6 items
+
+tools/test_youtube_next_video.py::TestYouTubeNextVideoRouting::test_next_video_routes_to_youtube PASSED [ 16%]
+tools/test_youtube_next_video.py::TestYouTubeNextVideoRouting::test_next_on_youtube PASSED [ 33%]
+tools/test_youtube_next_video.py::TestYouTubeNextVideoRouting::test_next_episode_on_netflix_not_youtube PASSED [ 50%]
+tools/test_youtube_next_video.py::TestYouTubeNextVideoRouting::test_skip_to_next_video PASSED [ 66%]
+tools/test_youtube_next_video.py::TestYouTubeNextVideoAction::test_next_video_calls_shift_n PASSED [ 83%]
+tools/test_youtube_next_video.py::TestYouTubeNextVideoAction::test_next_video_shift_n_argument PASSED [100%]
+
+============================== 6 passed in 2.09s ==============================
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+era: memory store isolated -> C:\Users\nesri\AppData\Local\Temp\era-test-memory-e00rol4q
+rootdir: C:\Users\nesri\OneDrive\Documents\EraOne
+configfile: pytest.ini
+plugins: anyio-4.15.1, asyncio-1.4.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 120.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 5 items
+
+tools/test_youtube_direct_play.py::TestYouTubeDirectPlay::test_generic_query_fast_path_success PASSED [ 20%]
+tools/test_youtube_direct_play.py::TestYouTubeDirectPlay::test_generic_query_fast_path_fallback PASSED [ 40%]
+tools/test_youtube_direct_play.py::TestYouTubeDirectPlay::test_specific_query_no_fast_path PASSED [ 60%]
+tools/test_youtube_direct_play.py::TestYouTubeDirectPlay::test_chill_music_is_generic PASSED [ 80%]
+tools/test_youtube_direct_play.py::TestYouTubeDirectPlay::test_lofi_is_generic PASSED [100%]
+
+============================== 5 passed in 6.96s ==============================
+
+============================================================
+  Era One Doctor � Health Check
+============================================================
+
+  [PASS] Python version � 3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]
+  [PASS] Required directories/files
+  [PASS] Core module imports
+  [WARN] API key config � config/api_keys.json contains literal credentials; keep this file local and never commit it
+  [PASS] Voice verification readiness � speaker verification disabled
+  [PASS] Cloudinary media host config � configured � cloud 'jjac38uo'
+  [PASS] Tool registry consistency � 10 issues: 0 errors, 25 main only
+  [PASS] LLM alias registry � 8/8 aliases available � default era.voice, voice era.voice � budget $2.0/day
+  [PASS] LLM provider reachability � claude_cli, gemini, ollama reachable
+  [PASS] Existing test files
+  [PASS] Action module imports � 53 modules
+  [PASS] memory/long_term.json � 20.8 KB
+  [PASS] Memory backups � 12 file(s): backups/learned_patterns.1791859018176.24800.0008 (1.9 KB), backups/learned_patterns.1791859189091.29576.0002 (1.9 KB), backups/learned_patterns.1791884762347.22372.0001 (1.9 KB), backups/long_term.1791847378769.2916.0021 (20.8 KB), backups/long_term.1791849995835.28272.0013 (20.8 KB), backups/long_term.1791885082865.22372.0005 (20.8 KB), backups/runtime_intent.1791885134000.22372.0009 (9.3 KB), backups/runtime_intent.1791885134519.22372.0010 (9.2 KB), backups/runtime_intent.1791885181456.22372.0011 (8.8 KB), backups/user_prefs.1791856574637.32464.0030 (9.3 KB), backups/user_prefs.1791856957129.32464.0034 (9.3 KB), backups/user_prefs.1791884799989.22372.0002 (9.3 KB)
+  [PASS] Logs folder � 35 file(s), era.log 352.0 KB
+  [PASS] Root cleanliness � root clean � no zero-byte junk files
+  [PASS] memory/feedback_memory.jsonl � 1103 line(s)
+  [PASS] Obsidian vault (CM context) � 118 note(s) [00 - Inbox 2, 01 - Daily Notes 34, 02 - Delta Cuisine 20, 03 - Ceram Quartz 13, 04 - Global 27, 05 - Archive 6, 06 - Resources 14, 07 - Brico Kitchen 2] � brands: brico_kitchen, ceram_quartz, delta_cuisine
+  [WARN] Vault consistency (PARA/brand filing) � 0 error(s), 1 warning(s) � run `python -m core.vault_maintenance` for detail
+  [PASS] Era day log (01 - Daily Notes) � template present; nothing logged today yet
+  [PASS] CM learned feedback � 12 lesson(s) � ceram_quartz: 5, delta_cuisine: 7
+  [PASS] logs/memory_audit.jsonl � 530 line(s)
+  [WARN] Optional packages � Not installed: pyaudio, python_vlc
+  [PASS] Vosk model � model present in local ignored models/ directory
+
+============================================================
+  Errors: 0   Warnings: 3
+  Status: READY
+============================================================
+==========================================================
+  Era One � One-Command Validation Runner
+==========================================================
+
+[1/3] Compile check
+----------------------------------------------------------
+  PASS  core/logger.py
+  PASS  core/tool_registry_validator.py
+  PASS  core/tool_result.py
+  PASS  core/safety_guard.py
+  PASS  core/verification.py
+  PASS  core/main_tool_bridge.py
+  PASS  core/pending_confirmation.py
+  PASS  memory/safe_store.py
+  PASS  memory/memory_manager.py
+  PASS  core/intent_memory.py
+  PASS  memory/feedback_memory.py
+  PASS  memory/memory_audit.py
+  PASS  memory/transient_filter.py
+  PASS  memory/persistence.py
+  PASS  agent/executor.py
+  PASS  main.py
+  PASS  tools/era_doctor.py
+  PASS  tools/test_smoke_e2e.py
+  PASS  actions/screen_processor.py
+  PASS  core/vision_worker.py
+  PASS  core/vision_openai.py
+  PASS  core/vision_config.py
+  PASS  tools/test_vision_silent.py
+  PASS  tools/test_vision_worker.py
+  PASS  tools/test_vision_screen_process_async.py
+  PASS  core/vision_types.py
+  PASS  core/vision_policy.py
+  PASS  tools/test_vision_policy.py
+  PASS  core/vision_context.py
+  PASS  tools/test_vision_router_policy.py
+  PASS  utils/scroll.py
+  PASS  tools/test_scroll_control.py
+  PASS  utils/media_match.py
+  PASS  tools/test_media_selection.py
+  PASS  tools/test_browser_media_routing.py
+  PASS  tools/test_regression_14b1.py
+  PASS  actions/youtube_video.py
+  PASS  actions/netflix_control.py
+  PASS  actions/computer_control.py
+  PASS  core/self_healing_router.py
+  PASS  actions/browser_intelligence.py
+  PASS  actions/media_coordinator.py
+  PASS  utils/ordinal_selection.py
+  PASS  core/browser_grid_state.py
+  PASS  actions/platform_tab.py
+  PASS  tools/test_grid_selection.py
+  PASS  tools/test_netflix_play.py
+  PASS  tools/test_netflix_browser_hard_lock.py
+  PASS  tools/test_youtube_grid_match.py
+  PASS  tools/test_youtube_next_video.py
+  PASS  tools/test_youtube_direct_play.py
+
+[2/3] Test suites
+----------------------------------------------------------
+  [PASS] Registry validator (0.2s)
+  [PASS] Logging (0.4s)
+  [PASS] Memory safety (6.1s)
+  [PASS] Execution layer (0.4s)
+  [PASS] Verification layer (0.1s)
+  [PASS] Main tool bridge (2.2s)
+  [PASS] Confirmation flow (14.7s)
+  [PASS] Era One doctor (23.5s)
+  [PASS] Smoke E2E (2.0s)
+  [PASS] YouTube volume routing (1.0s)
+  [PASS] Browser intelligence (0.6s)
+  [PASS] Domain validation (0.5s)
+  [PASS] Standby policy (7.1s)
+  [PASS] Speech pipeline (21.8s)
+  [PASS] Vision silent (13.7s)
+  [PASS] Vision worker (4.2s)
+  [PASS] Vision async screen_process (4.1s)
+  [PASS] Vision policy (1.9s)
+  [PASS] Vision router policy (3.9s)
+  [PASS] Scroll control (3.3s)
+  [PASS] Media selection (2.8s)
+  [PASS] Browser/media routing (5.8s)
+  [PASS] Grid selection (2.4s)
+  [PASS] Netflix Vision fallback (47.4s)
+  [PASS] Regression 14B.1 (8.6s)
+  [PASS] Netflix play accuracy (193.7s)
+  [PASS] Netflix browser hard-lock (2.1s)
+  [PASS] YouTube grid match (3.6s)
+  [PASS] YouTube next video (3.5s)
+  [PASS] YouTube direct play (8.3s)
+
+[3/3] Doctor check
+----------------------------------------------------------
+  [PASS] Doctor (6.7s)
+
+==========================================================
+  Summary
+==========================================================
+  PASS   Compile check                 8.2s
+  PASS   Registry validator            0.2s
+  PASS   Logging                       0.4s
+  PASS   Memory safety                 6.1s
+  PASS   Execution layer               0.4s
+  PASS   Verification layer            0.1s
+  PASS   Main tool bridge              2.2s
+  PASS   Confirmation flow             14.7s
+  PASS   Era One doctor                23.5s
+  PASS   Smoke E2E                     2.0s
+  PASS   YouTube volume routing        1.0s
+  PASS   Browser intelligence          0.6s
+  PASS   Domain validation             0.5s
+  PASS   Standby policy                7.1s
+  PASS   Speech pipeline               21.8s
+  PASS   Vision silent                 13.7s
+  PASS   Vision worker                 4.2s
+  PASS   Vision async screen_process   4.1s
+  PASS   Vision policy                 1.9s
+  PASS   Vision router policy          3.9s
+  PASS   Scroll control                3.3s
+  PASS   Media selection               2.8s
+  PASS   Browser/media routing         5.8s
+  PASS   Grid selection                2.4s
+  PASS   Netflix Vision fallback       47.4s
+  PASS   Regression 14B.1              8.6s
+  PASS   Netflix play accuracy         193.7s
+  PASS   Netflix browser hard-lock     2.1s
+  PASS   YouTube grid match            3.6s
+  PASS   YouTube next video            3.5s
+  PASS   YouTube direct play           8.3s
+  PASS   Doctor                        6.7s
+----------------------------------------------------------
+  Total: 404.8s
+
+==========================================================
+  VISION_STACK_READY: YES
+  GLOBAL_READY:       YES
+==========================================================
+
+==========================================================
+  ALL_CHECKS_OK
+  READY
+==========================================================

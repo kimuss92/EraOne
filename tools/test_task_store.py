@@ -3,6 +3,54 @@ from agent.task_store import TaskStore
 from agent.types import TaskStatus
 
 
+def test_queue_bootstrap_honors_isolated_database_in_subprocess(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    path = tmp_path / "isolated.sqlite3"
+    monkeypatch.setenv("ERA_AGENT_TASK_DB", str(path))
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from agent.task_queue import _queue; _queue.submit('isolated bootstrap')",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert process.returncode == 0, process.stderr
+    assert path.is_file()
+    store = TaskStore(path)
+    try:
+        assert [row["goal"] for row in store.list_tasks()] == ["isolated bootstrap"]
+    finally:
+        store.close()
+
+
+def test_history_retention_never_deletes_active_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent.task_store._MAX_TASKS", 2)
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    try:
+        store.create_task("pending", "pending job", 2, 1.0)
+        store.create_task("running", "running job", 2, 2.0)
+        store.update_task("running", "running", updated_at=2.0)
+        store.create_task("approval", "approval job", 2, 3.0)
+        store.update_task("approval", "awaiting_approval", updated_at=3.0)
+        for i in range(5):
+            tid = f"done-{i}"
+            store.create_task(tid, "old completed job", 2, 10.0 + i)
+            store.update_task(tid, "completed", updated_at=10.0 + i)
+        store.create_task("new", "new pending job", 2, 20.0)
+        for tid in ("pending", "running", "approval", "new"):
+            assert store.get_task(tid) is not None
+            assert store.get_events(tid)
+        completed = [row for row in store.list_tasks() if row["status"] == "completed"]
+        assert {row["task_id"] for row in completed} == {"done-3", "done-4"}
+    finally:
+        store.close()
+
+
 def test_task_and_ordered_status_events_survive_store_reopen(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     store = TaskStore(path)

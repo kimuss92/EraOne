@@ -1,21 +1,28 @@
 # actions/open_app.py
 """
 High-performance Windows Application Launcher for Era One.
-Features:
-- Ultra-fast Start Menu Shortcut (.lnk) indexing (instant alternative to deep disk walking)
-- Native Windows Search Bar GUI injection fallback
-- Registry App Paths scanning
-- Already-running window detection & absolute focus injection
+Ranks and inspects Start Menu shortcuts, resolves registry/PATH/Store targets,
+and checks process-owned windows. Never selects an uninspected shell search result.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
 import webbrowser
+from functools import lru_cache
 from pathlib import Path
 
+from core.app_launch_safety import (
+    inspect_shortcut,
+    normalized_name,
+    safe_executable,
+    shortcut_score,
+    unsafe_launch,
+)
+from core.cancel_registry import CancelledTask, raise_if_cancelled, sleep_cancellable
 from core.win_subprocess import NO_WINDOW
 
 if sys.platform == "win32":
@@ -48,8 +55,8 @@ MASTER_APP_REGISTRY = {
     "code": {"exe": "Code.exe", "class": "Chrome_WidgetWin_1"},
     "photoshop": {"exe": "Photoshop.exe", "class": "photoshop"},
     "illustrator": {"exe": "Illustrator.exe", "class": "illustrator_app"},
-    "premiere": {"exe": "Premiere.exe", "class": "Premiere Pro"},
-    "premiere pro": {"exe": "Premiere.exe", "class": "Premiere Pro"},
+    "premiere": {"exe": "Adobe Premiere Pro.exe", "class": "Premiere Pro"},
+    "premiere pro": {"exe": "Adobe Premiere Pro.exe", "class": "Premiere Pro"},
     "whatsapp": {"exe": "WhatsApp.exe", "class": "ApplicationFrameWindow"},
     "telegram": {"exe": "Telegram.exe", "class": "TelegramWidget"},
     "neat download manager": {"exe": "NeatDM.exe", "class": "NeatDownloadManagerClass"},
@@ -79,11 +86,24 @@ def get_executable_from_registry(app_name: str) -> str | None:
                 winreg.CloseKey(key)
                 if exe_path:
                     clean = exe_path.strip('"')
-                    if os.path.exists(clean):
+                    if safe_executable(clean):
                         return clean
             except Exception:
                 continue
     return None
+
+
+@lru_cache(maxsize=4)
+def _shortcut_inventory(roots: tuple[str, ...], epoch: int) -> tuple[str, ...]:
+    paths = []
+    for folder in roots:
+        root = Path(folder)
+        if root.is_dir():
+            try:
+                paths.extend(str(path) for path in root.rglob("*.lnk"))
+            except OSError:
+                continue
+    return tuple(paths)
 
 
 def scan_start_menu_shortcuts(app_name: str) -> str | None:
@@ -106,21 +126,193 @@ def scan_start_menu_shortcuts(app_name: str) -> str | None:
         Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
     ]
 
-    for root in shortcut_roots:
-        if not root.exists():
-            continue
+    ranked = sorted(
+        (
+            (shortcut_score(Path(path).stem, target_phrase), path)
+            for path in _shortcut_inventory(
+                tuple(str(root) for root in shortcut_roots), int(time.monotonic() // 60)
+            )
+        ),
+        key=lambda item: (-item[0], item[1].casefold()),
+    )
+    candidates = []
+    best_score = 0
+    for score, path in ranked:
+        raise_if_cancelled()
+        if not score or (best_score and score < best_score):
+            break
+        inspected = inspect_shortcut(path)
+        if inspected:
+            best_score = score
+            candidates.append((path, inspected))
+    # Equal-ranked shortcuts for different binaries are ambiguous: do not guess.
+    if len({target.casefold() for _, (target, _) in candidates}) > 1:
+        return None
+    return candidates[0][0] if candidates else None
+
+
+def _find_launch_window(app_name: str, executable: str | None = None) -> int:
+    """Read back a visible app window by owning executable, never a browser tab."""
+    if sys.platform != "win32":
+        return 0
+    import psutil
+    import win32process
+
+    spec = MASTER_APP_REGISTRY.get(_normalize_app_token(app_name))
+    if not executable and Path(app_name).suffix.casefold() == ".exe" and Path(app_name).is_file():
+        executable = app_name
+    expected = (
+        Path(executable).name.casefold()
+        if executable
+        else (spec["exe"].casefold() if spec else app_name.casefold().removesuffix(".exe") + ".exe")
+    )
+    # Electron shortcuts may launch Update.exe with --processStart. The visible
+    # app belongs to the app process, not that short-lived bootstrap executable.
+    if spec and expected in {"update.exe", "updater.exe"}:
+        expected = spec["exe"].casefold()
+        executable = None
+    expected_names = {expected}
+    if _normalize_app_token(app_name) == "calculator" and not executable:
+        expected_names.update({"calculatorapp.exe", "calculator.exe"})
+    found = []
+
+    def collect(hwnd, _):
         try:
-            # Search for shortcut files matching the name patterns cleanly and fast
-            for path in root.rglob("*.lnk"):
-                if target_phrase in path.name.lower():
-                    return str(path)
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            title = win32gui.GetWindowText(hwnd)
+            if not title:
+                return True
+            pid = win32process.GetWindowThreadProcessId(hwnd)[1]
+            proc = psutil.Process(pid)
+            process_name = proc.name().casefold()
+            if process_name not in expected_names:
+                return True
+            if executable and os.path.normcase(proc.exe()) != os.path.normcase(executable):
+                return True
+            # Shared Store host processes cannot identify an app on their own.
+            if process_name == "applicationframehost.exe":
+                names = {normalized_name(app_name)}
+                if _normalize_app_token(app_name) == "calculator":
+                    names.add("calculatrice")
+                if not any(name in normalized_name(title) for name in names):
+                    return True
+            found.append(hwnd)
         except Exception:
-            continue
-    return None
+            pass
+        return True
+
+    win32gui.EnumWindows(collect, None)
+    return found[0] if found else 0
+
+
+def _focus_launch_window(hwnd: int) -> bool:
+    from actions.window_control import force_absolute_focus
+
+    raise_if_cancelled()
+    force_absolute_focus(hwnd)
+    return win32gui.GetForegroundWindow() == hwnd
+
+
+_EXE_HINTS: dict[str, frozenset[str]] = {}
+_BOOTSTRAP_EXES = frozenset({"update.exe", "updater.exe", "launcher.exe"})
+
+
+def known_exe_names(app_name: str) -> frozenset[str]:
+    """PF-068: the real process name(s) of ANY app, from the same registry /
+    Start Menu shortcut resolution that launches it - never a guess from the
+    spoken name ("Neat Download Manager" -> NeatDM.exe, not "neat download
+    manager.exe"). Only a found answer is cached, so a later install is found."""
+    key = _normalize_app_token(app_name) or str(app_name or "").casefold()
+    if key in _EXE_HINTS:
+        return _EXE_HINTS[key]
+    names: set[str] = set()
+    try:
+        reg = get_executable_from_registry(app_name)
+        shortcut = None if reg else scan_start_menu_shortcuts(app_name)
+        inspected = inspect_shortcut(shortcut) if shortcut else None
+        binary = reg or (inspected[0] if inspected else None)
+        if binary:
+            name = Path(binary).name.casefold()
+            if name.endswith(".exe") and name not in _BOOTSTRAP_EXES:
+                names.add(name)
+    except Exception:
+        pass
+    found = frozenset(names)
+    if found:
+        _EXE_HINTS[key] = found
+    return found
+
+
+def _launch_result(app_name: str, executable: str | None = None, timeout: float = 3.0) -> str:
+    deadline = time.monotonic() + timeout
+    while True:
+        raise_if_cancelled()
+        hwnd = _find_launch_window(app_name, executable)
+        if hwnd:
+            focused = _focus_launch_window(hwnd)
+            return (
+                f"Opened {app_name}, sir."
+                if focused
+                else f"{app_name} is open, but Windows did not allow foreground focus."
+            )
+        if time.monotonic() >= deadline:
+            return f"Launch sent for {app_name}, but its application window has not been confirmed yet."
+        sleep_cancellable(0.15)
 
 
 def _normalize_app_token(app_name: str) -> str:
-    return (app_name or "").strip().lower()
+    value = (app_name or "").strip().lower()
+    return {
+        "telegram desktop": "telegram",
+        "brave browser": "brave",
+        "google chrome": "chrome",
+        "microsoft edge": "edge",
+        "vs code": "vscode",
+    }.get(value, value)
+
+
+@lru_cache(maxsize=2)
+def _store_catalog(epoch: int) -> tuple[dict, ...]:
+    """Read Windows' registered app catalog; never interpolate user input in code."""
+    if sys.platform != "win32":
+        return ()
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+                "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress",
+            ],
+            capture_output=True,
+            encoding="utf-8",
+            timeout=5,
+            creationflags=NO_WINDOW,
+        )
+        entries = json.loads(result.stdout) if result.returncode == 0 else []
+        return tuple(entries if isinstance(entries, list) else [entries])
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ()
+
+
+def _store_app_id(app_name: str) -> str | None:
+    import re
+
+    wanted = normalized_name(app_name)
+    wanted_names = {wanted, "calculatrice"} if wanted == "calculator" else {wanted}
+    candidates = {
+        entry["AppID"]
+        for entry in _store_catalog(int(time.monotonic() // 60))
+        if isinstance(entry, dict)
+        and normalized_name(str(entry.get("Name", ""))) in wanted_names
+        and isinstance(entry.get("AppID"), str)
+        and re.fullmatch(r"[A-Za-z0-9._-]+![A-Za-z0-9._-]+", entry["AppID"])
+        and not unsafe_launch(entry["AppID"])
+    }
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def _get_matching_window_handles(app_query: str) -> list[int]:
@@ -191,29 +383,8 @@ def _force_alt_f4_close_window(handles: list[int]) -> bool:
 
 
 def _launch_via_windows_search_bar_verified(app_name: str) -> bool:
-    """
-    Fallback injection that interacts with the Windows desktop shell to force
-    an application launch using the OS Search layout indexing mechanism.
-    """
-    if not _GUI_AUTOMATION:
-        return False
-
-    try:
-        print(f"[open_app] Engaging hardware automation layer to launch: '{app_name}'")
-        # Tap the Windows key to call up the Start Menu / Search UI layout cleanly
-        keyboard.send("windows")
-        time.sleep(0.3)  # Allow UI thread frame to change state safely
-
-        # Type target application identifier match sequence directly into shell focus line
-        keyboard.write(app_name, delay=0.02)
-        time.sleep(0.4)
-
-        # Execute target line selection handle activation sequence
-        keyboard.send("enter")
-        return True
-    except Exception as e:
-        print(f"[open_app] Search Bar GUI mapping error: {e}")
-        return False
+    """Legacy entry point: blind shell selection cannot verify target identity."""
+    return False
 
 
 def _find_spotify_hwnd() -> int:
@@ -255,10 +426,11 @@ def _wait_for_spotify_window(timeout: float = 4.0, poll_interval: float = 0.4) -
         return 0
     deadline = time.time() + timeout
     while time.time() < deadline:
+        raise_if_cancelled()
         hwnd = _find_spotify_hwnd()
         if hwnd:
             return hwnd
-        time.sleep(poll_interval)
+        sleep_cancellable(poll_interval)
     return 0
 
 
@@ -281,12 +453,23 @@ def _resume_spotify(delay: float = 0.25, attempts: int = 3, interval: float = 0.
 def _ensure_spotify_launched(spotify_exe: str | None = None) -> None:
     """Launch Spotify using the executable path or protocol handler."""
     if spotify_exe:
+        raise_if_cancelled()
         try:
-            subprocess.Popen([spotify_exe], shell=False, creationflags=NO_WINDOW)
+            if Path(spotify_exe).suffix.casefold() == ".lnk":
+                if not inspect_shortcut(spotify_exe):
+                    raise OSError("Unsafe Spotify shortcut")
+                os.startfile(spotify_exe)
+            elif safe_executable(spotify_exe):
+                subprocess.Popen([spotify_exe], shell=False, creationflags=NO_WINDOW)
+            else:
+                raise OSError("Unsafe Spotify executable")
             return
+        except CancelledTask:
+            raise
         except Exception:
             pass
 
+    raise_if_cancelled()
     try:
         os.startfile("spotify:")
     except Exception:
@@ -306,17 +489,18 @@ def _play_spotify_after_open() -> None:
 
 
 def open_app(parameters=None, response=None, player=None, session_memory=None) -> str:
+    raise_if_cancelled()
     parameters = parameters or {}
     app_name = str(parameters.get("app_name", "")).strip()
     mode = str(parameters.get("mode", "open") or "open").strip().lower()
 
     # Heuristic: if user says close/quit/exit in the app_name text, treat as toggle-close.
     # (LLM sometimes passes the whole phrase into app_name.)
-    if mode in {"open", ""} and any(
-        k in app_name.lower()
-        for k in ["close ", "close it", "exit", "quit", "shutdown app", "terminate"]
-    ):
-        mode = "close"
+    for prefix in ("close ", "quit ", "exit "):
+        if mode in {"open", ""} and app_name.casefold().startswith(prefix):
+            mode = "close"
+            app_name = app_name[len(prefix) :].strip()
+            break
 
     do_toggle = mode in {"toggle", "toggle_open_close", "open_or_close"}
     if do_toggle:
@@ -324,6 +508,10 @@ def open_app(parameters=None, response=None, player=None, session_memory=None) -
 
     if not app_name:
         return "No application name provided."
+
+    app_name = _normalize_app_token(app_name)
+    if unsafe_launch(app_name):
+        return "Could not open that target: app launching does not run uninstallers, installers or maintenance actions."
 
     try:
         media_app = "spotify" if "spotify" in app_name.lower() else None
@@ -337,6 +525,28 @@ def open_app(parameters=None, response=None, player=None, session_memory=None) -
         return "Opening link in your default browser, sir."
 
     print(f"[open_app] Launch request: '{app_name}' (mode={mode})")
+    if mode in {"open", "play"}:
+        try:
+            from core.user_prefs.minimize_rule import note_opened_on_request
+
+            note_opened_on_request(app_name)  # a minimize-after-use rule must not hide it
+        except Exception:
+            pass
+
+    if mode in {"close", "toggle"}:
+        hwnd = _find_launch_window(app_name)
+        if hwnd:
+            raise_if_cancelled()
+            _try_close_window_handles([hwnd])
+            sleep_cancellable(0.3)
+            raise_if_cancelled()
+            return (
+                f"Closed {app_name}, sir."
+                if not _find_launch_window(app_name)
+                else f"Close requested for {app_name}; its window is still open."
+            )
+        if mode == "close":
+            return f"Could not find a running {app_name} window to close."
 
     # ----- 2. Spotify Custom Path Override Sequence -----
     # 25/09/2026: OPENING Spotify no longer starts playback. "open spotify"
@@ -379,67 +589,52 @@ def open_app(parameters=None, response=None, player=None, session_memory=None) -
         _play_spotify_after_open()
         return "Spotify opened and now playing, sir."
 
-    # ----- 3. Live Context Synchronization Framework -----
-    if sys.platform == "win32":
-        try:
-            from actions.window_control import find_window_by_master_spec, force_absolute_focus
+    # Existing process identity is enough to focus an app even if a relocated
+    # installation left an inaccessible shortcut target behind.
+    hwnd = _find_launch_window(app_name)
+    if hwnd:
+        focused = _focus_launch_window(hwnd)
+        return (
+            f"{app_name} was already open and is in front, sir."
+            if focused
+            else f"{app_name} is already open, but Windows did not allow foreground focus."
+        )
 
-            target = find_window_by_master_spec(app_name)
-            if target:
-                print(
-                    f"[open_app] '{app_name}' already running → shifting workspace window target focal state."
-                )
-                force_absolute_focus(target.getHandle())
-                return f"{app_name} was already open, sir. I have brought it to the foreground."
-        except Exception as e:
-            print(f"[open_app] Window focus hook warning: {e}")
-
-    # ----- 4. System Registry Pipeline Launch -----
+    # App identity must be resolved before any launch. A shortcut is
+    # inspected again immediately before launch so stale cache entries are not trusted.
     reg_path = get_executable_from_registry(app_name)
-    if reg_path:
-        if any(b in app_name.lower() for b in ("brave", "chrome", "edge", "firefox")):
-            webbrowser.open("about:blank")
-            return f"{app_name.capitalize()} context opened, sir."
-        subprocess.Popen([reg_path], shell=False, creationflags=NO_WINDOW)
-        return f"{app_name} launched successfully from system registry, sir."
+    shortcut_path = None if reg_path else scan_start_menu_shortcuts(app_name)
+    inspected = inspect_shortcut(shortcut_path) if shortcut_path else None
+    binary = reg_path or (inspected[0] if inspected else None)
+    if not binary:
+        binary = shutil.which(app_name) or shutil.which(f"{app_name}.exe")
+    if binary and not safe_executable(binary, inspected[1] if inspected else ""):
+        return f"Could not safely launch {app_name}: the resolved target is not an application executable."
 
-    # ----- 5. Fast Start Menu Shortcuts Mapping Verification -----
-    shortcut_path = scan_start_menu_shortcuts(app_name)
-    if shortcut_path:
-        try:
+    hwnd = _find_launch_window(app_name, binary)
+    if hwnd:
+        focused = _focus_launch_window(hwnd)
+        return (
+            f"{app_name} was already open and is in front, sir."
+            if focused
+            else f"{app_name} is already open, but Windows did not allow foreground focus."
+        )
+    if not binary:
+        package_id = _store_app_id(app_name)
+        raise_if_cancelled()
+        if package_id:
+            try:
+                os.startfile("shell:AppsFolder\\" + package_id)
+            except OSError as exc:
+                return f"Could not launch {app_name}: {exc}"
+            return _launch_result(app_name)
+        return f"Could not find a safe, unambiguous launch target for {app_name}. Please provide its exact app name or executable path."
+    raise_if_cancelled()
+    try:
+        if shortcut_path and inspected:
             os.startfile(shortcut_path)
-            return (
-                f"Located and launched {app_name} from system shortcuts directory hierarchy, sir."
-            )
-        except Exception as e:
-            print(f"[open_app] Shortcut startfile failed, moving to fallback layer: {e}")
-
-    # ----- 6. Global Command PATH Allocation Lookup -----
-    binary = shutil.which(app_name) or shutil.which(f"{app_name}.exe")
-    if binary:
-        subprocess.Popen([binary], shell=False, creationflags=NO_WINDOW)
-        return f"Opened {app_name} via standard path routing."
-
-    # ----- 7. Toggle-close / open-or-close support (generic) -----
-    # Generic close path: if mode is close or toggle, try to close any visible window whose title matches.
-    if mode in {"close", "toggle"}:
-        app_query = _normalize_app_token(app_name)
-        handles = _get_matching_window_handles(app_query)
-        if handles:
-            _try_close_window_handles(handles)
-            # Give it a moment to disappear
-            time.sleep(0.3)
-            return f"Closed {app_name}, sir."
-
-    # ----- 8. Absolute Final Smart Fallback: Windows Search Automation Injection -----
-    if _launch_via_windows_search_bar_verified(app_name):
-        # Verify it opened by checking any window title contains the query.
-        query = _normalize_app_token(app_name)
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            if _get_matching_window_handles(query):
-                return f"Invoked Windows desktop search module and opened '{app_name}', sir."
-            time.sleep(0.3)
-        return f"Invoked Windows desktop search module to locate and initialize '{app_name}', sir."
-
-    return f"Sir, I could not locate '{app_name}' anywhere on your system storage layout or via shell indexing."
+        else:
+            subprocess.Popen([binary], shell=False, creationflags=NO_WINDOW)
+    except OSError as exc:
+        return f"Could not launch {app_name}: {exc}"
+    return _launch_result(app_name, binary)

@@ -16,6 +16,33 @@ interface Diag {
   recentEvents: { ts: number; type: string; label?: string; message?: string; toolName?: string }[];
   websocket: { clients: number };
   process: { pid: number; python: string; os: string };
+  fabricHealth?: Breaker[];
+}
+
+// Era Fabric F1 circuit breakers (core/fabric/health.py), measured from real calls.
+interface Breaker {
+  component: string;
+  label: string;
+  state: 'closed' | 'open' | 'half_open';
+  recent_faults: number;
+  threshold: number;
+  retry_in_s: number;
+  last_fault_kind: string | null;
+  last_fault: string;
+  last_fault_at: number | null;
+  times_opened: number;
+}
+
+const BREAKER_TONE: Record<Breaker['state'], string> = {
+  closed: 'text-[var(--ok)]',
+  half_open: 'text-[var(--warn)]',
+  open: 'text-[var(--bad)]',
+};
+
+function breakerText(b: Breaker) {
+  if (b.state === 'open') return `DOWN · retry in ${b.retry_in_s}s`;
+  if (b.state === 'half_open') return 'RE-TESTING';
+  return b.recent_faults ? `OK · ${b.recent_faults}/${b.threshold} recent faults` : 'OK';
 }
 
 function Row({ k, v, tone = 't1' }: { k: string; v: ReactNode; tone?: string }) {
@@ -42,13 +69,14 @@ export default function DiagnosticsDrawer() {
   const [d, setD] = useState<Diag | null>(null);
   const [err, setErr] = useState('');
   const [fps, setFps] = useState(live.fps);
+  const [frameMs, setFrameMs] = useState(live.frameMs);
   const rtt = useHud(s => s.rttMs);
   const link = useHud(s => s.link);
 
   useEffect(() => {
     const load = () => api<Diag>('/api/diagnostics').then(x => { setD(x); setErr(''); }).catch(e => setErr(String(e.message || e)));
     load();
-    const t = window.setInterval(() => { load(); setFps(live.fps); }, 2500);
+    const t = window.setInterval(() => { load(); setFps(live.fps); setFrameMs(live.frameMs); }, 2500);
     return () => window.clearInterval(t);
   }, []);
 
@@ -82,6 +110,19 @@ export default function DiagnosticsDrawer() {
         <Row k="BUILD" v={h.build || 'N/A'} />
         <Row k="RUNTIME" v={d ? `Python ${d.process.python} · ${d.process.os}` : 'N/A'} />
       </Section>
+      <Section title="COMPONENT HEALTH">
+        {(d?.fabricHealth || []).length === 0 && <p className="text-meta t3">No component has reported yet this session.</p>}
+        {(d?.fabricHealth || []).slice(0, 16).map(b => (
+          <div key={b.component} className="py-0.5">
+            <Row k={b.label.toUpperCase()} v={breakerText(b)} tone={BREAKER_TONE[b.state] || 't1'} />
+            {b.state !== 'closed' && b.last_fault && (
+              <p className="select-text truncate text-meta t3">
+                {b.last_fault_kind} · {b.last_fault}{b.last_fault_at ? ` · ${ago(b.last_fault_at)}` : ''}
+              </p>
+            )}
+          </div>
+        ))}
+      </Section>
       <Section title="TOOLS">
         <Row k="REGISTERED" v={s.tools?.count ?? 'N/A'} />
         <Row k="ACTIVE" v={s.tools?.active?.length ? s.tools.active.map((t: any) => t.label).join(', ') : 'none'} />
@@ -95,6 +136,7 @@ export default function DiagnosticsDrawer() {
       </Section>
       <Section title="HUD">
         <Row k="RENDER RATE" v={`${fps} fps`} />
+        <Row k="CANVAS CPU TIME" v={`${frameMs.toFixed(2)} ms/frame · moving average`} />
         <Row k="HOST" v={window.location.protocol.startsWith('http') ? 'Browser (localhost)' : 'Legacy desktop window'} />
       </Section>
       <Section title="RECENT FAILURES">

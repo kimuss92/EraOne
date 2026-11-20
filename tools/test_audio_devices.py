@@ -12,9 +12,12 @@ import core.audio_devices as ad
 def _fresh(monkeypatch):
     # Isolate from the real config and clear the detection cache each test.
     monkeypatch.setattr("core.utils.load_config", lambda: {}, raising=False)
-    ad.invalidate()
+    # Disconnect hysteresis keeps the last PUBLISHED state across calls; without a
+    # full reset a "connected" result leaks into the next test, and the volume test
+    # then believed the glasses were present and wrote to the REAL device.
+    ad._reset_probe_state()
     yield
-    ad.invalidate()
+    ad._reset_probe_state()
 
 
 def _fake_sd(devices):
@@ -89,6 +92,9 @@ def test_routing_summary_reflects_state(monkeypatch):
     assert "CONNECTED" in summary
     assert "system" in summary.lower()
 
+    # This test is about the wording for a genuinely absent device, not about the
+    # disconnect hysteresis (which deliberately keeps "connected" through a brief drop).
+    ad._reset_probe_state()
     monkeypatch.setitem(
         sys.modules,
         "sounddevice",

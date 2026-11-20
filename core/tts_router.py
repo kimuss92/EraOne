@@ -1,4 +1,4 @@
-"""Speech-synthesis router — Fish or Kokoro, with Gemini as the fallback.
+"""Speech-synthesis router — selected voice with verified phrase fallback.
 
 Era has three ways to produce speech:
 
@@ -17,10 +17,21 @@ Gemini. Everything degrades — a failure here costs a backend, never the proces
 
 from __future__ import annotations
 
+from core.speech_frames import EnginePCM
 from core.tts_fish import FISH
 
 BACKEND_FISH = "fish"
 BACKEND_NONE = "none"
+
+
+def _fabric(component: str, kind: str | None, detail="") -> None:
+    """Era Fabric F1: a backend's outcome on the shared health registry."""
+    try:
+        from core.fabric import health
+
+        health.note(component, kind, detail)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def synthesize(text: str) -> tuple[bytes, str]:
@@ -37,7 +48,7 @@ async def synthesize(text: str) -> tuple[bytes, str]:
 
 
 async def stream(text: str, lang: str = ""):
-    """Yield PCM chunks for one sentence from the primary backend, as they arrive.
+    """Yield PCM chunks for one sentence from the selected backend.
 
     An empty iterator means the backend produced nothing — the caller falls back
     to Gemini. Only Fish streams; Gemini's audio comes from the Live session, not
@@ -61,10 +72,55 @@ async def stream(text: str, lang: str = ""):
             KOKORO.last_error = "Kokoro is still loading"
             return
         async for chunk in KOKORO.stream(text, lang):
-            yield chunk
+            if VOICE_CFG.is_gemini():
+                return
+            yield EnginePCM(chunk, "kokoro")
         return
-    async for chunk in FISH.stream(text, lang):
-        yield chunk
+    # Transport completion belongs to this request, not FISH.last_error (which
+    # an overlapping warm-up can change). Never expose a failed phrase prefix.
+    try:
+        chunks = [chunk async for chunk in FISH.stream(text, lang)]
+    except Exception:
+        # Provider exceptions, like incomplete transport, leave no playable prefix.
+        chunks = []
+    if VOICE_CFG.is_gemini():
+        return  # a live voice switch while synthesis awaited owns the output now
+    _fabric("tts.fish", None if any(chunks) else "EmptyResult", FISH.last_error or "no audio")
+    if not any(chunks):
+        from core.tts_kokoro import KOKORO
+
+        # Kokoro emits a fully synthesized phrase. Do not start a cold model
+        # load in this hot path or change the user's selected voice permanently.
+        if KOKORO.ready:
+            async for chunk in KOKORO.stream(text, lang):
+                if VOICE_CFG.is_gemini():
+                    return
+                yield EnginePCM(chunk, "kokoro")
+        return
+    for chunk in chunks:
+        yield EnginePCM(chunk, "fish")
+
+
+async def stream_text(text: str, lang: str = ""):
+    """Speak external text without relying on audio from a Live-model reply.
+
+    CodeMode supplies text even when the selected voice is Gemini. It must not
+    use the ordinary stream's deliberate Gemini no-op, or replay unrelated Live
+    audio. Selection is preserved; each returned phrase carries its real engine.
+    """
+    from core.voice_mode import VOICE_CFG
+
+    if not VOICE_CFG.is_gemini():
+        chunks = [chunk async for chunk in stream(text, lang)]
+        if chunks:
+            for chunk in chunks:
+                yield chunk
+            return
+    from core import tts_gemini
+
+    pcm = await tts_gemini.synthesize(text)
+    if pcm:
+        yield EnginePCM(pcm, "gemini")
 
 
 def primary_status() -> str:

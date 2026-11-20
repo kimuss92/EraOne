@@ -16,6 +16,108 @@ from core.logger import log_event, main_logger
 
 
 class ReconnectMixin:
+    def _handle_auto_standby_order(self, text: str) -> str | None:
+        from core.standby_policy import auto_standby_order, set_auto_standby
+
+        enabled = auto_standby_order(text)
+        if enabled is None:
+            return None
+        try:
+            set_auto_standby(enabled)
+        except OSError as exc:
+            log_event(
+                main_logger, "standby.preference.failed", "WARNING", error_type=type(exc).__name__
+            )
+            message = "I couldn't save the auto-standby setting. It hasn't changed."
+        else:
+            self._last_interaction_timestamp = time.time()
+            message = (
+                "Auto-standby enabled. I'll go into standby after the configured idle period."
+                if enabled
+                else "Auto-standby disabled. Inactivity won't put me into standby."
+            )
+            log_event(main_logger, "standby.preference.changed", "INFO", enabled=enabled)
+        self.ui.write_log(f"SYS: {message}")
+        return message
+
+    def _auto_standby_due(self) -> bool:
+        from core.session import standby_enabled
+        from core.standby_policy import auto_standby_enabled
+
+        if not standby_enabled():
+            # One-mode session model: inactivity closes the conversation window
+            # (core/attention.py), it never dismantles the microphone.
+            return False
+        if not auto_standby_enabled() or self._standby_active:
+            return False
+        if getattr(self, "_standby_entering", False):
+            return False
+        if not getattr(self, "_browser_mic_active", True) and not getattr(
+            self, "_mic_muted", False
+        ):
+            return False
+        snap = self.session_manager.get_state_snapshot()
+        if snap.get("is_reconnecting") or snap.get("is_muted"):
+            return False
+        if (
+            snap.get("current_state") in (EraState.PROCESSING, EraState.SPEAKING)
+            or self._is_speaking
+        ):
+            self._last_interaction_timestamp = time.time()
+            return False
+        turn = getattr(self, "_local_turn_task", None)
+        pending = getattr(self, "_pending_store", None)
+        if (turn is not None and not turn.done()) or (
+            pending is not None and pending.peek() is not None
+        ):
+            self._last_interaction_timestamp = time.time()
+            return False
+        return time.time() - self._last_interaction_timestamp > self._idle_timeout_seconds
+
+    def _prepare_standby_wake_input(self) -> None:
+        """Voice-mic-off becomes local wake listening in standby, as requested.
+
+        Keep the cloud mute and its saved preference. An independent hard-off
+        still prevents capture; only a valid explicit wake resumes conversation.
+        """
+        if getattr(self, "_mic_muted", False):
+            stop = getattr(self, "_stop_unmute_listener", None)
+            if stop is not None:
+                stop()
+            self._browser_mic_active = True
+            self.ui.write_log(
+                "SYS: Standby microphone listens locally for the wake word; cloud input stays muted."
+            )
+            log_event(main_logger, "standby.wake_input.enabled", "INFO", local_only=True)
+
+    def _request_completion_wake(self) -> bool:
+        """Wake once on the runtime loop; queued reports survive an outage."""
+        loop = getattr(self, "_loop", None)
+        if not self._standby_active or loop is None or not loop.is_running():
+            return False
+
+        def schedule() -> None:
+            previous = getattr(self, "_completion_wake_task", None)
+            if not self._standby_active or (previous is not None and not previous.done()):
+                return
+            self._completion_wake_task = loop.create_task(
+                self._resume_from_standby("background_task", speak_ack=False)
+            )
+
+            def finished(task) -> None:
+                if not task.cancelled() and task.exception() is not None:
+                    log_event(
+                        main_logger,
+                        "standby.completion_wake.failed",
+                        "WARNING",
+                        error_type=type(task.exception()).__name__,
+                    )
+
+            self._completion_wake_task.add_done_callback(finished)
+
+        loop.call_soon_threadsafe(schedule)
+        return True
+
     def _compute_reconnect_delay(self, attempt_number: int) -> float:
         base_delay: float = 3.0
         exponential: float = base_delay * (2**attempt_number)
@@ -43,18 +145,7 @@ class ReconnectMixin:
                 if self._go_away_event.is_set():
                     return
                 await asyncio.sleep(0.1)
-            if self._standby_active:
-                continue
-            # A voice-muted mic is the user's deliberate quiet mode, not idleness:
-            # idling into standby would speak "System offline." out of nowhere.
-            if getattr(self, "_mic_muted", False):
-                self._last_interaction_timestamp = time.time()
-                continue
-            # Never treat an in-flight turn as idle, even if a single tool
-            # call runs longer than the idle timeout.
-            current_state = self.session_manager.get_state_snapshot().get("current_state")
-            if current_state in (EraState.PROCESSING, EraState.SPEAKING) or self._is_speaking:
-                self._last_interaction_timestamp = time.time()
+            if not self._auto_standby_due():
                 continue
             idle_seconds: float = time.time() - self._last_interaction_timestamp
             if idle_seconds > self._idle_timeout_seconds:
@@ -104,20 +195,26 @@ class ReconnectMixin:
             )
 
         self.session_manager.wake_word_active = reason.startswith("wake_word")
-        # Mic must always be active on standby exit so voice wake works.
-        if hasattr(self, "_handle_set_microphone"):
+        # An automated completion wake must never reverse a privacy choice.
+        automated = reason in ("background_task", "remote_approval")
+        if automated and getattr(self, "_mic_muted", False):
+            start = getattr(self, "_start_unmute_listener", None)
+            if start is not None:
+                start()
+        if not automated and hasattr(self, "_handle_set_microphone"):
             try:
                 self._handle_set_microphone({"state": "on"})
             except Exception:
                 pass
         # Force microphone on regardless of prior mute state
-        self._mic_muted = False
-        try:
-            from core.user_prefs import set_mic_muted
+        if not automated:
+            self._mic_muted = False
+            try:
+                from core.user_prefs import set_mic_muted
 
-            set_mic_muted(False)
-        except Exception:
-            pass
+                set_mic_muted(False)
+            except Exception:
+                pass
         if reason.startswith("wake_word"):
             self.session_manager.last_wake_word_timestamp = time.time()
         self.session_manager.transition_to(EraState.LISTENING, reason=reason)
@@ -500,7 +597,9 @@ class ReconnectMixin:
         deadline = getattr(self, "_renewal_deadline", None)
         if deadline is None:
             return False, "no renewal pending"
-        if self.live_turn.is_idle_for_renewal(tool_running=tool_running):
+        if not getattr(self, "_is_speaking", False) and self.live_turn.is_idle_for_renewal(
+            tool_running=tool_running
+        ):
             return True, "idle between turns"
         remaining = deadline - time.time()
         if remaining <= self.RENEWAL_MARGIN_S:
@@ -630,7 +729,9 @@ class ReconnectMixin:
             said, unanswered = recovery_context(snap)
             note = build_disconnect_resume_note(said, "", unanswered)
             generation_at_send = self._conn_generation
-            await self.session.send_realtime_input(text=note)
+            from core.model_reply import send_model_text
+
+            await send_model_text(self, note, internal=True)
             # A connection that died between the decision and the send would make
             # this a no-op; recording the generation makes that visible in the log
             # rather than silent.

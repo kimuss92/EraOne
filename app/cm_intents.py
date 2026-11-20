@@ -20,6 +20,29 @@ _PUBLISH_INTENT = re.compile(
     re.IGNORECASE,
 )
 
+# Content workflow (2026-10-16): Karim generates images/video himself.
+#   package → Era writes the prompts/text/drafts and stops at Gate A (no generation).
+#   edit    → Era edits a render Karim made (Remotion + ffmpeg).
+# Both are deliberately narrow: "package" alone is also an npm word, and a bare
+# "edit reel 1's caption" is a correction (revise), not an edit of a render.
+_PACKAGE_INTENT = re.compile(
+    r"\b(?:content|reel|post|carousel|promo)\s+package\b"
+    r"|\bpackage\s+(?:for|pour|of)\b"
+    r"|\bpaquet\s+de\s+contenu\b"
+    r"|\bprepare\s+(?:the\s+|a\s+|my\s+)?package\b"
+    r"|\bprompt\s*pack\b"
+    r"|\b(?:prepare|pr[ée]pare[rz]?|write|[ée]cri[rs]|give\s+me|donne(?:-moi)?)\b.{0,30}?"
+    r"\bprompts?\b.{0,40}?\b(?:reel|carousel|post|promo|kitchen|wardrobe|slab|texture|"
+    r"delta|ceram)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_EDIT_INTENT = re.compile(
+    r"[\\/]renders[\\/]"
+    r"|\bremotion\b"
+    r"|\b(?:edit|monte[rz]?|montage|assemble[rz]?)\b.{0,40}?\b(?:renders?|rendu|rendered)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
 # A correction to ONE already-planned item ("change reel 1's texture", "rewrite the
 # carousel description"). Must name a change verb AND an asset noun, so "change the
 # plan" or a bare "change it" falls through to weekly rather than half-editing a run.
@@ -173,6 +196,11 @@ def _infer_cm_task_type(text: str) -> str:
                  publish so "approve and publish reel 1" approves the asset at Gate 2
                  rather than sweeping every already-approved file.
       publish  → a clear publish/post/schedule-a-post order.
+      edit     → edit a render Karim made (path under renders, or "edit the render").
+      package  → prepare prompts/text/drafts for content Karim will generate; stops
+                 at Gate A. Both sit below revise/approve/publish so a mixed order
+                 ("approve reel 1 and publish it") never lands in a lane that cannot
+                 publish.
       adcreative → make ad creative (the picture), not run ads (the money). Checked
                  LATE on purpose, below all four lanes above, because each of them
                  beats it on a mixed order: "change the ad visual's texture" is a
@@ -195,12 +223,19 @@ def _infer_cm_task_type(text: str) -> str:
     t = text or ""
     if _ADS_INTENT.search(t) or _ADS_MANAGE_INTENT.search(t) or _ADS_REPORT_INTENT.search(t):
         return "ads"
+    # An order that names a render path / Remotion is an edit even if it also says
+    # "post it": the edit lane has strictly fewer tools (no publish, no Magnific),
+    # so losing a mixed order to it is the safe direction.
+    if _EDIT_INTENT.search(t):
+        return "edit"
     if _REVISE_INTENT.search(t):
         return "revise"
     if _APPROVE_INTENT.search(t):
         return "approve"
     if _PUBLISH_INTENT.search(t):
         return "publish"
+    if _PACKAGE_INTENT.search(t):
+        return "package"
     if _ADCREATIVE_INTENT.search(t):
         return "adcreative"
     if _RUSH_INTENT.search(t):
@@ -224,6 +259,8 @@ _CM_ORDER_INTENTS = (
     _ADS_MANAGE_INTENT,
     _ADS_REPORT_INTENT,
     _ADCREATIVE_INTENT,
+    _PACKAGE_INTENT,
+    _EDIT_INTENT,
 )
 
 

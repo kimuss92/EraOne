@@ -206,3 +206,18 @@ def set_mic_muted(value: bool) -> None:
         data = _load_unlocked()
         data["mic_muted"] = bool(value)
         _save(data)
+
+
+def get_mic_mute_source() -> str:
+    """Who muted the mic: 'voice' | 'ui' | 'typed' | 'restored' | ''."""
+    try:
+        return str(load_prefs().get("mic_mute_source", "") or "")
+    except Exception:
+        return ""
+
+
+def set_mic_mute_source(source: str) -> None:
+    with _LOCK:
+        data = _load_unlocked()
+        data["mic_mute_source"] = str(source or "")[:20]
+        _save(data)

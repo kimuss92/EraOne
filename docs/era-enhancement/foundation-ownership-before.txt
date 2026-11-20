@@ -1,0 +1,39 @@
+FFFF.                                                                    [100%]
+================================== FAILURES ===================================
+________________ test_state_ingress_and_snapshot_are_detached _________________
+tools\test_foundation_ownership.py:29: in test_state_ingress_and_snapshot_are_detached
+    assert snapshot.foreground.window_title == "original"
+E   AssertionError: assert 'changed' == 'original'
+E     
+E     - original
+E     + changed
+___________ test_approval_previews_cannot_change_armed_action[get] ____________
+tools\test_foundation_ownership.py:59: in test_approval_previews_cannot_change_armed_action
+    assert preview.parameters == {"files": [{"path": "reviewed.txt"}]}
+E   AssertionError: assert {'files': [{'...tation.txt'}]} == {'files': [{'...viewed.txt'}]}
+E     
+E     Differing items:
+E     {'files': [{'path': 'input-mutation.txt'}]} != {'files': [{'path': 'reviewed.txt'}]}
+E     Use -v to get more diff
+___________ test_approval_previews_cannot_change_armed_action[peek] ___________
+tools\test_foundation_ownership.py:59: in test_approval_previews_cannot_change_armed_action
+    assert preview.parameters == {"files": [{"path": "reviewed.txt"}]}
+E   AssertionError: assert {'files': [{'...tation.txt'}]} == {'files': [{'...viewed.txt'}]}
+E     
+E     Differing items:
+E     {'files': [{'path': 'input-mutation.txt'}]} != {'files': [{'path': 'reviewed.txt'}]}
+E     Use -v to get more diff
+___________ test_approval_previews_cannot_change_armed_action[busy] ___________
+tools\test_foundation_ownership.py:59: in test_approval_previews_cannot_change_armed_action
+    assert preview.parameters == {"files": [{"path": "reviewed.txt"}]}
+E   AssertionError: assert {'files': [{'...tation.txt'}]} == {'files': [{'...viewed.txt'}]}
+E     
+E     Differing items:
+E     {'files': [{'path': 'input-mutation.txt'}]} != {'files': [{'path': 'reviewed.txt'}]}
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tools/test_foundation_ownership.py::test_state_ingress_and_snapshot_are_detached
+FAILED tools/test_foundation_ownership.py::test_approval_previews_cannot_change_armed_action[get]
+FAILED tools/test_foundation_ownership.py::test_approval_previews_cannot_change_armed_action[peek]
+FAILED tools/test_foundation_ownership.py::test_approval_previews_cannot_change_armed_action[busy]
+4 failed, 1 passed in 2.17s

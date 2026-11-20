@@ -1,0 +1,240 @@
+diff --git a/core/attention.py b/core/attention.py
+index 7ce4919..0311a6b 100644
+--- a/core/attention.py
++++ b/core/attention.py
+@@ -57,4 +57,7 @@ DEFAULTS = {
+ _VOICE_JSON = Path(__file__).resolve().parent.parent / "config" / "voice.json"
+ _END_SILENCE_S = 0.7  # this much quiet ends an utterance
++# PF-038: Era's reply must finish within this long of the owner's in-window turn
++# to continue the conversation (covers a reply that ends just after expiry).
++OWNER_TURN_REPLY_S = 60.0
+ _PREROLL_FRAMES = 5  # ~0.3 s at 64 ms frames: the word's onset, kept for Gemini
+ 
+@@ -157,4 +160,6 @@ class ListeningState:
+         # The user deliberately addressed Era (her name, a wake, typing).
+         self._explicit_reply_pending = False
++        # When the owner took a voice turn inside an OPEN window (PF-038).
++        self._owner_turn_at: float | None = None
+ 
+     def era_finished_speaking(self, interrupted: bool, internal: bool = False) -> None:
+@@ -165,7 +170,18 @@ class ListeningState:
+         so it neither re-anchors the window nor consumes a pending address.
+         """
+-        if self._explicit_reply_pending and not internal:
+-            self._session.note_accepted()
++        if not internal:
++            # PF-038: her reply to an owner turn taken inside an OPEN window keeps
++            # the conversation going, music or not (live 2026-11-16 21:49-21:53:
++            # Spotify on, owner talking every 10-20 s, the window lapsed mid-chat).
++            # A reply can still never RE-open a closed window (2026-10-10 loop).
++            # The turn itself was taken inside the window, so a reply that
++            # finishes just after expiry still continues it (review F1), but a
++            # stale turn (> OWNER_TURN_REPLY_S) does not.
++            turn_at = self._owner_turn_at
++            conversing = turn_at is not None and (self._clock() - turn_at <= OWNER_TURN_REPLY_S)
++            if self._explicit_reply_pending or conversing:
++                self._session.note_accepted()
+             self._explicit_reply_pending = False
++            self._owner_turn_at = None
+         if not interrupted:
+             self._hold_until = self._clock() + get_listening_config()["echo_hold_ms"] / 1000.0
+@@ -187,7 +203,22 @@ class ListeningState:
+             self._explicit_reply_pending = True
+ 
++    def note_owner_turn(self, verified: bool = False) -> None:
++        """A voice input turn was accepted (PF-038).
++
++        Counts only inside an OPEN window. While media plays it counts only when
++        the voice was verified as the owner's (voice lock on and ready): with
++        the lock off a transcribed lyric or film line is indistinguishable from
++        the owner, and the owner refused to let those keep Era listening.
++        """
++        if not self._session.open():
++            return
++        if self._media_playing() and not verified:
++            return
++        self._owner_turn_at = self._clock()
++
+     def close_session(self) -> None:
+         """Close the session ("standby" in the one-mode model)."""
+         self._explicit_reply_pending = False
++        self._owner_turn_at = None
+         self._session.close()
+ 
+diff --git a/main.py b/main.py
+index 5d0b06f..abe662a 100644
+--- a/main.py
++++ b/main.py
+@@ -299,4 +299,20 @@ def _build_live_health() -> LiveHealth:
+ 
+ 
++def _owner_voice_verified() -> bool:
++    """Is every voice reaching Gemini verified as the owner's (PF-038)?
++
++    True only when the voice lock is ON and ready: the speaker gate then drops
++    every other voice (lyrics, films, Era's own speech) before Gemini hears it.
++    With the lock off nothing can tell the owner from a song. Never raises.
++    """
++    try:
++        from core.speaker_recognition import get_verifier
++
++        verifier = get_verifier()
++        return bool(verifier.enabled and verifier.readiness()[0])
++    except Exception:
++        return False
++
++
+ def _speaking_for_internal_turn(era) -> bool:
+     """Is Era's current speech the reply to an internal request (a scheduled
+@@ -864,4 +880,13 @@ class EraLive(
+         self._input_envelope = envelope
+         self._tg_reply_pending = envelope.source == "telegram"
++        if envelope.source == "voice":
++            # PF-038: a voice turn inside an open window lets Era's reply to it
++            # extend the conversation (core/attention.py note_owner_turn).
++            try:
++                state = getattr(self, "_listening_state", None)
++                if callable(state):
++                    state().note_owner_turn(verified=_owner_voice_verified())
++            except Exception as e:
++                print(f"[ATTENTION] owner-turn hook skipped: {type(e).__name__}: {e}")
+         log_event(
+             main_logger,
+diff --git a/tools/test_reanchor_sources.py b/tools/test_reanchor_sources.py
+index f9ebca4..0f74076 100644
+--- a/tools/test_reanchor_sources.py
++++ b/tools/test_reanchor_sources.py
+@@ -107,2 +107,133 @@ def test_speech_for_an_internal_turn_is_recognised():
+     assert main._speaking_for_internal_turn(era) is False
+     assert main._speaking_for_internal_turn(SimpleNamespace()) is False
++
++
++# ── PF-038: a real conversation keeps the window open; lyrics never do ──
++
++
++def _music_state(clock):
++    return ListeningState(clock=clock, media_active=lambda: True, window_s=120)
++
++
++def test_a_verified_conversation_with_music_on_does_not_lapse_mid_chat():
++    # Live 2026-11-16 21:49-21:53: "Era" once, Spotify playing, the owner talked
++    # every 10-20 s and the window still closed mid-conversation.
++    clock = Clock()
++    state = _music_state(clock)
++    state.note_activity(explicit=True)  # "Era, play music"
++    state.era_finished_speaking(interrupted=False)
++    for _ in range(10):  # 10 unnamed follow-ups, 20 s apart (200 s > window)
++        clock.t += 15
++        state.note_owner_turn(verified=True)
++        clock.t += 5
++        state.era_finished_speaking(interrupted=False)
++        assert state.window_open() is True
++    clock.t += 121  # then real silence
++    assert state.window_open() is False
++
++
++def test_an_unverified_voice_turn_during_music_never_extends_the_window():
++    # Review F2 / owner 2026-11-16: lyrics and film lines must never keep Era
++    # listening. With the voice lock off a transcribed lyric looks like the owner.
++    clock = Clock()
++    state = _music_state(clock)
++    state.note_activity(explicit=True)
++    state.era_finished_speaking(interrupted=False)
++    for _ in range(3):
++        clock.t += 50
++        state.note_owner_turn(verified=False)  # a lyric Gemini transcribed
++        clock.t += 3
++        state.era_finished_speaking(interrupted=False)  # ...and answered
++    assert state.window_open() is False  # 159 s after the last real address
++
++
++def test_without_music_an_unnamed_turn_continues_the_conversation():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 100
++    state.note_owner_turn(verified=False)
++    clock.t += 5
++    state.era_finished_speaking(interrupted=False)
++    clock.t += 100
++    assert state.window_open() is True
++
++
++def test_a_turn_just_before_expiry_survives_a_reply_just_after_it():
++    # Review F1: turn at 119 s, reply finishing at 121 s.
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 119
++    state.note_owner_turn(verified=True)
++    clock.t += 2
++    assert state.window_open() is False
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is True
++
++
++def test_a_stale_turn_or_an_explicit_close_is_not_continued():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 10
++    state.note_owner_turn(verified=True)
++    clock.t += 200  # no reply for minutes
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is False
++    state = ListeningState(clock=clock, window_s=120)
++    state.note_owner_turn(verified=True)
++    state.close_session()  # "Era, standby"
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is False
++
++
++def test_an_owner_turn_cannot_reopen_a_closed_window():
++    clock = Clock()
++    state = _music_state(clock)
++    clock.t += 121
++    state.note_owner_turn(verified=True)  # taken after expiry
++    state.era_finished_speaking(interrupted=False)
++    assert state.window_open() is False
++
++
++def test_internal_speech_does_not_spend_an_owner_turn():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    clock.t += 100
++    state.note_owner_turn()
++    state.era_finished_speaking(interrupted=False, internal=True)  # a scheduled report
++    clock.t += 10
++    state.era_finished_speaking(interrupted=False)  # her real reply to the owner
++    clock.t += 100
++    assert state.window_open() is True
++
++
++def test_a_voice_input_marks_an_owner_turn_with_the_verification_state(monkeypatch):
++    import main
++
++    monkeypatch.setattr(main, "_owner_voice_verified", lambda: True)
++    turns = []
++    era = SimpleNamespace(
++        _model_reply_ownership=None,
++        _telegram_speech=None,
++        _input_envelope=None,
++        _tg_reply_pending=False,
++        _listening_state=lambda: SimpleNamespace(
++            note_owner_turn=lambda verified=False: turns.append(verified)
++        ),
++    )
++    for source in ("voice", "typed"):
++        main.EraLive._accept_input(era, SimpleNamespace(id=source, source=source, received_at=0))
++    assert turns == [True]  # typed input is already an explicit address
++
++
++def test_owner_voice_counts_as_verified_only_with_the_lock_on(monkeypatch):
++    import core.speaker_recognition as sr
++    import main
++
++    for enabled, ready, expected in [
++        (False, True, False),
++        (True, False, False),
++        (True, True, True),
++    ]:
++        fake = SimpleNamespace(enabled=enabled, readiness=lambda r=ready: (r, ""))
++        monkeypatch.setattr(sr, "get_verifier", lambda f=fake: f)
++        assert main._owner_voice_verified() is expected

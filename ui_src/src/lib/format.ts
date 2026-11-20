@@ -25,16 +25,18 @@ export const STATE_LABEL: Record<AgentState, string> = {
 // amber is reserved for waiting / approval, red only for errors, and standby /
 // offline are a dim steel (standby used to be red).
 export const STATE_HUE: Record<AgentState, { h: number; s: number }> = {
-  idle: { h: 195, s: 78 },
-  wake_detected: { h: 188, s: 95 },
-  listening: { h: 187, s: 92 },
-  transcribing: { h: 192, s: 88 },
-  routing: { h: 202, s: 88 },
-  thinking: { h: 210, s: 96 },
-  tool_running: { h: 198, s: 92 },
-  synthesizing: { h: 180, s: 80 },
-  speaking: { h: 172, s: 84 },
-  interrupted: { h: 205, s: 22 },
+  // Working states live in the Eclipse blues (#0F34B8 → #64CBEE); thinking is
+  // the deepest electric blue, speaking the brightest cyan-blue.
+  idle: { h: 222, s: 88 },
+  wake_detected: { h: 205, s: 95 },
+  listening: { h: 210, s: 92 },
+  transcribing: { h: 214, s: 92 },
+  routing: { h: 226, s: 92 },
+  thinking: { h: 234, s: 92 },
+  tool_running: { h: 218, s: 94 },
+  synthesizing: { h: 206, s: 86 },
+  speaking: { h: 198, s: 90 },
+  interrupted: { h: 220, s: 22 },
   complete: { h: 152, s: 66 },
   error: { h: 4, s: 80 },
   offline: { h: 212, s: 14 },

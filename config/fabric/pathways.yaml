@@ -1,0 +1,64 @@
+# Era Fabric F3: declared alternatives (docs/era-enhancement/ERA_FABRIC_DESIGN.md 5.3).
+# Read by core/fabric/pathways.py, which REFUSES this file (and Era keeps today's
+# direct paths) when any rule below is broken:
+#
+#   1. equal-or-stricter: a step's `scope` must be a subset of the step before it,
+#      so a fallback never holds a right its predecessor lacked;
+#   2. the last step is `deterministic`: no network, no model, an honest answer;
+#   3. no pathway for a fail-closed component (gates, approvals, vault writes,
+#      development activation, Protocol One, the panic stop);
+#   4. `quality: lower` steps are disclosed in one clause when they answer (Karim,
+#      2026-11-10: "only if quality differs"); `same` steps are silent.
+#
+# `wired`: `pathway` = run by the pathways engine; `existing` = an older chain that
+# already does this in code, declared here so the map is complete and pinned by
+# tools/test_fabric_chaos.py against the code that implements it.
+
+review_change: # "have the crew review this change before I approve"
+  wired: pathway
+  steps:
+    # The crew step is F1's transport fallback (crew/fallback.py): Hermes, then the
+    # in-process loop with the same BotSpecs. Hermes keeps provider routing.
+    - provider: crew
+      scope: [development.read, source.read, source.inspect, source.stage, era.read, vault.read]
+      quality: same
+    # Claude reviews it herself, from the read-only candidate: no tools at all.
+    - provider: llm.claude
+      scope: [development.read]
+      quality: lower
+      say: "The crew was unreachable, so I reviewed it with Claude."
+    - provider: deterministic
+      fn: dev_summary
+      scope: [development.read]
+      quality: lower
+      say: "The crew and Claude are both unreachable, so here is what the verifier found."
+
+web_search:
+  wired: pathway
+  steps:
+    - provider: llm.gemini.search # Gemini with Google grounding
+      scope: [network.read]
+      quality: same
+    - provider: tool.web_search.ddgs
+      scope: [network.read]
+      quality: same
+    - provider: deterministic
+      fn: say_unavailable
+      scope: []
+      quality: lower
+
+speak:
+  wired: existing # core/tts_router.stream + the held Gemini audio in app/era_live/speech_out.py
+  steps:
+    - {provider: tts.fish, scope: [audio.out], quality: same}
+    - {provider: tts.kokoro, scope: [audio.out], quality: same} # only when already warm
+    - {provider: tts.gemini, scope: [audio.out], quality: same}
+    - {provider: deterministic, fn: text_only, scope: [], quality: lower}
+
+voice_brain:
+  wired: existing # main.py / app/era_live: live health verdict -> backup brains
+  steps:
+    - {provider: live.gemini, scope: [tools.all, audio.in, audio.out], quality: same}
+    - {provider: live.claude_voice, scope: [tools.all, audio.in, audio.out], quality: lower}
+    - {provider: local.loop, scope: [audio.in, audio.out], quality: lower}
+    - {provider: deterministic, fn: say_offline, scope: [], quality: lower}

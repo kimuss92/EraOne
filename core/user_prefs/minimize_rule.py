@@ -39,6 +39,29 @@ def set_post_action_minimize(app: str, enabled: bool) -> str:
     return f"Understood — I'll leave the {app} window as it is from now on."
 
 
+# In-process only: "the owner just asked to SEE this app". Live 2026-11-15
+# 23:06: "Open Spotify" opened the window, a follow-up play call fired the
+# minimize rule, and the app the owner asked to open was hidden again.
+OPENED_ON_REQUEST_S = 60.0
+_opened_at: dict[str, float] = {}
+
+
+def note_opened_on_request(app: str) -> None:
+    """open_app calls this when the owner asked to open (show) an app."""
+    import time
+
+    key = _store._normalize_app(app)
+    if key:
+        _opened_at[key] = time.monotonic()
+
+
+def opened_on_request(app: str, within_s: float = OPENED_ON_REQUEST_S) -> bool:
+    import time
+
+    at = _opened_at.get(_store._normalize_app(app) or "")
+    return at is not None and time.monotonic() - at <= within_s
+
+
 def is_post_action_minimize(app: str) -> bool:
     """True if the user asked for this app to be minimized after Era uses it."""
     key = _store._normalize_app(app)

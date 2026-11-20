@@ -97,10 +97,19 @@ def extract_tool_names_from_main_dispatch(source: str) -> set[str]:
 
 
 def extract_tool_names_from_executor_dispatch(source: str) -> set[str]:
-    body = _extract_function_body(source, "_call_tool_result")
-    if body is None:
-        return set()
-    return set(re.findall(r'(?:if|elif)\s+tool\s*==\s*"([^"]+)"', body))
+    # Traverse only dispatch-family helpers reachable from the entry point.
+    bodies, pending, seen = [], ["_call_tool_result"], set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        body = _extract_function_body(source, name)
+        if body is None:
+            continue
+        bodies.append(body)
+        pending.extend(re.findall(r"\b(_call_tool_result(?:_[a-z_]+)?)\s*\(", body))
+    return set(re.findall(r'(?:if|elif)\s+tool\s*==\s*"([^"]+)"', "\n".join(bodies)))
 
 
 def _risk_after(lines: list[str], start: int, max_scan: int = 15) -> str | None:

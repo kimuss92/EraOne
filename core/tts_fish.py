@@ -32,6 +32,11 @@ from pathlib import Path
 from app.audio_config import RECEIVE_SAMPLE_RATE
 from core.audio_pcm import FRAME_BYTES
 
+
+class IncompleteSpeechError(RuntimeError):
+    """A transport failed after PCM: its prefix is not a completed phrase."""
+
+
 try:
     import aiohttp
 except ImportError:  # pragma: no cover - aiohttp is in requirements.txt
@@ -230,9 +235,10 @@ class FishAudioClient:
         frames reach the speakers in a few hundred ms instead of after the whole
         clip is buffered (measured: ~4x faster to first audio on a long reply).
 
-        Yields nothing on ANY failure — an empty stream is the caller's signal to
-        fall back to Gemini. Sets a cooldown on failure exactly like the old
-        buffered path so a dead key does not cost a round trip per sentence.
+        Failures before audio yield nothing; failures after audio raise
+        IncompleteSpeechError. Callers must buffer to clean completion before
+        playback if they need safe phrase fallback. Cooldowns avoid repeated
+        requests to a failing backend.
         """
         text = (text or "").strip()
         if not text or self.in_cooldown():
@@ -307,6 +313,8 @@ class FishAudioClient:
                 break
             except TimeoutError:
                 self._cool(COOLDOWN_TRANSIENT_S, f"stalled (no audio within {stall:g}s)")
+                if produced:
+                    raise IncompleteSpeechError(self.last_error) from None
                 return
             except aiohttp.ClientConnectorError as e:
                 # DNS miss or refused connect: nothing was sent or played yet, so one
@@ -317,9 +325,13 @@ class FishAudioClient:
                     await asyncio.sleep(CONNECT_RETRY_PAUSE_S)
                     continue
                 self._cool(COOLDOWN_TRANSIENT_S, f"request failed: {type(e).__name__}")
+                if produced:
+                    raise IncompleteSpeechError(self.last_error) from e
                 return
             except Exception as e:
                 self._cool(COOLDOWN_TRANSIENT_S, f"request failed: {type(e).__name__}")
+                if produced:
+                    raise IncompleteSpeechError(self.last_error) from e
                 return
 
         if produced:
@@ -331,11 +343,13 @@ class FishAudioClient:
     async def synthesize(self, text: str, lang: str = "") -> bytes:
         """Buffered synthesis -> full int16 mono PCM @ 24 kHz. b"" on failure.
 
-        Drains stream(); kept for the check/clone tools and the non-streaming
-        router path. The LIVE speech worker uses stream() directly so playback
-        starts on the first frame, not after the whole clip.
+        Drains stream(); incomplete transport responses are discarded rather
+        than returned as apparently successful clips. Cancellation propagates.
         """
-        chunks = [c async for c in self.stream(text, lang)]
+        try:
+            chunks = [c async for c in self.stream(text, lang)]
+        except IncompleteSpeechError:
+            return b""
         return b"".join(chunks)
 
 

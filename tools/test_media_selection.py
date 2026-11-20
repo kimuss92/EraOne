@@ -266,6 +266,23 @@ class TestSelectBestMediaCandidate:
         assert best is None
         assert reason == "ambiguous"
 
+    def test_transliterated_query_keeps_distinct_youtube_recordings_ambiguous(self):
+        candidates = [
+            {
+                "title": "Hassen Thabet - Saber Elrjel | صبر الرجال (Mikasa Music)",
+                "url": "https://www.youtube.com/watch?v=abcdefghijk",
+            },
+            {
+                "title": "صبر الرجال - نسخة كاملة",
+                "url": "https://www.youtube.com/watch?v=lmnopqrstuv",
+            },
+        ]
+        best, score, reason = select_best_media_candidate(
+            "Sabr Al Rijal Mikasa Music", candidates, "youtube"
+        )
+        assert best is None and score >= 0.86
+        assert reason == "ambiguous"
+
     def test_no_candidates(self):
         best, score, reason = select_best_media_candidate("anything", [])
         assert best is None

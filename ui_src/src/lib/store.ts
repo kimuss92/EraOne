@@ -3,19 +3,28 @@ import type {
   ActiveModel,
   AgentState,
   Approval,
+  BrowserMediaObservation,
   ConnectionInfo,
   ContextCard,
   ConversationEntry,
   DrawerId,
+  DeviceObservation,
+  ForegroundObservation,
+  FileObservation,
   Latency,
+  MediaObservation,
   ModelChoice,
+  NetworkObservation,
   Notice,
+  ProcessObservation,
   ScheduleSnapshot,
   Source,
   SystemMetrics,
   TimelineItem,
   ToolRun,
   Transcript,
+  TelegramCallStatus,
+  WidgetLayout,
 } from './types';
 
 // ── The HUD store ───────────────────────────────────────────────────────
@@ -25,11 +34,22 @@ import type {
 // in `live` below and are read by animation loops directly.
 
 export interface HudState {
+  focusView: string;
+  widgetLayout: WidgetLayout | null;
+  telegramCall: TelegramCallStatus | null;
+  browserMediaObservation: BrowserMediaObservation | null;
+  mediaObservation: MediaObservation | null;
+  foregroundObservation: ForegroundObservation | null;
+  processObservation: ProcessObservation | null;
+  networkObservation: NetworkObservation | null;
+  fileObservation: FileObservation | null;
+  deviceObservation: DeviceObservation | null;
   link: 'connecting' | 'online' | 'reconnecting';
   rttMs: number | null;
   agent: { state: AgentState; label: string; seq: number };
   connection: ConnectionInfo;
   standby: boolean;
+  listeningMode: string;
   micActive: boolean;
   voiceActive: boolean;
   transcript: Transcript;
@@ -94,11 +114,22 @@ function loadPanel(key: string, fallback: boolean): boolean {
 }
 
 let state: HudState = {
+  focusView: 'overview',
+  widgetLayout: null,
+  telegramCall: null,
+  browserMediaObservation: null,
+  mediaObservation: null,
+  foregroundObservation: null,
+  processObservation: null,
+  networkObservation: null,
+  fileObservation: null,
+  deviceObservation: null,
   link: 'connecting',
   rttMs: null,
   agent: { state: 'offline', label: 'Connecting', seq: 0 },
   connection: { kind: 'connecting', label: 'Connecting', status: '' },
   standby: false,
+  listeningMode: 'unavailable',
   micActive: true,
   voiceActive: false,
   transcript: { user: '', userFinal: false, response: '', responding: false },
@@ -139,7 +170,7 @@ export function setState(patch: Partial<HudState> | ((s: HudState) => Partial<Hu
   listeners.forEach(l => l());
 }
 
-function subscribe(l: () => void): () => void {
+export function subscribe(l: () => void): () => void {
   listeners.add(l);
   return () => listeners.delete(l);
 }
@@ -204,7 +235,9 @@ export const live = {
   amplitude: 0,
   bands: new Float32Array(8),
   micLevel: 0,
+  micLevelAt: 0,
   fps: 0,
+  frameMs: 0,
 };
 
 export const EMPTY = { metrics: EMPTY_METRICS };

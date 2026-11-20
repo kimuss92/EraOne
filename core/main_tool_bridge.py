@@ -79,7 +79,14 @@ def _build_suggested_confirmation_question(result: ToolResult) -> str:
             return f"Sir, do you want me to forget memory {cat}/{key}? Should I proceed?"
 
     if tool == "file_controller":
-        file_action = data.get("action", "")
+        file_action = str(data.get("action", "")).strip().lower()
+        if file_action == "rename":
+            from core.file_arguments import rename_source_label
+
+            source = _safe_preview_value("path", rename_source_label(data))
+            destination = _safe_preview_value("new_name", data.get("new_name", ""))
+            if source and destination:
+                return f"Sir, rename '{source}' to '{destination}' in the same folder? Should I proceed?"
         name = data.get("name", data.get("path", ""))
         safe_name = _safe_preview_value("name", name)
         if file_action and safe_name:
@@ -141,6 +148,22 @@ def tool_result_to_response_payload(result: ToolResult) -> dict:
         "duration_ms": result.duration_ms,
         "confirmation_id": result.confirmation_id,
     }
+    # Evidence-gated completion (core/completion_contract.py). The verdict is
+    # computed once, at dispatch time, and travels with the result. When a
+    # side-effecting action returned without proof, the instruction below is the
+    # only thing standing between "the tool returned" and a spoken success
+    # claim. It is data for the model, not a tool result the HUD renders.
+    try:
+        from core.completion_contract import completion_tag, model_note
+
+        tag = completion_tag(result)
+        if tag is not None:
+            payload["completion"] = tag
+            note = model_note(result)
+            if note:
+                payload["completion_instruction"] = note
+    except Exception:
+        pass
     if result.confirmation_id:
         payload["suggested_confirmation_question"] = _build_suggested_confirmation_question(result)
 

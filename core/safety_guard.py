@@ -1,12 +1,15 @@
 # core/safety_guard.py
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
+from core.hotkeys import canonical_chord, is_routine_chord, resolve_keys
 from core.utils import is_windows_system_path
 
 if TYPE_CHECKING:
@@ -110,6 +113,10 @@ _DANGEROUS_HOTKEYS = (
     "win+d",
     "win+r",
     "ctrl+alt+delete",
+)
+_DANGEROUS_CHORDS = frozenset(canonical_chord(chord) for chord in _DANGEROUS_HOTKEYS)
+_KEY_ACTIONS = frozenset(
+    {"hotkey", "hotkeys", "key_combo", "shortcut", "press", "press_key", "key_press"}
 )
 
 
@@ -215,6 +222,29 @@ def _desktop_reaches_planner(action: str, params: dict) -> bool:
     return bool(action)
 
 
+def workbench_action(capability, action):
+    """The action alone. The live model sends "web_api/site_call" for capability web_api.
+
+    Only an exact prefix of the capability already chosen is removed, so this can never
+    move a call to a different capability. Used by the gate and the dispatcher alike, so
+    the name that was judged is the name that runs.
+    """
+    if isinstance(capability, str) and isinstance(action, str):
+        for separator in ("/", ".", ":"):
+            prefix = capability + separator
+            if action.startswith(prefix):
+                return action[len(prefix) :]
+    return action
+
+
+def _web_learn_host(arguments) -> str:
+    """The host a site_learn would open, for the confirmation. Never raises."""
+    try:
+        return urlsplit(json.loads(arguments)["url"]).hostname or "an unreadable address"
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return "an unreadable address"
+
+
 def classify_action(
     tool: str, parameters: dict | None = None, *, honor_risk_waivers: bool = False
 ) -> dict:
@@ -238,6 +268,25 @@ def classify_action(
     # content, so it is staged (the user is shown the diff) and needs their own yes.
     # Every other action word is not on the surface at all — there is no delete, and no
     # confirm/reject — so it is BLOCKED outright instead of being guessed at.
+    if tool == "code_mode":
+        return {
+            "risk_level": LOW,
+            "requires_confirmation": False,
+            "reason": "Mode status/explicit user entry; generated changes retain exact approval",
+        }
+    if tool == "telegram_call":
+        return {
+            "risk_level": LOW,
+            "requires_confirmation": False,
+            "reason": "Owner-bound Telegram call control; account and readiness are enforced by the call service",
+        }
+    if tool == "crew" and action == "verify_candidate":
+        # Runs a crew candidate's own (model-written) tests on this machine.
+        return {
+            "risk_level": MEDIUM,
+            "requires_confirmation": True,
+            "reason": "Runs a crew candidate's verification, including its own tests",
+        }
     if tool == "crew":
         # Explicit, not the unclassified-defaults-to-LOW fallthrough. A crew request cannot
         # itself change anything that needs approval: a replace it proposes only ARMS the
@@ -527,14 +576,43 @@ def classify_action(
                 "requires_confirmation": True,
                 "reason": f"Process termination: {action}",
             }
-        if action == "hotkey":
-            keys = (params.get("keys") or "").lower()
-            if any(dk in keys for dk in _DANGEROUS_HOTKEYS):
-                return {
-                    "risk_level": HIGH,
-                    "requires_confirmation": True,
-                    "reason": f"Dangerous hotkey combination: {keys}",
-                }
+
+    # computer_settings sends keys too. Chords compare as sets of real key names, so
+    # "alt + f4", "F4+Alt" and "altleft+f4" cannot pass as different text, and anything
+    # off the routine list waits for a yes (see core/hotkeys.ROUTINE_CHORDS).
+    if tool in ("computer_control", "computer_settings") and power_action in _KEY_ACTIONS:
+        raw = resolve_keys(params)
+        chord = canonical_chord(raw)
+        if chord in _DANGEROUS_CHORDS:
+            return {
+                "risk_level": HIGH,
+                "requires_confirmation": True,
+                "reason": f"Dangerous hotkey combination: {raw}",
+            }
+        if not is_routine_chord(chord):
+            return {
+                "risk_level": MEDIUM,
+                "requires_confirmation": True,
+                "reason": f"Keyboard shortcut outside the routine list: {raw}",
+            }
+
+    # These press the gated chords themselves, so they get the same answer as the chord.
+    if tool == "computer_settings" and power_action in ("open_run", "task_manager"):
+        return {
+            "risk_level": HIGH,
+            "requires_confirmation": True,
+            "reason": f"Opens a system launcher: {power_action}",
+        }
+    if (
+        tool == "computer_settings"
+        and power_action == "close_app"
+        and not _user_waived_close_confirmation(params)
+    ):
+        return {
+            "risk_level": HIGH,
+            "requires_confirmation": True,
+            "reason": "Closes the focused app with Alt+F4",
+        }
 
     if tool == "browser_control" and action == "click_ref":
         # Params carry only a number; the page's own label (recorded by
@@ -670,6 +748,54 @@ def classify_action(
             "risk_level": MEDIUM,
             "requires_confirmation": True,
             "reason": f"Window/desktop close: {action}",
+        }
+
+    if tool == "era_workbench":
+        capability = params.get("capability")
+        action = workbench_action(capability, params.get("action"))
+        if capability == "web_api" and action == "site_learn":
+            return {
+                "risk_level": MEDIUM,
+                "requires_confirmation": True,
+                "reason": "Open a page in a hidden browser and save a new website operation: "
+                + _web_learn_host(params.get("arguments")),
+            }
+        read_actions = {
+            "office": {"docx", "xlsx", "pptx", "pdf", "pdf_merge", "pdf_extract"},
+            "desktop": {"processes", "inspect_window", "clipboard_read"},
+            "skills": {"catalog", "forge"},
+            "reverse_engineering": {
+                "inspect",
+                "javascript",
+                "managed",
+                "wasm",
+                "artifact",
+                "decompile",
+            },
+            "geography": {"map", "distance", "iss", "earthquakes"},
+            "smart_home": {"states"},
+            "circuit": {"guide"},
+            # Public GET reads only: actions/api_anything.py has no write or login path,
+            # and it dry-runs every call. site_learn is handled above: it asks first.
+            "web_api": {
+                "site_search",
+                "site_operations",
+                "site_call",
+                "site_result",
+                "site_status",
+            },
+        }
+        bounded = (
+            isinstance(capability, str)
+            and isinstance(action, str)
+            and action in read_actions.get(capability, set())
+        )
+        return {
+            "risk_level": LOW if bounded else HIGH,
+            "requires_confirmation": not bounded,
+            "reason": "Bounded inspection/new artifact or staged skill"
+            if bounded
+            else "Process, clipboard or smart-home state change requires approval",
         }
 
     if tool in {"visual_engine", "autonomous_development"}:
@@ -883,6 +1009,8 @@ def classify_action(
         "design_studio",
         # Read-only self-inspection; writes only a report under runtime/diagnosis.
         "self_diagnosis",
+        # Local model reasons and answers with NO tools; it cannot act (PF-044).
+        "deep_think",
         # Reversible performance-profile switch / memory cleanup via vendor apps.
         "system_performance",
     }
@@ -1042,6 +1170,63 @@ def classify_action(
             "risk_level": LOW,
             "requires_confirmation": False,
             "reason": f"Desktop personalization: {action}",
+        }
+
+    # --- FAIL CLOSED: an action the tool does not declare ---
+    # The default below is LOW because most tools answer questions. That is
+    # wrong for tools whose every *other* action changes something the user
+    # cannot see: `file_controller(action="organize_desktop")` matched no rule,
+    # fell through to LOW, and bulk-moved every loose Desktop file with no
+    # confirmation (audit, 2026-11-11). Where the tool's action vocabulary is
+    # declared, anything outside it is a model error or an injection — not a
+    # request — so it gets the same weight as the neighbouring mutable action.
+    # Only the tools where this gap is real are listed: `vault_bridge` already
+    # fails closed (BLOCKED at its own branch), `gmail_control` is classified
+    # per action, and `desktop_control` already routes anything unrecognised to
+    # the HIGH "autonomous plan" rule above — so listing them here would be dead
+    # code. The full per-tool registry is the next slice.
+    _KNOWN_ACTIONS: dict[str, frozenset[str]] = {
+        "file_controller": frozenset(
+            {
+                "list",
+                "list_files",
+                "create",
+                "create_file",
+                "create_folder",
+                "create_directory",
+                "make_folder",
+                "make_directory",
+                "new_folder",
+                "mkdir",
+                "delete",
+                "remove",
+                "trash",
+                "move",
+                "copy",
+                "rename",
+                "read",
+                "read_file",
+                "write",
+                "write_file",
+                "append",
+                "find",
+                "search",
+                "open",
+                "open_favorite",
+                "last_download",
+                "disk_usage",
+                "storage",
+                "save_favorite",
+                "list_favorites",
+            }
+        ),
+    }
+    known_actions = _KNOWN_ACTIONS.get(tool)
+    if known_actions is not None and action and action not in known_actions:
+        return {
+            "risk_level": MEDIUM,
+            "requires_confirmation": True,
+            "reason": f"Unrecognised action '{action}' on {tool} — failing closed.",
         }
 
     # --- default: LOW ---

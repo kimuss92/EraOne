@@ -348,3 +348,88 @@ class TestBackupFile:
             backup = Path(result)
             assert backup.read_text() == "original"
             assert target.read_text() == "original"
+
+
+class TestDiagnosisReportRead:
+    """2026-11-05 live: read parent="diagnosis" name="diag_..." answered File not found."""
+
+    @pytest.fixture
+    def reports(self, monkeypatch, tmp_path):
+        import actions.self_diagnosis as sd
+
+        monkeypatch.setattr(sd, "REPORT_DIR", tmp_path)
+        monkeypatch.setattr("actions.file_controller.is_safe_path", _safe_path_mock)
+        (tmp_path / "diag_20261105_234618.md").write_text("# report body", encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"action": "read", "parent": "diagnosis", "name": "diag_20261105_234618.md"},
+            {"action": "read", "path": "diagnosis", "name": "diag_20261105_234618"},
+            {"action": "read", "path": "diag_20261105_234618.md"},
+        ],
+    )
+    def test_a_report_id_reads_the_real_report(self, reports, params):
+        from actions.file_controller import file_controller
+
+        assert file_controller(params) == "# report body"
+
+    def test_an_unknown_report_id_is_still_not_found(self, reports):
+        from actions.file_controller import file_controller
+
+        out = file_controller({"action": "read", "name": "diag_20991231_000000.md"})
+        assert out.startswith("File not found")
+
+    def test_a_lookalike_name_never_resolves_into_the_report_dir(self, reports):
+        from actions.file_controller import _diagnosis_report
+
+        for bad in ("diag_20261105_234618.md.txt", "../diag_20261105_234618.md", "diag_x.md"):
+            assert _diagnosis_report("desktop", bad) is None
+
+    def test_write_never_resolves_into_the_report_dir(self, reports, monkeypatch, tmp_path):
+        out_dir = tmp_path / "elsewhere"
+        out_dir.mkdir()
+        write_file(str(out_dir), name="diag_20261105_234618.md", content="x", overwrite=True)
+        assert (reports / "diag_20261105_234618.md").read_text(encoding="utf-8") == "# report body"
+
+
+class TestAppendFindsTheExistingFile:
+    """2026-11-06 live: append to 'system_limitation_log.txt' silently created a second
+    file next to 'System Limitations Log.txt' and still said 'Appended to'."""
+
+    @pytest.fixture(autouse=True)
+    def _safe(self, monkeypatch):
+        monkeypatch.setattr("actions.file_controller.is_safe_path", _safe_path_mock)
+
+    def test_a_differently_spelled_name_appends_to_the_one_existing_file(self, tmp_path):
+        real = tmp_path / "System Limitations Log.txt"
+        real.write_text("first\n", encoding="utf-8")
+        out = write_file(str(tmp_path), "system_limitation_log.txt", "second\n", append=True)
+        assert real.read_text(encoding="utf-8") == "first\nsecond\n"
+        assert not (tmp_path / "system_limitation_log.txt").exists()
+        assert "Appended to: System Limitations Log.txt" in out
+        assert "system_limitation_log.txt" in out and str(real) in out
+
+    def test_a_truly_new_file_is_reported_as_created_not_appended(self, tmp_path):
+        out = write_file(str(tmp_path), "notes.txt", "x", append=True)
+        assert out.startswith("Created new file") and "Appended" not in out
+        assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "x"
+
+    def test_two_possible_twins_never_guess(self, tmp_path):
+        (tmp_path / "System Limitations Log.txt").write_text("a", encoding="utf-8")
+        (tmp_path / "system-limitation-log.txt").write_text("b", encoding="utf-8")
+        out = write_file(str(tmp_path), "system_limitations_log.txt", "c", append=True)
+        assert out.startswith("Created new file")
+
+    def test_an_unrelated_name_or_other_extension_is_not_a_twin(self, tmp_path):
+        (tmp_path / "System Limitations Log.md").write_text("a", encoding="utf-8")
+        (tmp_path / "shopping list.txt").write_text("b", encoding="utf-8")
+        out = write_file(str(tmp_path), "system_limitation_log.txt", "c", append=True)
+        assert out.startswith("Created new file")
+
+    def test_overwrite_never_redirects_to_a_twin(self, tmp_path):
+        real = tmp_path / "System Limitations Log.txt"
+        real.write_text("keep", encoding="utf-8")
+        write_file(str(tmp_path), "system_limitation_log.txt", "new", overwrite=True)
+        assert real.read_text(encoding="utf-8") == "keep"

@@ -271,8 +271,14 @@ def _evidence(rec: dict) -> str:
         rec.get("message"),
     ):
         if candidate:
-            return str(candidate).strip()[:300]
+            return _one_line(candidate)[:300]
     return ""
+
+
+def _one_line(text) -> str:
+    """Quoted text stays one Markdown line: no newline can forge a report heading,
+    no backtick can open or close a code span (the crew reads these reports)."""
+    return " ".join(str(text).split()).replace("`", "'")
 
 
 _CRASH_ECHO_WINDOW_S = 2.0
@@ -467,13 +473,14 @@ def render_analysis(items: list[dict]) -> list[str]:
     lines = []
     for i in items:
         lines += [
-            f"- **{i['sig']}** — confidence {i.get('confidence', '?')}",
-            f"  - Meaning: {i.get('meaning', '')}",
-            f"  - Root cause: {i.get('root_cause', '')}",
-            f"  - Fix: {i.get('fix', '')}" + (f" (`{i['file']}`)" if i.get("file") else ""),
+            f"- **{_one_line(i['sig'])}** — confidence {_one_line(i.get('confidence', '?'))}",
+            f"  - Meaning: {_one_line(i.get('meaning', ''))}",
+            f"  - Root cause: {_one_line(i.get('root_cause', ''))}",
+            f"  - Fix: {_one_line(i.get('fix', ''))}"
+            + (f" (`{_one_line(i['file'])}`)" if i.get("file") else ""),
         ]
         if i.get("validation"):
-            lines.append(f"  - ⚠ {i['validation']}")
+            lines.append(f"  - ⚠ {_one_line(i['validation'])}")
     return lines or ["(no model analysis — evidence above stands on its own)"]
 
 
@@ -530,11 +537,13 @@ def run_self_diagnosis(parameters: dict | None = None, player=None, speak=None) 
     if not (syntax or logs) and doctor_verdict == "READY":
         return (
             f"Deep diagnosis complete: {verdict}. No syntax errors, doctor is green, "
-            f"no unexplained errors in the last {_LOG_WINDOW_HOURS}h."
+            f"no unexplained errors in the last {_LOG_WINDOW_HOURS}h. "
+            f"Crew report id: {report_path.stem}."
         )
     return (
         f"Deep diagnosis complete — {verdict}. {len(syntax)} syntax problem(s), "
         f"doctor {doctor_verdict} with {len(doctor)} note(s), "
         f"{len(logs)} real error signature(s) in the last {_LOG_WINDOW_HOURS}h. "
-        f"Report: {report_path}"
+        f"Report: {report_path} (crew report id: {report_path.stem} — pass this id, "
+        f"not the path, when asking the crew to investigate)"
     )

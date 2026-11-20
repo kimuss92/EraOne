@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.file_arguments import file_argument_error
 from core.utils import (
     format_size,
     get_desktop,
@@ -33,6 +34,11 @@ except ImportError:
     _SEND2TRASH = False
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+
+
+_LOCATION_SHORTCUTS = frozenset(
+    {"desktop", "downloads", "documents", "pictures", "music", "videos", "home"}
+)
 
 
 def _resolve_path(raw: str) -> Path:
@@ -764,6 +770,28 @@ def find_file_folder_candidates(
     }
 
 
+def _drop_temp_candidates(candidates: list[dict]) -> list[dict]:
+    """Ignore transient %TEMP% copies when a real match exists.
+
+    Test/installer debris under the temp folder shares real filenames and made
+    "open X" answer "multiple close matches" instead of opening X. Only used by
+    ``open``; ``find`` still lists everything. Falls back to the full list when
+    temp files are the only matches.
+    """
+    try:
+        import tempfile
+
+        temp = os.path.normcase(os.path.realpath(tempfile.gettempdir())) + os.sep
+
+        def in_temp(c: dict) -> bool:
+            return os.path.normcase(os.path.realpath(c["path"])).startswith(temp)
+
+        kept = [c for c in candidates if not in_temp(c)]
+    except Exception:
+        return candidates
+    return kept or candidates
+
+
 def _should_auto_open(candidates: list[dict]) -> tuple[bool, str | None]:
     """Decide whether to auto-open the top candidate."""
     if not candidates:
@@ -1056,6 +1084,11 @@ def copy_file(path: str, name: str = "", destination: str = "", overwrite: bool 
 
 
 def rename_file(path: str, name: str = "", new_name: str = "") -> str:
+    error = file_argument_error(
+        "file_controller", {"action": "rename", "path": path, "name": name, "new_name": new_name}
+    )
+    if error:
+        return error
     try:
         base = _resolve_path(path)
         target = (base / name) if name else base
@@ -1063,9 +1096,6 @@ def rename_file(path: str, name: str = "", new_name: str = "") -> str:
             return f"Access denied: {target}"
         if not target.exists():
             return f"Not found: {target.name}"
-        if not new_name:
-            return "No new name provided."
-
         new_path = target.parent / new_name
         if new_path.exists():
             return f"A file named '{new_name}' already exists here."
@@ -1190,10 +1220,50 @@ def _read_text_capped(target: Path, max_chars: int) -> str:
     return content
 
 
-def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
+_DIAG_REPORT_NAME = re.compile(r"diag_[0-9]{8}_[0-9]{6}(?:\.md)?", re.ASCII)
+
+
+def _diagnosis_report(path: str, name: str) -> Path | None:
+    """Era's own self-diagnosis report, named by its id, wherever the model looked.
+
+    2026-11-05 live: the deep diagnosis said "report diag_20261105_234618", Era
+    read it with parent="diagnosis" (an ignored argument), the read defaulted to
+    the Desktop and answered "File not found" — the report was in runtime/diagnosis
+    all along. READ ONLY: only read_file calls this; write/delete never resolve here.
+    """
+    raw = (name or Path(str(path or "")).name).strip()
+    if not _DIAG_REPORT_NAME.fullmatch(raw):
+        return None
     try:
-        base = _resolve_path(path)
+        from actions.self_diagnosis import REPORT_DIR
+    except Exception:
+        return None
+    candidate = REPORT_DIR / (raw if raw.endswith(".md") else f"{raw}.md")
+    return candidate if candidate.is_file() and not candidate.is_symlink() else None
+
+
+def _known_folder(parent: str):
+    """The one folder a spoken parent name ("my EraOne folder") resolves to, or None."""
+    try:
+        from actions.path_anchors import resolve_known
+
+        hits = [h for h in resolve_known(parent, item_type="folder") if h.is_dir()]
+    except Exception:
+        return None
+    return hits[0] if hits else None
+
+
+def read_file(path: str, name: str = "", max_chars: int = 4000, parent: str = "") -> str:
+    try:
+        # Live 2026-11-17 "read TODO.md in my EraOne folder" -> parent="EraOne" was
+        # ignored and the file was looked for on the Desktop ("File not found").
+        folder = _known_folder(parent) if parent and not path else None
+        base = folder if folder is not None else _resolve_path(path)
         target = (base / name) if name else base
+        if not target.exists():
+            report = _diagnosis_report(path, name)
+            if report is not None:
+                target = report
         if not is_safe_path(target):
             return f"Access denied: {target}"
 
@@ -1227,6 +1297,42 @@ def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
         return f"Could not read file: {e}"
 
 
+def _name_key(stem: str) -> str:
+    """Case, separators and plural-s folded: 'System Limitations Log' ~ 'system_limitation_log'."""
+    words = re.findall(r"[a-z0-9]+", stem.lower())
+    return "".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words)
+
+
+def _existing_twin(target: Path) -> Path | None:
+    """The ONE existing file in target's folder whose name is the same name, spelled
+    differently. None when there is no such file or more than one could be meant.
+
+    2026-11-05/06 live: Era created "System Limitations Log.txt", then the next day
+    appended to "system_limitation_log.txt". Append to a missing file silently CREATED
+    a second file and still said "Appended to", so the user's notes split across two
+    files and Era "forgot" the one they had made together.
+    """
+    folder = target.parent
+    if not folder.is_dir():
+        return None
+    key = _name_key(target.stem)
+    if len(key) < 4:
+        return None
+    matches = []
+    try:
+        for p in folder.iterdir():
+            if not p.is_file() or p == target:
+                continue
+            if target.suffix and p.suffix.lower() != target.suffix.lower():
+                continue
+            other = _name_key(p.stem)
+            if other == key or difflib.SequenceMatcher(None, key, other).ratio() >= 0.9:
+                matches.append(p)
+    except OSError:
+        return None
+    return matches[0] if len(matches) == 1 else None
+
+
 def write_file(
     path: str, name: str = "", content: str = "", append: bool = False, overwrite: bool = False
 ) -> str:
@@ -1235,8 +1341,14 @@ def write_file(
         target = (base / name) if name else base
         if name:
             target = _ensure_openable_extension(target)
+        matched_from = ""
+        if append and not target.exists():
+            twin = _existing_twin(target)
+            if twin is not None:
+                matched_from, target = target.name, twin
         if not is_safe_path(target):
             return f"Access denied: {target}"
+        created = not target.exists()
         if target.exists() and not append:
             if not overwrite:
                 return (
@@ -1250,8 +1362,16 @@ def write_file(
         mode = "a" if append else "w"
         with open(target, mode, encoding="utf-8") as f:
             f.write(content)
-        action = "Appended to" if append else "Written to"
+        if append and created:
+            # Never say "Appended to" a file that did not exist: that hid a duplicate.
+            action = "Created new file (no existing file had that name)"
+        else:
+            action = "Appended to" if append else "Written to"
         result = f"{action}: {target.name}"
+        if matched_from:
+            result += f" (the existing file; you asked for '{matched_from}')"
+        if append or created:
+            result += f" (path: {target})"
         if not append and "backup_path" in locals() and backup_path:
             result += f" (backup: {Path(backup_path).name})"
         return result
@@ -1552,7 +1672,12 @@ def open_file_or_folder(path: str, name: str = "") -> str:
         if known_msg:
             return known_msg
 
-        query, item_type, drive_hint, parent_hint = _parse_folder_intent(raw_input)
+        # A bare location word in `path` ("desktop" is the dispatcher default) says
+        # where to look first, not what to look for. Glued onto `name` it became
+        # part of the query ("desktop diag_x.md") and the 15 s search found nothing
+        # (live 2026-10-18), so search by the name alone.
+        search_text = name if name and path.strip().lower() in _LOCATION_SHORTCUTS else raw_input
+        query, item_type, drive_hint, parent_hint = _parse_folder_intent(search_text)
 
         if not query and _search_context.is_fresh():
             query = _search_context.query
@@ -1572,7 +1697,7 @@ def open_file_or_folder(path: str, name: str = "") -> str:
             timeout_sec=15.0,
         )
 
-        candidates = result["candidates"]
+        candidates = _drop_temp_candidates(result["candidates"])
 
         if not candidates:
             if parent_hint and parent_hint.lower() != query.lower():
@@ -1869,6 +1994,9 @@ def file_controller(
     session_memory=None,
 ) -> str:
     params = parameters or {}
+    error = file_argument_error("file_controller", params)
+    if error:
+        return error
     action = params.get("action", "").lower().strip()
     path = params.get("path", "desktop")
     name = params.get("name", "")
@@ -1914,7 +2042,11 @@ def file_controller(
         elif action == "rename":
             return rename_file(path, name=name, new_name=params.get("new_name", ""))
         elif action == "read":
-            return read_file(path, name=name)
+            return (
+                read_file(params.get("path", ""), name=name, parent=params.get("parent", ""))
+                if params.get("parent") and not params.get("path")
+                else read_file(path, name=name)
+            )
         elif action == "write":
             return write_file(
                 path,

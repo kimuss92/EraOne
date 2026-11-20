@@ -621,3 +621,6 @@ check(
 print(f"\n{'=' * 40}")
 print(f"Main tool bridge tests: {passed} passed, {failed} failed out of {passed + failed}")
 print(f"{'=' * 40}")
+
+if __name__ == "__main__":
+    raise SystemExit(1 if failed else 0)

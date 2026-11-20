@@ -189,9 +189,24 @@ class _Psutil:
 @pytest.fixture
 def win_env(monkeypatch):
     def _install(gui=None, proc=None, ps=None):
+        process_table = ps or _Psutil()
+
+        class EventMonitor:
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def snapshot(self):
+                return {
+                    name.lower(): {"pid": pid, "name": name} for name, pid in process_table._procs
+                }
+
+        monkeypatch.setattr("windows.state_sync._OpenAppEventMonitor", EventMonitor)
         monkeypatch.setitem(sys.modules, "win32gui", gui or _Gui())
         monkeypatch.setitem(sys.modules, "win32process", proc or _Proc())
-        monkeypatch.setitem(sys.modules, "psutil", ps or _Psutil())
+        monkeypatch.setitem(sys.modules, "psutil", process_table)
 
     return _install
 

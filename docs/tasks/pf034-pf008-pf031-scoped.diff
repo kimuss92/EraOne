@@ -1,0 +1,818 @@
+diff --git a/core/mic_mute.py b/core/mic_mute.py
+index f706373..412a519 100644
+--- a/core/mic_mute.py
++++ b/core/mic_mute.py
+@@ -57,4 +57,7 @@ UNMUTE_PHRASES: tuple[str, ...] = (
+     "activate your microphone",
+     "activate the mic",
++    "activate the microphone",
++    "turn on the mic",
++    "turn on the microphone",
+     "turn on mic",
+     "turn on microphone",
+diff --git a/actions/monitor_move.py b/actions/monitor_move.py
+index 34659a3..8e9a6f2 100644
+--- a/actions/monitor_move.py
++++ b/actions/monitor_move.py
+@@ -149,4 +149,42 @@ def resolve_target_monitor(screen, current: dict | None, monitors: list[dict]):
+ 
+ 
++_SCREEN_WORD = r"(?:screen|monitor|display)"
++_NUM_WORD = r"(one|two|three|four|[1-9])"
++_SPOKEN_SCREEN_RE = re.compile(
++    rf"\b{_SCREEN_WORD}\s+(?:number\s+)?{_NUM_WORD}\b"
++    rf"|\b(first|second|third|fourth)\s+{_SCREEN_WORD}\b",
++    re.IGNORECASE,
++)
++_ORDINALS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
++_SCREEN_ACTIONS = {"window_control": "move_to_monitor", "browser_control": "tab_to_monitor"}
++
++
++def spoken_screen(utterance: str) -> str | None:
++    """The screen NUMBER the user said ("screen one", "monitor 2", "second screen").
++
++    The last mention wins: "from screen two to screen one" means one.
++    """
++    found = None
++    for m in _SPOKEN_SCREEN_RE.finditer(utterance or ""):
++        word = (m.group(1) or m.group(2) or "").lower()
++        found = _ORDINALS.get(word) or str(_WORD_NUMBERS.get(word, word))
++    return found
++
++
++def ground_screen(tool: str, args: dict, utterance: str) -> dict:
++    """The number the user spoke beats the model's guess.
++
++    Live 2026-11-16 17:54-17:55 (and 2026-10-03, 10-14): "move Brave/Spotify to
++    screen one" reached the tool as screen="primary", and the primary monitor is
++    Windows display 2, so Era answered "already on screen 2" four times running.
++    """
++    if args.get("action") != _SCREEN_ACTIONS.get(tool):
++        return args
++    said = spoken_screen(utterance)
++    if not said or str(args.get("screen", "")).strip() == said:
++        return args
++    return {**args, "screen": said}
++
++
+ def _is_era_window(title: str) -> bool:
+     t = (title or "").lower()
+@@ -246,4 +284,11 @@ def move_hwnd_to_monitor(hwnd, screen) -> str:
+         return err
+     if current and target["handle"] == current["handle"]:
++        if win32gui.IsIconic(hwnd):
++            # "Move Brave to screen 2" while Brave sits minimized there: the user
++            # wants to SEE it on that screen, so bring it back instead of only
++            # reporting where it already is.
++            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
++            if _await(lambda: not win32gui.IsIconic(hwnd)):
++                return f"Moved '{name}' to screen {target['number']} (restored it from minimized)."
+         return f"'{name}' is already on screen {target['number']}."
+ 
+diff --git a/tools/test_monitor_move.py b/tools/test_monitor_move.py
+index b7eab02..162631d 100644
+--- a/tools/test_monitor_move.py
++++ b/tools/test_monitor_move.py
+@@ -92,2 +92,44 @@ def test_move_to_monitor_is_ungated():
+     risk = classify_action("window_control", {"action": "move_to_monitor"})
+     assert risk["requires_confirmation"] is False
++
++
++# ── PF-031: the screen number the user said wins over the model's guess ──
++
++
++def test_spoken_screen_number_is_read_from_the_sentence():
++    assert mm.spoken_screen("Move Brave to screen one") == "1"
++    assert mm.spoken_screen("Okay, move it to screen one.") == "1"
++    assert mm.spoken_screen("put it on monitor 2") == "2"
++    assert mm.spoken_screen("send it to the second screen") == "2"
++    assert mm.spoken_screen("move it from screen two to screen one") == "1"
++    assert mm.spoken_screen("move it to the other screen") is None
++    assert mm.spoken_screen("move it to the primary monitor") is None
++
++
++def test_screen_one_is_never_sent_as_primary():
++    # Live 2026-11-16: "move Brave to screen one" arrived as screen="primary"
++    # (Windows display 2) and Era answered "already on screen 2" four times.
++    args = {"action": "move_to_monitor", "title": "Brave", "screen": "primary"}
++    assert mm.ground_screen("window_control", args, "Move Brave to screen one")["screen"] == "1"
++    tab = {"action": "tab_to_monitor", "screen": "primary"}
++    assert mm.ground_screen("browser_control", tab, "send this tab to screen one")["screen"] == "1"
++
++
++def test_grounding_leaves_other_calls_alone():
++    other = {"action": "move_to_monitor", "screen": "other"}
++    assert mm.ground_screen("window_control", other, "move it to the other screen") is other
++    main = {"action": "move_to_monitor", "screen": "primary"}
++    assert mm.ground_screen("window_control", main, "move it to my main screen") is main
++    focus = {"action": "focus", "title": "screen one"}
++    assert mm.ground_screen("window_control", focus, "focus screen one") is focus
++
++
++def test_the_router_applies_screen_grounding():
++    from core.self_healing_router import route_tool_call
++
++    tool, params = route_tool_call(
++        "window_control",
++        {"action": "move_to_monitor", "title": "Spotify", "screen": "primary"},
++        "Okay, move it to screen one.",
++    )
++    assert tool == "window_control" and params["screen"] == "1"
+diff --git a/core/attention.py b/core/attention.py
+index 0f95bc4..7ce4919 100644
+--- a/core/attention.py
++++ b/core/attention.py
+@@ -130,37 +147,49 @@ class ListeningState:
+         clock: Callable[[], float] = time.monotonic,
+         media_active: Callable[[], bool] | None = None,
++        window_s: float | None = None,
+     ) -> None:
+         self._clock = clock
+-        # Music/video playing (core/media_activity): the free window would let
+-        # lyrics through, and each reply to one re-opened it (live 2026-10-10).
++        # The window applies whether or not media plays; media only decides
++        # whether unnamed passing speech may re-anchor it (AttentionGate).
+         self._media_active = media_active or (lambda: False)
++        self._session = SessionWindow(clock=clock, window_s=window_s)
+         self._hold_until = 0.0
+-        self._last_activity = clock()  # a fresh session starts in conversation
+-        # The user deliberately addressed Era (her name, a wake, typing). While
+-        # media plays ONLY this opens the window: Era's own replies must not keep
+-        # it open, or a reply to a lyric re-opens it for the next lyric (the loop
+-        # of 2026-10-10). Requiring her name on EVERY sentence instead made her
+-        # deaf mid-conversation with music on (the next fix, same day).
+-        self._last_explicit = clock()
++        # The user deliberately addressed Era (her name, a wake, typing).
+         self._explicit_reply_pending = False
+ 
+-    def era_finished_speaking(self, interrupted: bool) -> None:
+-        now = self._clock()
+-        if self._explicit_reply_pending:
+-            self._last_explicit = now
++    def era_finished_speaking(self, interrupted: bool, internal: bool = False) -> None:
++        """Era's reply re-anchors the window only after an explicit address.
++
++        internal=True (PF-034): she spoke for her own reasons (a scheduled
++        report, a background result). That is not conversation with the owner,
++        so it neither re-anchors the window nor consumes a pending address.
++        """
++        if self._explicit_reply_pending and not internal:
++            self._session.note_accepted()
+             self._explicit_reply_pending = False
+         if not interrupted:
+-            self._hold_until = now + get_listening_config()["echo_hold_ms"] / 1000.0
+-        self._last_activity = now
++            self._hold_until = self._clock() + get_listening_config()["echo_hold_ms"] / 1000.0
++
++    def _media_playing(self) -> bool:
++        try:
++            return bool(self._media_active())
++        except Exception:
++            return True  # unsure: be strict, only an explicit address re-anchors
+ 
+     def note_activity(self, explicit: bool = False) -> None:
+-        """Conversation is on. explicit=True: the user addressed Era by name, by
+-        typing or by waking her — the only kind that opens it during media."""
+-        now = self._clock()
+-        self._last_activity = now
++        """An utterance reached Era: it counts as conversation either way.
++
++        explicit=True: the user addressed Era by name, by typing or by waking
++        her. Only an explicit address lets Era's OWN reply re-anchor the window.
++        """
++        self._session.note_accepted()
+         if explicit:
+-            self._last_explicit = now
+             self._explicit_reply_pending = True
+ 
++    def close_session(self) -> None:
++        """Close the session ("standby" in the one-mode model)."""
++        self._explicit_reply_pending = False
++        self._session.close()
++
+     def echo_hold_active(self) -> bool:
+         return self._clock() < self._hold_until
+@@ -235,11 +245,26 @@ class AttentionGate:
+         try:
+             return self._feed(frame, keep_open)
+-        except Exception as e:  # fail OPEN: never deafen Era over a filter bug
++        except Exception as e:
+             self._on_event("error", f"{type(e).__name__}: {e}")
+             self.mode, self._held, self._rec = IDLE, [], None
+-            return [frame]
++            return [frame] if self.state.window_open() else [bytes(len(frame))]
++
++    def _reanchor_passing(self) -> None:
++        """Unnamed passing speech re-anchors only a REALLY open window, with no
++        media playing (PF-034). Live 2026-11-16: a scheduled report's busy
++        exemption let room audio pass and re-open an expired window, and music
++        pauses kept re-anchoring it, so Era answered without her name."""
++        state = self.state
++        if not state.window_open():
++            return  # passing only because of a busy/confirmation exemption
++        media = getattr(state, "_media_playing", None)
++        if callable(media) and media():
++            return  # a lyric must not keep the window open (2026-10-10 loop)
++        note = getattr(state, "note_activity", None)
++        if callable(note):
++            note()
+ 
+     def _open(self, keep_open: bool) -> bool:
+-        return keep_open or self._make_rec is None or self.state.window_open()
++        return keep_open or self.state.window_open()
+ 
+     def _feed(self, frame: bytes, keep_open: bool) -> list[bytes]:
+@@ -264,5 +298,5 @@ class AttentionGate:
+             if self._open(keep_open):
+                 self.mode, self._quiet_s = PASSING, 0.0
+-                self.state.note_activity()
++                self._reanchor_passing()
+                 self._preroll = []
+                 return [frame]
+@@ -307,5 +341,5 @@ class AttentionGate:
+         if self._quiet_s >= _END_SILENCE_S:
+             if passing:
+-                self.state.note_activity()
++                self._reanchor_passing()
+             self.mode, self._quiet_s = IDLE, 0.0
+         return [frame] if passing else [silence]
+diff --git a/main.py b/main.py
+index 5a33fd5..5d0b06f 100644
+--- a/main.py
++++ b/main.py
+@@ -299,5 +299,17 @@ def _build_live_health() -> LiveHealth:
+ 
+ 
+-def _note_listening(era, what: str, interrupted: bool = False) -> None:
++def _speaking_for_internal_turn(era) -> bool:
++    """Is Era's current speech the reply to an internal request (a scheduled
++    report, a background result) rather than to the owner? PF-034."""
++    tracker = getattr(era, "_model_reply_ownership", None)
++    return bool(
++        tracker is not None
++        and tracker.active
++        and tracker.owner is None
++        and tracker.reason == "unowned_model_request"
++    )
++
++
++def _note_listening(era, what: str, interrupted: bool = False, internal: bool = False) -> None:
+     """Feed core/attention.py. A listening hook must never break the speaking
+     state or a typed command (a test engine has no _listening_state at all)."""
+@@ -307,5 +319,5 @@ def _note_listening(era, what: str, interrupted: bool = False) -> None:
+             return
+         if what == "finished":
+-            state().era_finished_speaking(interrupted=interrupted)
++            state().era_finished_speaking(interrupted=interrupted, internal=internal)
+         else:
+             state().note_activity(explicit=True)  # typing to Era is a deliberate address
+@@ -1422,4 +1543,6 @@ class EraLive(
+                 # A fresh spoken turn: clear any stale interrupt and re-arm.
+                 self._barge_in_requested = False
++                # Decided at speech START: the reply tracker resets at turn end.
++                self._speaking_internal = _speaking_for_internal_turn(self)
+                 if det is not None:
+                     det.note_speaking(True)
+@@ -1433,6 +1556,10 @@ class EraLive(
+                 # after a barge-in: the user is already mid-sentence.
+                 _note_listening(
+-                    self, "finished", interrupted=bool(getattr(self, "_barge_in_requested", False))
++                    self,
++                    "finished",
++                    interrupted=bool(getattr(self, "_barge_in_requested", False)),
++                    internal=bool(getattr(self, "_speaking_internal", False)),
+                 )
++                self._speaking_internal = False
+             self.ui.set_state("LISTENING")
+             self.session_manager.transition_to(EraState.LISTENING, reason="speaking_finished")
+diff --git a/app/era_live/audio.py b/app/era_live/audio.py
+index 490b357..4958799 100644
+--- a/app/era_live/audio.py
++++ b/app/era_live/audio.py
+@@ -477,5 +540,15 @@ class AudioIOMixin:
+             snap = self.session_manager.get_state_snapshot()
+             if str(snap.get("current_state", "")).upper().endswith("PROCESSING"):
+-                return True
++                # PF-034: busy with HIS request only. A scheduled report or
++                # background result (an internal model request) held the gate
++                # open and let room audio re-open the window (live 2026-11-16).
++                tracker = getattr(self, "_model_reply_ownership", None)
++                internal = (
++                    tracker is not None
++                    and tracker.active
++                    and tracker.owner is None
++                    and tracker.reason == "unowned_model_request"
++                )
++                return not internal
+             task = getattr(self, "_local_turn_task", None)
+             if task is not None and not task.done():
+diff --git a/app/era_live/mic_mute.py b/app/era_live/mic_mute.py
+index 96a36d3..c14efd4 100644
+--- a/app/era_live/mic_mute.py
++++ b/app/era_live/mic_mute.py
+@@ -5,12 +5,14 @@ Mute   — "mute your mic" / "stop listening": caught by the set_microphone tool
+          typed path in _on_text_command. All three land in mute_microphone(),
+          which is idempotent, so whichever fires first wins and the rest no-op.
+-Unmute — "activate mic" / "start listening": while muted, Gemini hears nothing,
+-         so the mic feeds a LOCAL Vosk recognizer (_run_unmute_listener) that
+-         only knows the unmute phrases, and the phrase must be the enrolled
+-         owner's voice. Also typed commands and the UI mic button.
++Unmute — "activate mic" / "start listening": while muted (by voice, typing or
++         the button alike), Gemini hears nothing, so the mic feeds a LOCAL Vosk
++         recognizer (_run_unmute_listener) that only knows the unmute phrases,
++         and the phrase must be the enrolled owner's voice. Also typed commands
++         and the UI mic button.
+ 
+ Mic-mute is orthogonal to standby: standby/wake never reopens a voice-muted
+ mic (a network-failure standby must not be a way around a privacy mute). Only
+-an explicit mic-on order does.
++an explicit mic-on order does. The browser/UI hard-off switch remains separate:
++a vocal unmute clears the logical voice mute but cannot override hard-off.
+ """
+ 
+@@ -40,8 +42,15 @@ except ImportError:  # pragma: no cover - vosk is optional
+ 
+ _VOICE_UNMUTE_HINT = "Say 'start listening' or 'activate mic' to turn it back on."
++# Mute sources whose origin was the owner's own voice (kept for the UI/telemetry).
++# PF-008 (owner, 2026-11-16): EVERY mute, whatever its source, can be undone by
++# voice, typing or the mic button. Ambient noise still cannot reopen it: the local
++# listener knows only the unmute phrases (strict grammar + confidence) and the
++# phrase must pass owner voice verification; Era's own voice is skipped.
++_VOICE_UNMUTABLE_SOURCES = frozenset({"voice", "restored"})
+ 
+ 
+ class MicMuteMixin:
+     _mic_muted: bool = False
++    _mic_muted_source: str = "voice"
+     _unmute_queue: asyncio.Queue | None = None
+     _unmute_task: Any = None
+@@ -61,12 +70,17 @@ class MicMuteMixin:
+ 
+     @staticmethod
+-    def _persist_mic_muted(value: bool) -> None:
++    def _persist_mic_muted(value: bool, source: str = "") -> None:
+         try:
+-            from core.user_prefs import set_mic_muted
++            from core.user_prefs import set_mic_mute_source, set_mic_muted
+ 
+             set_mic_muted(value)
++            set_mic_mute_source(source if value else "")
+         except Exception as e:
+             print(f"[MIC-MUTE] Could not persist mic state: {e}")
+ 
++    def mic_muted_by_voice(self) -> bool:
++        """True when the owner's own voice order muted the mic."""
++        return self._mic_muted and self._mic_muted_source in _VOICE_UNMUTABLE_SOURCES
++
+     def _say_mic_ack(self, text: str) -> None:
+         try:
+@@ -86,10 +102,14 @@ class MicMuteMixin:
+         # further frame reaches Gemini from this point on.
+         self._mic_muted = True
++        self._mic_muted_source = str(source or "voice").strip().lower()
+         dropped = self._drain_mic_out_queue()
+-        self._persist_mic_muted(True)
++        self._persist_mic_muted(True, self._mic_muted_source)
+         print(f"[MIC-MUTE] Microphone muted ({source}); dropped {dropped} queued frame(s)")
+         self.ui.write_log(f"SYS: Microphone off ({source}). {self._unmute_hint()}")
+         self._broadcast_mic_state()
+-        self._start_unmute_listener()
++        # PF-008 (owner, 2026-11-16): any mute can be undone by voice. Live
++        # 18:03: after "microphone off" the owner said "activate mic" for 40 s
++        # and nothing listened; only the mic button worked.
++        self._ensure_unmute_listener()
+         if speak_ack:
+             self._say_mic_ack(MIC_OFF_ACK)
+@@ -112,20 +133,21 @@ class MicMuteMixin:
+ 
+     def restore_mic_mute(self) -> None:
+-        """Re-apply a voice mute that was active before a restart/relaunch.
+-
+-        A crash-relaunch must not silently reopen a mic the user closed.
+-        """
++        """Re-apply a mute that was active before a restart/relaunch."""
+         try:
+-            from core.user_prefs import get_mic_muted
++            from core.user_prefs import get_mic_mute_source, get_mic_muted
+ 
+             if not get_mic_muted():
+                 return
++            previous = (get_mic_mute_source() or "voice").strip().lower()
+         except Exception:
+             return
+         self._mic_muted = True
++        # A restored mute from the owner's voice stays non-voice-unmutable; a
++        # mute made with the UI button keeps its local listener.
++        self._mic_muted_source = "restored" if previous in _VOICE_UNMUTABLE_SOURCES else previous
+         print("[MIC-MUTE] Restored muted microphone from previous session")
+         self.ui.write_log(f"SYS: Microphone is still off from before. {self._unmute_hint()}")
+         self._broadcast_mic_state()
+-        self._start_unmute_listener()
++        self._ensure_unmute_listener()
+ 
+     def _unmute_hint(self) -> str:
+@@ -151,8 +173,12 @@ class MicMuteMixin:
+     # ── Tool / typed entry points ────────────────────────────────────────────
+     def _handle_set_microphone(self, args: dict) -> str:
++        """Dispatcher entry point for the registered set_microphone tool."""
+         state = str(args.get("state", "")).strip().lower()
+         if state in ("off", "mute", "muted", "false", "0"):
+             if self.mute_microphone("voice"):
+                 return "Microphone muted. Say nothing — the system speaks its own notice."
++            # A prior listener can have stopped because of a recognizer error;
++            # repeating "off" repairs it so voice unmute stays available.
++            self._ensure_unmute_listener()
+             return "The microphone is already off. Say nothing."
+         if state in ("on", "unmute", "unmuted", "true", "1"):
+@@ -163,9 +189,10 @@ class MicMuteMixin:
+ 
+     def _handle_typed_mic_order(self, text: str) -> bool:
+-        """Typed/Telegram mic order. Returns True when `text` was one."""
++        """Typed/Telegram mic order. Returns True when ``text`` was one."""
+         if is_mic_off_order(text):
+             if self.mute_microphone("typed", speak_ack=False):
+                 ack = MIC_OFF_ACK
+             else:
++                self._ensure_unmute_listener()
+                 ack = "My microphone is already off."
+         elif is_mic_on_order(text):
+@@ -188,4 +214,13 @@ class MicMuteMixin:
+             loop.call_soon_threadsafe(q.put_nowait, data)
+ 
++    def _ensure_unmute_listener(self) -> None:
++        """Arm or repair the local listener while the logical mute is active."""
++        if not self._mic_muted:
++            return
++        task = self._unmute_task
++        if self._unmute_queue is not None and task is not None and not task.done():
++            return
++        self._start_unmute_listener()
++
+     def _start_unmute_listener(self) -> None:
+         if vosk is None or getattr(self, "_vosk_model", None) is None:
+diff --git a/core/self_healing_router.py b/core/self_healing_router.py
+index eec23ee..86bdf61 100644
+--- a/core/self_healing_router.py
++++ b/core/self_healing_router.py
+@@ -1495,4 +1531,27 @@ def divert_era_reboot(tool: str, parameters: dict | None, user_text: str) -> tup
+ 
+ def route_tool_call(tool: str, parameters: dict | None, user_text: str = "") -> tuple[str, dict]:
++    # The same parser drives both the feature and normal model tool calls. Never
++    # treat a built-in panel as a removable custom widget or an OS window.
++    if tool in {"visual_engine", "run_feature", "window_control"}:
++        from features.hud_panel_visibility import parse_voice_command
++
++        panel = parse_voice_command(user_text or "")
++        if panel.get("ok") and panel.get("kind") == "command":
++            import json
++
++            return "visual_engine", {"command": json.dumps(panel["command"])}
++    from core.personal_media import ground_explicit_track
++
++    tool, parameters = ground_explicit_track(tool, parameters or {}, user_text)
++    if tool in {"window_control", "browser_control"}:
++        from actions.monitor_move import ground_screen
++
++        grounded = ground_screen(tool, parameters, user_text)
++        if grounded is not parameters:
++            log(
++                "Router",
++                f"screen_grounding: {parameters.get('screen')!r} -> {grounded['screen']!r}",
++            )
++            parameters = grounded
+     # The tool the caller actually asked for, before any rewriting below. An
+     # explicit window_control/spotify_control call is a deliberate desktop-window
+diff --git a/app/tool_declarations.py b/app/tool_declarations.py
+index 8a3fdc8..50aae3f 100644
+--- a/app/tool_declarations.py
++++ b/app/tool_declarations.py
+@@ -652,5 +701,5 @@ TOOL_DECLARATIONS = [
+                 "screen": {
+                     "type": "STRING",
+-                    "description": "Target monitor for tab_to_monitor: a number ('2'), 'other', 'left', 'right', or 'primary'. Default 'other'.",
++                    "description": "Target monitor for tab_to_monitor: a number ('2'), 'other', 'left', 'right', or 'primary'. 'Screen one' means '1', never 'primary'. Default 'other'.",
+                 },
+                 "browser": {
+@@ -1638,5 +1693,5 @@ TOOL_DECLARATIONS = [
+                 "screen": {
+                     "type": "STRING",
+-                    "description": "Target monitor for move_to_monitor: a number ('2'), 'other', 'next', 'left', 'right', or 'primary'. Default 'other'.",
++                    "description": "Target monitor for move_to_monitor: a number ('2'), 'other', 'next', 'left', 'right', or 'primary'. 'Screen one' means '1', never 'primary'; use 'primary' only when the user says primary/main. Default 'other'.",
+                 },
+                 "title": {
+diff --git a/tools/golden/tool_declarations_anthropic.json b/tools/golden/tool_declarations_anthropic.json
+index bd70583..b5f7546 100644
+--- a/tools/golden/tool_declarations_anthropic.json
++++ b/tools/golden/tool_declarations_anthropic.json
+@@ -500,5 +534,5 @@
+         },
+         "screen": {
+-          "description": "Target monitor for tab_to_monitor: a number ('2'), 'other', 'left', 'right', or 'primary'. Default 'other'.",
++          "description": "Target monitor for tab_to_monitor: a number ('2'), 'other', 'left', 'right', or 'primary'. 'Screen one' means '1', never 'primary'. Default 'other'.",
+           "type": "string"
+         },
+@@ -1339,5 +1373,5 @@
+         },
+         "screen": {
+-          "description": "Target monitor for move_to_monitor: a number ('2'), 'other', 'next', 'left', 'right', or 'primary'. Default 'other'.",
++          "description": "Target monitor for move_to_monitor: a number ('2'), 'other', 'next', 'left', 'right', or 'primary'. 'Screen one' means '1', never 'primary'; use 'primary' only when the user says primary/main. Default 'other'.",
+           "type": "string"
+         },
+diff --git a/tools/test_reanchor_sources.py b/tools/test_reanchor_sources.py
+new file mode 100755
+index 0000000..f9ebca4
+--- /dev/null
++++ b/tools/test_reanchor_sources.py
+@@ -0,0 +1,108 @@
++"""PF-034: only real conversation re-anchors the listening window.
++
++Live 2026-11-16 (owner voiceprint gate disabled, so all room audio reaches the
++attention gate): the window never closed during music, and a scheduled report
++(internal model request -> PROCESSING busy exemption) let room audio pass and
++re-open an EXPIRED window, so Era answered unnamed speech at 18:04:44 although
++the owner's last order was 17:59:28.
++"""
++
++from __future__ import annotations
++
++from types import SimpleNamespace
++
++import numpy as np
++
++from core.attention import AttentionGate, ListeningState
++
++SPEECH = (0.2 * np.sin(2 * np.pi * 220 * np.arange(640) / 16000) * 32767).astype("<i2").tobytes()
++QUIET = bytes(len(SPEECH))
++
++
++class Clock:
++    def __init__(self):
++        self.t = 1000.0
++
++    def __call__(self):
++        return self.t
++
++
++def _utterance(gate, keep_open=False):
++    out = []
++    for _ in range(10):
++        out += gate.feed(SPEECH, keep_open=keep_open)
++    for _ in range(30):  # > 0.7 s of quiet ends the utterance
++        out += gate.feed(QUIET, keep_open=keep_open)
++    return out
++
++
++def _gate(media=False):
++    clock = Clock()
++    state = ListeningState(clock=clock, media_active=lambda: media, window_s=120)
++    return clock, state, AttentionGate(state, lambda: None)
++
++
++def test_a_busy_exemption_never_reopens_an_expired_window():
++    clock, state, gate = _gate()
++    clock.t += 121
++    assert state.window_open() is False
++    _utterance(gate, keep_open=True)  # Era busy with a task: audio passes...
++    assert state.window_open() is False  # ...but it is not a new conversation
++
++
++def test_music_cannot_keep_the_window_open():
++    clock, state, gate = _gate(media=True)
++    for _ in range(5):  # lyrics with pauses, 30 s apart
++        clock.t += 30
++        _utterance(gate)
++    assert state.window_open() is False  # 150 s after the last real turn
++
++
++def test_unnamed_speech_without_media_still_re_anchors():
++    clock, state, gate = _gate(media=False)
++    clock.t += 100
++    _utterance(gate)
++    clock.t += 100
++    assert state.window_open() is True  # PF-006: bare follow-ups keep it open
++
++
++def test_internal_speech_neither_re_anchors_nor_uses_up_an_address():
++    clock = Clock()
++    state = ListeningState(clock=clock, window_s=120)
++    state.note_activity(explicit=True)
++    clock.t += 100
++    state.era_finished_speaking(interrupted=False, internal=True)  # scheduled report
++    clock.t += 30
++    assert state.window_open() is False
++    state.era_finished_speaking(interrupted=False)  # her real reply to the address
++    assert state.window_open() is True
++
++
++def test_an_internal_request_is_not_busy_with_the_owner():
++    from app.era_live.audio import AudioIOMixin
++
++    tracker = SimpleNamespace(active=True, owner=None, reason="unowned_model_request")
++    era = SimpleNamespace(
++        _pending_store=None,
++        session_manager=SimpleNamespace(
++            get_state_snapshot=lambda: {"current_state": "EraState.PROCESSING"}
++        ),
++        _model_reply_ownership=tracker,
++    )
++    assert AudioIOMixin._attention_keep_open(era) is False
++    tracker.reason, tracker.owner = "", SimpleNamespace(id="voice-1")
++    assert AudioIOMixin._attention_keep_open(era) is True
++
++
++def test_speech_for_an_internal_turn_is_recognised():
++    import main
++
++    era = SimpleNamespace(
++        _model_reply_ownership=SimpleNamespace(
++            active=True, owner=None, reason="unowned_model_request"
++        )
++    )
++    assert main._speaking_for_internal_turn(era) is True
++    era._model_reply_ownership.reason = "new_input"
++    assert main._speaking_for_internal_turn(era) is False
++    assert main._speaking_for_internal_turn(SimpleNamespace()) is False
+diff --git a/tools/test_activate_mic.py b/tools/test_activate_mic.py
+new file mode 100755
+index 0000000..315b80a
+--- /dev/null
++++ b/tools/test_activate_mic.py
+@@ -0,0 +1,178 @@
++"""Voice activation after a manual mute (app/era_live/mic_mute.py).
++
++The owner's rule (changed 2026-11-16, was 2026-11-11): EVERY mute, whether by
++voice, typing or the mic button, can be undone by voice ("activate mic"),
++typing or the button. Ambient noise still cannot reopen it: the local listener
++knows only the unmute phrases and the phrase must pass owner verification.
++Live 2026-11-16 18:03: after "microphone off" the owner said "activate mic" for
++40 s and nothing listened; only the mic button worked.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++from types import SimpleNamespace
++
++import pytest
++
++import app.era_live.mic_mute as mic_module
++from app.era_live.mic_mute import MicMuteMixin
++
++
++class _UI:
++    def __init__(self) -> None:
++        self.events: list[dict] = []
++        self.logs: list[str] = []
++
++    def _broadcast(self, event: dict) -> None:
++        self.events.append(event)
++
++    def write_log(self, text: str) -> None:
++        self.logs.append(text)
++
++
++class _Recognizer:
++    def __init__(self, model, rate, grammar) -> None:
++        assert model == "offline-model"
++        assert rate == 16000
++        assert "activate" in grammar
++        self.words = False
++
++    def SetWords(self, enabled: bool) -> None:
++        self.words = enabled
++
++    def AcceptWaveform(self, data: bytes) -> bool:
++        assert self.words is True
++        return bool(data)
++
++    def Result(self) -> str:
++        return json.dumps(
++            {
++                "text": "activate mic",
++                "result": [
++                    {"word": "activate", "conf": 0.99, "start": 0.0, "end": 0.3},
++                    {"word": "mic", "conf": 0.99, "start": 0.3, "end": 0.55},
++                ],
++            }
++        )
++
++
++class _Verifier:
++    def check(self, tap, result):
++        assert result["text"] == "activate mic"
++        return SimpleNamespace(accepted=True, reason="owner verified")
++
++
++class _Era(MicMuteMixin):
++    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
++        self._loop = loop
++        self._mic_muted = False
++        self._mic_muted_source = ""
++        self._browser_mic_active = True
++        self._vosk_model = "offline-model"
++        self._unmute_verifier = _Verifier()
++        self._unmute_queue = None
++        self._unmute_task = None
++        self._unmute_ignore_until = 0.0
++        self._is_speaking = False
++        self._last_interaction_timestamp = 0.0
++        self.ui = _UI()
++        self.out_queue: asyncio.Queue = asyncio.Queue()
++        self.spoken: list[str] = []
++
++    def speak(self, text: str) -> None:
++        self.spoken.append(text)
++
++    def _tg_ack(self, text: str) -> None:
++        pass
++
++
++@pytest.fixture(autouse=True)
++def _quiet_persistence(monkeypatch):
++    monkeypatch.setattr(
++        mic_module,
++        "vosk",
++        SimpleNamespace(KaldiRecognizer=_Recognizer),
++    )
++    seen: list[tuple[bool, str]] = []
++    monkeypatch.setattr(
++        MicMuteMixin,
++        "_persist_mic_muted",
++        staticmethod(lambda value, source="": seen.append((value, source))),
++    )
++
++
++@pytest.mark.asyncio
++async def test_a_voice_mute_is_reopened_by_the_owner_voice() -> None:
++    """PF-008 (owner, 2026-11-16): "microphone off" by voice, then "activate mic"."""
++    era = _Era(asyncio.get_running_loop())
++
++    response = era._handle_set_microphone({"state": "off"})
++
++    assert response.startswith("Microphone muted")
++    assert era._mic_muted is True
++    assert era._mic_muted_source == "voice"
++    assert era._unmute_task is not None
++
++    era._unmute_ignore_until = 0.0
++    era._feed_unmute_audio(era._loop, b"\x01\x00" * 8000)
++    await asyncio.wait_for(era._unmute_task, timeout=1.0)
++    assert era._mic_muted is False
++
++
++@pytest.mark.asyncio
++async def test_an_unverified_voice_cannot_reopen_any_mute() -> None:
++    """Noise protection: a stranger or the TV saying the phrase stays muted."""
++    era = _Era(asyncio.get_running_loop())
++    era._unmute_verifier = SimpleNamespace(
++        check=lambda tap, result: SimpleNamespace(accepted=False, reason="not owner")
++    )
++    era._handle_set_microphone({"state": "off"})
++    era._unmute_ignore_until = 0.0
++    era._feed_unmute_audio(era._loop, b"\x01\x00" * 8000)
++    await asyncio.sleep(0.1)
++    assert era._mic_muted is True
++
++
++@pytest.mark.asyncio
++async def test_a_typed_order_unmutes_a_voice_mute_without_a_session() -> None:
++    era = _Era(asyncio.get_running_loop())
++    era._handle_set_microphone({"state": "off"})
++
++    assert era._handle_typed_mic_order("Activate mic.") is True
++    assert era._mic_muted is False
++    assert era._handle_typed_mic_order("what time is it") is False
++
++
++@pytest.mark.asyncio
++async def test_a_ui_mute_is_reopened_by_the_owner_voice() -> None:
++    era = _Era(asyncio.get_running_loop())
++
++    assert era.mute_microphone("ui") is True
++    assert era._mic_muted_source == "ui"
++    assert era._unmute_queue is not None
++    assert era._unmute_task is not None
++
++    era._unmute_ignore_until = 0.0
++    era._feed_unmute_audio(era._loop, b"\x01\x00" * 8000)
++    await asyncio.wait_for(era._unmute_task, timeout=1.0)
++
++    assert era._mic_muted is False
++    assert era.mic_effective_active() is True
++    assert any(event.get("type") == "mic_muted" and not event["muted"] for event in era.ui.events)
++    assert any("Microphone on (voice)" in line for line in era.ui.logs)
++
++
++@pytest.mark.asyncio
++async def test_repeated_voice_off_repairs_the_listener() -> None:
++    era = _Era(asyncio.get_running_loop())
++    era._mic_muted = True
++    era._mic_muted_source = "voice"
++
++    response = era._handle_set_microphone({"state": "off"})
++
++    assert response == "The microphone is already off. Say nothing."
++    # A listener that died (recognizer error) is re-armed so voice unmute stays possible.
++    assert era._unmute_task is not None
++    era._stop_unmute_listener()

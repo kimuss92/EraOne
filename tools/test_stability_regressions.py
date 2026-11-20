@@ -313,6 +313,21 @@ def test_windows_system_paths_keep_their_meaning_on_any_validator(path):
 async def test_engine_renewal_stops_all_workers_and_releases_the_sdk(monkeypatch, tmp_path):
     import main
     from app.hud.ui_base import HeadlessUI
+    from core.telegram_call_coordinator import CallCoordinator
+
+    async def offline_calls():
+        return CallCoordinator(
+            None,
+            enabled=False,
+            provider=None,
+            dispatch=None,
+            input_policy=None,
+            notify=lambda _: None,
+        )
+
+    # Engine lifecycle tests must never read the owner's call credentials or
+    # start a native listener. Call cleanup has its own offline integration tests.
+    monkeypatch.setattr("app.telegram_call_runtime.create_service", offline_calls)
 
     monkeypatch.setattr("actions.file_indexer.init_file_index", lambda: None)
     monkeypatch.setattr(main, "init_vosk", lambda: None)

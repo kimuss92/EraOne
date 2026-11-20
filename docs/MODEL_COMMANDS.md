@@ -155,3 +155,20 @@ These are per-CALL floors, dominated by the Claude Code harness reloading on
 every `claude -p` invocation — not by tokens. That is why Haiku is only ~4x
 cheaper than Sonnet here despite being far cheaper per token, and why routing to
 any of them is worth doing deliberately rather than by default.
+
+
+## HUD visibility contract
+
+The normal tool router and `features/hud_panel_visibility.py` share the transcript parser.
+Use `core.visual_engine.apply`, not an invented `dispatch` protocol. Tool input is
+`command`, a JSON string encoding one of:
+
+- `{"action":"panels"}`: current supported semantic ID catalog.
+- `{"action":"panel","panel_id":"hud.diagnostics","visible":false}`: close diagnostics.
+- `{"action":"panel","panel_id":"hud.live_activity","visible":false}`: hide live activity.
+- `{"action":"panel","panel_id":"hud.context","visible":true}`: restore context.
+
+`remove` is for custom scene widget `id`, never built-in `panel_id` or `widget`.
+Widget/sidebar state persists; drawer commands send an event to connected HUDs.
+An emitted event is not a rendered-browser acknowledgment. Test the transcript,
+real dispatcher, engine and rendering event contract, including negative requests.

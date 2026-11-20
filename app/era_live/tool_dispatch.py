@@ -22,6 +22,7 @@ from actions.computer_settings import computer_settings
 from actions.design_studio import design_studio
 from actions.desktop import desktop_control
 from actions.dev_agent import dev_agent
+from actions.era_workbench import era_workbench
 from actions.file_controller import file_controller
 from actions.file_processor import file_processor
 from actions.flight_finder import flight_finder
@@ -70,7 +71,7 @@ from app.wake import (  # noqa: F401  (re-export: preserves public + internal na
     WakeWordConfig,
     init_vosk,
 )
-from core.cancel_registry import CURRENT_TOKEN, REGISTRY
+from core.cancel_registry import CURRENT_TOKEN, REGISTRY, CancelledTask, offload, run_with_grace
 from core.confirmation import ConfirmationManager
 from core.confirmation_preview import (
     ANNOUNCED_KEY,
@@ -114,10 +115,12 @@ from core.tts_fish import is_configured as is_fish_configured
 from core.verification import verify_tool_result
 from core.voice_mode import (
     MODE_FISH_AUDIO,
+    MODE_GEMINI_AUDIO,
     MODE_KOKORO_AUDIO,
     MODE_LABELS,
     VOICE_CFG,
     gemini_voice_name,
+    input_language_codes,
 )
 from core.window_awareness import format_context as format_window_context
 from memory.memory_audit import audit_event
@@ -158,6 +161,40 @@ _CANCEL_DISCARD = (
     "If they gave a replacement instruction, that instruction is what matters now."
 )
 
+# How long a slow tool may hold the receive loop before it is detached and the
+# model answered. Keyed just above each tool's MEASURED median
+# (logs/task_trace-*.jsonl, 16 days, 2500+ calls), because these are bimodal:
+# spotify_control's median is 976 ms but its p90 is 10.8 s. A name-keyed
+# "always background" would ack over ~2000 pause/next/volume calls that already
+# return in under a second; a grace discriminates by what actually happened.
+_BG_GRACE_S: dict[str, float] = {
+    "era_workbench": 1.5,  # Office/REA/network work must not block voice reception.
+    "open_app": 1.5,  # Window read-back/catalog discovery must not stall voice reception.
+    "system_performance": 1.5,  # PC Manager UIA can stall for minutes.
+    "media_coordinator": 1.5,  # Browser/CDP recovery can exceed 45 seconds.
+    "self_improve": 0.5,  # median 28ms  / p90 4.6s  / max 68s
+    "code_helper": 1.0,  # median 3ms   / p90 61.6s / max 76s  (worst ratio)
+    "file_controller": 1.2,  # median 24ms  / p90 588ms / max 68s
+    "spotify_control": 1.5,  # median 976ms / p90 10.8s / max 57s
+    "netflix_control": 1.5,  # median 831ms / p90 13.7s / max 47s
+    "gmail_control": 1.5,  # median 920ms / p90 7.6s  / max 61s
+    "web_search": 2.0,  # median 10.1s -- essentially always detaches
+    "file_processor": 2.0,  # median 5.8s  / p90 22.0s
+    "screen_process": 2.5,  # median 6.3s  / p90 30.7s
+}
+
+_WEB_API_GRACE_S = 8.0
+
+# Model-facing text for a tool that outlived its grace. It must not let the
+# model invent an outcome: the real one is spoken later by _deliver_tool_outcome
+# through the reconnect-surviving path, exactly as the crew lane does.
+_BG_ACK_TEMPLATE = (
+    "Started: {label}. It is STILL RUNNING and has not finished. Tell the user "
+    "briefly that you are on it. Do NOT claim a result, do NOT guess what it "
+    "found, and do NOT call this tool again for this request -- the real "
+    "outcome is reported to the user automatically the moment it completes."
+)
+
 _PROTOCOL_ONE_COMMAND = re.compile(r"\blaunch\s+protocol\s+(?:one|1)\b", re.IGNORECASE)
 # After a cycle stages fixes, the user's own "yes"/"confirm" applies them all —
 # accepted within this window of hearing the summary (see _SCHED_APPROVE_COMMAND).
@@ -194,6 +231,89 @@ _VOICE_LOCK_ON_COMMAND = re.compile(
     re.IGNORECASE,
 )
 _VOICE_LOCK_WINDOW_S = 60.0
+
+# Session-state tools the MODEL can call on its own initiative. Gemini Live hears
+# ambient audio (a recitation, a film) and has shut Era down, flipped standby and
+# muted the mic with no user input at all (task_trace user_text "" or a TV phrase).
+# Like voice_lock, the model's tool choice is never enough: the user must have SAID
+# or TYPED something that plausibly asks for it. Deliberately generous (EN/FR/AR) —
+# it exists to refuse "nothing was said" and "something unrelated was said", not
+# to second-guess phrasing. Typed, HUD and Telegram inputs pass through the same
+# utterance record, so they ground it too.
+_STATE_TOOL_ORDERS: dict[str, re.Pattern] = {
+    "shutdown": re.compile(
+        r"shut\s*(?:down|off|yourself)|shutdown|power\s*(?:off|down)|turn\s+(?:yourself\s+)?off"
+        r"|\b(?:close|quit|exit|terminate|goodbye|good\s*bye|bye|good\s*night|see\s+you|reboot"
+        r"|restart|re-?launch|that'?s\s+(?:all|it)|i'?m\s+done|ciao"
+        r"|ferme\w*|[eé]teins\w*|arr[eê]te\w*|quitte\w*|au\s+revoir|red[eé]marre\w*)\b"
+        r"|أغلق|اغلق|اطفئ|أطفئ|وداع|مع السلامة|إلى اللقاء|الى اللقاء|اقفل|أقفل",
+        re.IGNORECASE,
+    ),
+    # PF-045: only the owner's standby words ("standby", "take a break") and the
+    # silence orders this tool turns into inactivity. The old ~40 loose words
+    # ("thank you", "done", "merci") grounded a standby call on "mes amis" (live
+    # 2026-11-18 23:28). The enter_standby branch then checks the WHOLE utterance.
+    "standby": re.compile(
+        r"stand\s*-?\s*by|\btake\s+a\s+break\b|\b(?:silent|quiet)\b|silencieu",
+        re.IGNORECASE,
+    ),
+    "microphone": re.compile(
+        r"\b(?:mic|microphone|mute|unmute|listen\w*|hear\w*|deaf|quiet|silent|activate"
+        r"|deactivate|turn\s+(?:on|off)|switch\s+(?:on|off)|micro|[eé]cout\w*|coupe\w*|active\w*"
+        r"|r[eé]active\w*)\b|ميكروفون|ميك|اسمع|استمع|اسكت|فعل|فعّل",
+        re.IGNORECASE,
+    ),
+}
+_STATE_TOOL_KIND = {
+    "shutdown_era": "shutdown",
+    "close_era": "shutdown",
+    "exit_era": "shutdown",
+    "enter_standby": "standby",
+    "set_microphone": "microphone",
+}
+_STATE_TOOL_WINDOW_S = 60.0
+
+# PF-028: starting music needs the owner's words too. Live 2026-11-15 23:06:
+# "Open Spotify" made the model add spotify_control play, music the owner never
+# asked for (opening Spotify must not start playback, decided 2026-09-25). The
+# app's name alone ("Open Spotify") is never an order to play.
+_MEDIA_START_ORDER = re.compile(
+    r"\b(?:play\w*|music|song|songs|track|tracks|resume|unpause|continue|put\s+on|listen\w*"
+    r"|playlist|album|mix|beats?|tune|tunes|radio|jou\w*|mets|musique|chanson\w*|reprend\w*"
+    r"|[eé]cout\w*|lance\s+(?:la|une|de\s+la)\s+musique)\b"
+    r"|شغل|شغّل|موسيقى|موسيقا|اغنية|أغنية|اغاني|أغاني",
+    re.IGNORECASE,
+)
+_MEDIA_START_ACTIONS = frozenset({"play", "resume", "spotify_play", "spotify_resume"})
+
+
+def _ungrounded_media_start(era, tool_name: str, args: dict | None) -> str | None:
+    """A refusal when the model starts playback nobody asked for, else None."""
+    args = args or {}
+    action = str(args.get("action") or "").strip().lower()
+    if action not in _MEDIA_START_ACTIONS:
+        return None
+    if tool_name == "media_coordinator":
+        target = str(args.get("target") or args.get("app") or "").strip().lower()
+        if target not in {"", "spotify", "music"}:
+            return None
+    elif tool_name != "spotify_control":
+        return None
+    utterances = _user_utterances(era, _STATE_TOOL_WINDOW_S)
+    if any(_MEDIA_START_ORDER.search(t or "") for _, t in utterances):
+        return None
+    heard = _current_user_text(era)
+    log_event(
+        main_logger, "tool.grounding.refused", "WARNING", tool=tool_name, heard=(heard or "")[:80]
+    )
+    print(
+        f"[era] [GROUNDING] refused {tool_name} {action}: nobody asked for music (heard={heard!r})"
+    )
+    return (
+        "Not done: the user did not ask for music, so playback was NOT started. "
+        "Do not start it. Answer only what the user actually asked."
+    )
+
 
 # Granting a per-category HIGH-risk waiver (manage_preference) needs the user's own
 # words: a "don't ask / without confirmation" phrase AND the category named.
@@ -332,6 +452,74 @@ def _user_utterances(era, window_s: float, since_ts: float = 0.0) -> list[tuple[
     return [(ts, t) for ts, t in texts if now - ts <= window_s and ts >= since_ts]
 
 
+def _ungrounded_state_change(era, tool_name: str, relaunch: bool = False) -> str | None:
+    """A refusal string when the model called a session-state tool (shutdown,
+    standby, mic) without the user having asked for it, else None.
+
+    "Asked" = an utterance in the last minute that matches the tool's order
+    pattern. An empty record (the model acted on ambient audio or an internal
+    turn) and an unrelated one (a recitation on the TV) both refuse. Phrased
+    without "error"/"failed" so it is not logged as a tool failure. Module-level
+    like _current_user_text: tests bind the gates onto SimpleNamespace stubs."""
+    kind = _STATE_TOOL_KIND.get(tool_name)
+    if kind is None:
+        return None
+    pattern = _STATE_TOOL_ORDERS[kind]
+    utterances = _user_utterances(era, _STATE_TOOL_WINDOW_S)
+    if any(pattern.search(t or "") for _, t in utterances):
+        return None
+    if kind == "shutdown":
+        from core.era_relaunch import is_reboot_command
+
+        is_order = getattr(era, "_is_reboot_order", is_reboot_command)
+        if any(is_order(t or "") for _, t in utterances):
+            return None
+    heard = _current_user_text(era)
+    log_event(
+        main_logger, "tool.grounding.refused", "WARNING", tool=tool_name, heard=(heard or "")[:80]
+    )
+    print(f"[era] [GROUNDING] refused {tool_name}: no matching spoken order (heard={heard!r})")
+    if relaunch and heard:
+        # She often says "Restarting" before this returns, so silence here reads as a
+        # restart that never comes. The user spoke: tell them it did not happen.
+        return (
+            f"Not done: Era did NOT restart. The words came through as {heard[:60]!r}, not "
+            "'reboot Era One'. If you said you were restarting, correct that now in one short "
+            "sentence: say you did not restart, and ask the user to repeat it or use the "
+            "restart button on the HUD."
+        )
+    return (
+        f"Not done: nobody asked for {tool_name.replace('_', ' ')} just now. "
+        "That call came from background audio or an internal turn. "
+        "Say nothing and carry on."
+    )
+
+
+def _not_a_standby_order(era) -> str | None:
+    """PF-045: a refusal unless the owner's WHOLE utterance is "standby" or "take a
+    break" — the one in progress, or the last one said within 15 s (the transcript
+    can land just before the call). Live 2026-11-18 23:28 the model slept Era on
+    "mes amis"; the loose grounding words let it through."""
+    from core.attention import is_standby_order
+
+    heard = [_current_user_text(era)] + [t for _, t in _user_utterances(era, 15.0)[-1:]]
+    if any(is_standby_order(t) for t in heard):
+        return None
+    log_event(
+        main_logger,
+        "tool.grounding.refused",
+        "WARNING",
+        tool="enter_standby",
+        heard=(heard[0] or "")[:80],
+        reason="not a standby order",
+    )
+    print(f"[era] [GROUNDING] refused enter_standby: not a standby order ({heard[0]!r})")
+    return (
+        "Not done: standby happens only when the user says 'standby' or 'take a break'. "
+        "Do not mention standby; carry on the conversation."
+    )
+
+
 def _sched_clean(text: str) -> str:
     return _SCHED_CORRECTION_PREFACE.sub(" ", (text or "").lower()).strip()
 
@@ -341,6 +529,87 @@ def _sched_refused(low: str) -> bool:
     ask again" / "no need to ask" MEAN yes."""
     return bool(_SCHED_REFUSAL.search(_SCHED_WAIVE_COMMAND.sub(" ", low))) or bool(
         _SCHED_QUESTION.search(low)
+    )
+
+
+_CM_STATUS_QUESTION = re.compile(
+    r"^\W*(?:what(?:'s| is)\s+)?(?:the\s+)?(?:(?:cm|community[- ]manag\w*)\s+)?"
+    r"(?:job\s+|jobs\s+|task\s+|tasks\s+)?(?:status|progress|running|what'?s\s+running)"
+    r"(?:\s+of\s+(?:the\s+)?(?:cm|community[- ]manag\w*)?\s*(?:jobs?|tasks?)?)?\W*$",
+    re.IGNORECASE,
+)
+
+_BRIDGE_QUESTION = re.compile(r"\b(?:spotify\s+)?bridge\b|spicetify", re.IGNORECASE)
+
+
+def _note_bridge_is_off(era, tool_name: str, result):
+    """Append the bridge's real state to a Spotify reading when the owner asked about
+    the bridge. Live 2026-11-17 "is the Spotify bridge connected?" -> spotify_control
+    status -> "Yes, sir, it is", three times, though the bridge is switched off: a
+    context note lost to the fresh tool result, so the fact rides in the result."""
+    try:
+        if not tool_name.startswith("spotify"):
+            return result
+        asked = getattr(era, "_inflight_user_text", "") or getattr(era, "_last_user_text", "")
+        if not _BRIDGE_QUESTION.search(asked or ""):
+            return result
+        from app.tool_declarations import _withheld
+
+        if "spotify_bridge" not in _withheld:
+            return result
+        note = (
+            " NOTE: the Spotify bridge (Spicetify era-bridge) is SWITCHED OFF and not"
+            " connected; this reading came from the Spotify desktop app."
+        )
+        if isinstance(result, ToolResult):
+            from dataclasses import replace
+
+            return replace(result, message=(result.message or "") + note)
+        return f"{result}{note}"
+    except Exception:
+        return result
+
+
+_MEDIA_DEDUPE_S = 10.0
+
+
+def _media_start_key(tool: str, params: dict) -> tuple[str, str] | None:
+    """(platform, normalized query) for a call that STARTS named media, else None."""
+    action = str(params.get("action") or "").lower()
+    query = params.get("query") or params.get("value") or ""
+    if tool == "spotify_control" and action in ("search", "play_uri"):
+        platform = "Spotify"
+    elif tool == "youtube_video" and action in ("play", "search"):
+        platform = "YouTube"
+    elif tool == "netflix_control" and action == "search" and params.get("_auto_play"):
+        platform = "Netflix"
+    else:
+        return None
+    q = re.sub(r"^(?:some|a\s+bit\s+of|any)\s+", "", str(query).strip().lower())
+    q = re.sub(r"\s+", " ", q)
+    return (platform, q) if q else None
+
+
+def _forget_session_on_exit(era) -> None:
+    """Drop the saved Gemini resumption handle on a plain shutdown (never raises)."""
+    try:
+        manager = getattr(era, "session_manager", None)
+        if manager is not None:
+            manager.clear_token()
+            manager.save_to_disk()
+            print("[era] [SHUTDOWN] session handle discarded (plain shutdown).")
+    except Exception as e:
+        print(f"[era] [SHUTDOWN] could not discard the session handle: {e}")
+
+
+def _typed_cancel_reply(low: str) -> bool:
+    """A typed reply that cancels a pending confirmation: a refusal WORD, never a bare
+    question. Unlike _sched_refused, a question is NOT a cancel here — live 2026-11-17
+    "what scheduled tasks do I have running?" was swallowed as a cancel and never
+    answered. "Yes"-type approvals are checked by the caller first."""
+    low = (low or "").lower()
+    return bool(_SCHED_REFUSAL.search(_SCHED_WAIVE_COMMAND.sub(" ", low))) and not bool(
+        _SCHED_APPROVE_COMMAND.search(low)
     )
 
 
@@ -415,6 +684,10 @@ def _user_approved_pending(era, pending) -> bool:
     and that older "yes" predates the arming.)"""
     if pending is None:
         return False
+    from core.approval_execution import remote_approves
+
+    if remote_approves(pending):
+        return True
     recent = list(getattr(era, "_recent_user_texts", None) or [])
     said_at, text = recent[-1] if recent else (0.0, "")
     # Every complete input clears the in-flight buffer, so when one is present
@@ -471,6 +744,97 @@ def _scheduled_by_voice(tool: str) -> bool:
     if VOICE_GATED_ACTIONS.get(tool) != norm_action(step.get("args")):
         return False  # this step is not the gated action the grant was given for
     return voice_authorized_for(task, tool)
+
+
+def finalize_tool_result(
+    era,
+    tool_name: str,
+    parameters: dict,
+    raw,
+    *,
+    risk_level: str = "LOW",
+    requires_confirmation: bool = False,
+    duration_ms: int | None = None,
+) -> ToolResult:
+    """Convert, verify, tag and log ONE executed tool call.
+
+    Module-level, not a mixin method, because callers and tests bind the
+    dispatcher's individual steps onto duck-typed objects: a method call would
+    make "has the finalizer" a requirement of every test double. `era` is only
+    used for the optional caught-exception hook.
+
+    Until 2026-11-11 the `confirm_pending_confirmation` branch returned
+    `_execute_tool_raw` directly, so the action that needed approval most — a
+    delete, a send, an overwrite — was the one action whose postcondition was
+    never checked. Both paths now end here.
+    """
+    if isinstance(raw, str) and ("Unknown tool:" in raw or "Unknown action:" in raw):
+        return ToolResult.fail(
+            message=raw,
+            error_type="UnknownTool",
+            tool_name=tool_name,
+            action_name=parameters.get("action"),
+            duration_ms=duration_ms,
+        )
+
+    result = ToolResult.from_any(
+        raw,
+        tool_name=tool_name,
+        action_name=parameters.get("action"),
+        duration_ms=duration_ms,
+    )
+
+    result.risk_level = risk_level
+    result.requires_confirmation = requires_confirmation
+
+    result = verify_tool_result(result, tool=tool_name, parameters=parameters)
+    # Evidence-gated completion (core/completion_contract.py): what the runtime
+    # can PROVE rides with the result, so neither the model nor the speech layer
+    # has to infer success from the absence of an exception.
+    try:
+        from core.completion_contract import annotate
+
+        result = annotate(result, tool_name, parameters.get("action"))
+    except Exception as _completion_err:  # never change an outcome here
+        print(f"[era] [COMPLETION] annotation skipped for {tool_name}: {_completion_err}")
+
+    recovery = result.data.get("recovery") if isinstance(result.data, dict) else None
+    if isinstance(recovery, dict) and recovery.get("strategy") == "same_read_once":
+        recovery["verification"] = result.verification_status
+        if not result.success and recovery.get("outcome") == "returned_success":
+            recovery["outcome"] = "verification_failed"
+        log_event(
+            main_logger,
+            "tool.recovery.verified",
+            "INFO",
+            tool=tool_name,
+            action=parameters.get("action"),
+            success=result.success,
+            recovery=recovery,
+        )
+
+    if not result.success:
+        print(
+            f"[era] [ERROR] {tool_name} failed: {result.error_type} - {result.short_message(200)}"
+        )
+        log_event(
+            main_logger,
+            "tool.execution.failed",
+            "ERROR",
+            tool=tool_name,
+            action=parameters.get("action"),
+            error_type=result.error_type,
+            # Without the message, self_diagnosis could only guess at causes
+            # ("2x tool=file_controller") — and a cancelled confirmation looks
+            # identical to a crash. The message is what tells them apart.
+            error=result.short_message(200),
+            duration_ms=result.duration_ms,
+        )
+        log_caught = getattr(era, "_log_caught_exception", None)
+        if callable(log_caught):
+            log_caught(tool_name, parameters, result)
+
+    return result
 
 
 class ToolDispatchMixin:
@@ -620,10 +984,27 @@ class ToolDispatchMixin:
 
         memory = load_memory()
         mem_str = format_memory_for_prompt_ranked(memory, top_k=15)
+        try:
+            from memory.memory_context import prompt_context
+
+            mem_str += prompt_context()
+        except Exception as exc:
+            log_event(
+                main_logger,
+                "memory.context.retrieve_failed",
+                "WARNING",
+                error_type=type(exc).__name__,
+            )
         sys_prompt = _load_system_prompt()
 
         now = datetime.now()
-        time_str = now.strftime("%A, %B %d, %Y â€” %I:%M %p")
+        local_now = now.astimezone()
+        _off = local_now.strftime("%z")
+        time_str = (
+            local_now.strftime("%A, %B %d, %Y - %I:%M %p")
+            + f" LOCAL time (UTC{_off[:3]}:{_off[3:]}) at session start; the owner lives in this"
+            " time zone, so never answer in UTC. For the time NOW call computer_control clock."
+        )
 
         # â”€â”€ UPGRADED REAL-TIME OS VISION LAYER (ANTI-POLLUTION FILTER) â”€â”€â”€â”€â”€â”€â”€
         foreground_window = "Desktop"
@@ -745,8 +1126,48 @@ class ToolDispatchMixin:
             pass
         # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+        # A gated-off tool is invisible to the model, which then invents its state:
+        # live 2026-11-17 "is the Spotify bridge connected?" -> "Yes, sir, it is",
+        # while the bridge was switched off. Name what is off so she can say so.
+        try:
+            from app.tool_declarations import _withheld as _off_tools
+        except Exception:
+            _off_tools = set()
+        _off_labels = {
+            "spotify_bridge": (
+                'The Spotify bridge (the Spicetify "era-bridge") is SWITCHED OFF and not '
+                'connected. If asked "is the Spotify bridge connected?", answer no, it is off; '
+                "Spotify itself still works through the desktop app."
+            ),
+        }
+        off_note = (
+            "[SWITCHED-OFF FEATURES]\n"
+            + "".join(
+                "- "
+                + _off_labels.get(name, f"{name} is switched off; if asked, say it is off.")
+                + "\n"
+                for name in sorted(_off_tools)
+            )
+            + "\n"
+            if _off_tools
+            else ""
+        )
+
+        # Live 2026-11-17 "what's your wake word?" was answered "Era" (no tool) while
+        # the configured word was "shazam". State it.
+        try:
+            from app.wake import WAKE_CFG as _wake
+
+            wake_note = (
+                f'[WAKE WORD]\nYour standby wake word is "{_wake.word}"'
+                + (f" (aliases: {', '.join(_wake.aliases)})" if _wake.aliases else "")
+                + '. "Era" is your name; it opens the listening window but does not wake standby.\n\n'
+            )
+        except Exception:
+            wake_note = ""
+
         os_vision_ctx = (
-            f"[CURRENT DATE & TIME]\n"
+            off_note + wake_note + f"[CURRENT DATE & TIME]\n"
             f"Right now it is: {time_str}\n\n"
             f"[REAL-TIME SYSTEM EYE (OS AWARENESS)]\n"
             f'User Foreground Focus: "{foreground_window}"\n'
@@ -755,26 +1176,24 @@ class ToolDispatchMixin:
             f"[LIVE MEDIA TELEMETRY STATES]\n"
             f"- Spotify Application Open/Running: {spotify_active}\n"
             f"- YouTube Browser Content Present: {youtube_active}\n"
-            f"- Note: Spotify window title reflects current playback state â€” when a track is playing, the window shows 'Song - Artist â€” Spotify'. When paused/idle, it shows just 'Spotify'.\n\n"
-            f"CRITICAL CONTEXTUAL ROUTING RULES:\n"
-            f"1. Spotify is your absolute default media application. When the user issues general playback or music controls ('play', 'pause', 'poz', 'resume', 'stop', 'music') WITHOUT naming a specific platform, you MUST always choose Spotify (computer_settings) and trigger 'spotify_play' or 'spotify_pause'.\n"
-            f"2. NEVER auto-route generic commands to YouTube and NEVER ask 'Spotify or YouTube, sir?' regardless of the window telemetry states. Spotify is the strict baseline fallback.\n"
-            f"3. ONLY route commands to youtube_video if the user explicitly specifies 'youtube', 'the video', 'clip', or 'watch'.\n"
-            f"4. For track navigation commands ('next', 'skip', 'previous', 'back', 'next song', 'next track'):\n"
-            f"   - You MUST call computer_settings with action='spotify_next' or action='spotify_previous'.\n"
-            f"5. If the user says 'close this app' or 'minimize this', extract \"{foreground_window}\" as the target parameter for window_control.\n"
-            f"6. NEVER use screen_process (vision) to verify media state. Vision costs 12+ seconds and is unnecessary:\n"
+            f"- Window presence/title does not verify playback; use fresh OS observations or a live status tool.\n\n"
+            f"CONTEXTUAL RULES (media routing itself is in the main prompt: generic music controls go to spotify_control, never YouTube/Netflix, and never ask 'Spotify or YouTube?'):\n"
+            f"1. If the user says 'close this app' or 'minimize this', extract \"{foreground_window}\" as the target parameter for window_control.\n"
+            f"2. NEVER use screen_process (vision) to verify media state. Vision costs 12+ seconds and is unnecessary:\n"
             f"   - To check if Spotify is playing, a playlist/song actually started, or the window state: call spotify_control with action='status'. It reads the real Windows audio session instantly.\n"
-            f"   - spotify_control already verifies playback internally before it reports success, so trust its returned message. If it says playback did not start, report that honestly instead of screenshotting.\n"
-            f"7. Window operations on Spotify ('minimize spotify', 'maximize spotify', 'focus spotify') target the DESKTOP APP window. Use spotify_control action='minimize' for minimize, or window_control with title='Spotify' for other window actions. NEVER open the Spotify web player (open.spotify.com) for these commands — the desktop app is already running.\n"
-            f"8. Trust window_control's returned message: it verifies the real window state after acting. Do not follow a successful window action with another tool call to 'check' it.\n\n"
+            f"   - Fresh post-command live_app_state observations outrank command receipts and this older context. Unknown telemetry is unverified; never infer playback from a window title.\n"
+            f"3. Window operations on Spotify ('minimize spotify', 'maximize spotify', 'focus spotify') target the DESKTOP APP window. Use spotify_control action='minimize' for minimize, or window_control with title='Spotify' for other window actions. NEVER open the Spotify web player (open.spotify.com) for these commands — the desktop app is already running.\n"
+            f"4. Trust window_control's returned message: it verifies the real window state after acting. Do not follow a successful window action with another tool call to 'check' it.\n\n"
         )
         try:
+            from core.system_awareness import format_media_observations
+
             awareness_ctx = (
                 "\n[PHASE-1 AWARENESS LAYER]\n"
                 + format_window_context()
                 + "\n\nRunning process snapshot:\n"
                 + format_running_apps(limit=35)
+                + format_media_observations()
                 + "\n"
             )
             os_vision_ctx += awareness_ctx
@@ -798,8 +1217,14 @@ class ToolDispatchMixin:
             "- stale audio from reconnect\n"
             "- song lyrics, singing, music, or TV / video / film dialogue playing nearby\n"
             "- speech clearly meant for someone else (a phone call, another person)\n"
-            "If an input could be media playback or not meant for you, it is TIER 1: stay\n"
-            "silent. Never answer it with 'Sorry, I did not catch that' — that phrase is\n"
+            "Treat intelligible speech as media only when there is evidence it is playback\n"
+            "or clearly meant for someone else. Low volume, headset distortion, a short\n"
+            "command, or a pause alone is not evidence of background media. A request\n"
+            "addressed to Era deserves a response or clarification, even when quiet.\n"
+            "While awake, do not require the user to say your name on every request\n"
+            "or after a period of inactivity. Ordinary intelligible requests deserve\n"
+            "an answer; ask briefly if unclear instead of silently ignoring them.\n"
+            "Never answer actual media with 'Sorry, I did not catch that' — that phrase is\n"
             "only for the user's own unclear request (TIER 3).\n\n"
             "TIER 2 - REAL WORD, VAGUE INTENT (SPECIFIC CLARIFICATION)\n"
             "If the user says a real word with ambiguous intent, ask a specific question.\n"
@@ -848,7 +1273,8 @@ class ToolDispatchMixin:
             "On resumed sessions, do not say full greetings like:\n"
             '"era online", "At your service", "What is the objective?"\n'
             "Only acknowledge reconnect if instructed by session state, for example:\n"
-            '"Back online, sir."\n'
+            '"Era One online." Only after reconnection, never before a restart.\n'
+            "For a request to reboot or restart yourself, call shutdown_era with relaunch=true immediately. Never merely promise to restart.\n"
         )
 
         parts = [os_vision_ctx]
@@ -874,6 +1300,33 @@ class ToolDispatchMixin:
                 parts.append(learning_str)
         except Exception as _learn_err:
             print(f"[era] [LEARN] prompt injection skipped: {_learn_err}")
+        try:
+            from core.task_lessons import format_lessons_for_prompt
+
+            lessons_str = format_lessons_for_prompt()
+            if lessons_str:
+                parts.append(lessons_str)
+        except Exception as _lessons_err:
+            print(f"[era] [LESSONS] prompt injection skipped: {_lessons_err}")
+
+        # ── What her last tool calls REALLY did ──
+        # The session is rebuilt every couple of minutes; without this she
+        # restarts blind to whether "open Instagram" ever worked, and answers
+        # "did you do it?" from a hopeful reading of the last reply.
+        try:
+            from core.task_trace import recent_tool_calls, render_recent_calls
+
+            _recent_calls = recent_tool_calls(5, max_age_s=900)
+            if _recent_calls:
+                parts.append(
+                    "[RECENT TOOL OUTCOMES - the runtime's record, newest last]\n"
+                    "Only CONFIRMED proves an effect. FAILED / NOT CONFIRMED means it did not "
+                    "demonstrably happen: say so, never claim it. 'Era actually ran' means the "
+                    "router swapped the tool. For anything older or unclear, call "
+                    "protocol_one(action='recent').\n" + render_recent_calls(_recent_calls)
+                )
+        except Exception as _recent_err:  # noqa: BLE001
+            print(f"[era] [OUTCOMES] context skipped: {_recent_err}")
 
         parts.append(ANTI_HALLUCINATION_INSTR)
 
@@ -953,7 +1406,13 @@ class ToolDispatchMixin:
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
-            input_audio_transcription={},
+            # Language hints (core/voice_mode.input_language_codes): without
+            # them Gemini transcribed English as Japanese on weak Bluetooth audio.
+            input_audio_transcription=(
+                types.AudioTranscriptionConfig(language_codes=input_language_codes())
+                if input_language_codes()
+                else {}
+            ),
             system_instruction="\n".join(parts),
             tools=[{"function_declarations": TOOL_DECLARATIONS}],
             session_resumption=resumption_config,
@@ -1002,17 +1461,46 @@ class ToolDispatchMixin:
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name or "unknown"
+        from app.codemode_runtime import owns_reply
+
+        if owns_reply() and name != "code_mode":
+            return build_function_response(
+                fc,
+                ToolResult.fail(
+                    "CodeMode owns this conversation; the parallel model tool did not run.",
+                    error_type="ReplyOwned",
+                ),
+            )
         print(f"[era] [TOOL] {name}")
         log_event(main_logger, "tool.call.received", "INFO", tool=name, params=fc_args_to_dict(fc))
         # HUD Live Activity: the real call, as it enters and leaves this gate.
         hud_args = fc_args_to_dict(fc)
-        hud_call = hud.tool_started(getattr(fc, "id", None), name, hud_args)
+        import uuid
+
+        claim_id = f"live-{uuid.uuid4().hex}"
+        token, existing = REGISTRY.claim_unique(claim_id, name, hud_args)
+        if existing is not None:
+            log_event(main_logger, "tool.duplicate.in_flight", "INFO", tool=name, cid=existing.cid)
+            return build_function_response(
+                fc,
+                ToolResult.ok(
+                    message=f"This {name} task is already running in Live Activity. No duplicate was started.",
+                    data={"alreadyRunning": True, "liveTaskId": existing.cid},
+                ),
+                types.FunctionResponse,
+            )
+        try:
+            hud_call = hud.tool_started(claim_id, name, hud_args)
+        except BaseException:
+            REGISTRY.finish(claim_id)
+            raise
         # One cancel token per task, keyed by the HUD row's id -- the only task
         # id that already reaches the browser, so the X on that row can address
         # it. The ContextVar carries it down the coroutine chain; crossing into
         # a worker thread needs cancel_registry.offload(), because
         # run_in_executor does not copy contextvars.
-        token = REGISTRY.register(hud_call, name)
+        if hud_call != claim_id:
+            REGISTRY.rekey_claim(token, hud_call)
         token_reset = CURRENT_TOKEN.set(token)
         self.ui.set_state("THINKING")
         self.session_manager.transition_to(
@@ -1047,19 +1535,61 @@ class ToolDispatchMixin:
         # Counted rather than a bool — tool batches can overlap.
         self._tools_in_flight = getattr(self, "_tools_in_flight", 0) + 1
         result = None
+        detached = False
         try:
-            result = await self._execute_tool_result(fc)
+            # ── Slow tools: answer within the grace, then detach ────────────
+            # Awaiting a slow tool here keeps `async for ... session.receive()`
+            # suspended, so nothing the owner says is READ BACK until it
+            # returns. That is exactly why a mid-task correction was
+            # impossible: her words reached Gemini, but the reply could not be
+            # processed and the abort check on the partial transcript could not
+            # fire. Detaching the slow ones keeps the socket draining, which is
+            # what lets "no, I meant the next track" land while the wrong
+            # search is still running. Fast calls never reach the deadline, so
+            # nothing about them changes.
+            # getattr: detaching is an enhancement layered on execution, so a
+            # partial Era (the stubs several tests build) must fall back to
+            # running inline rather than fail. None here == "stay inline".
+            _grace_of = getattr(self, "_background_grace", None)
+            grace = _grace_of(name, hud_args) if _grace_of is not None else None
+            if grace is None:
+                result = await self._execute_tool_result(fc)
+            else:
+                finished, result, task = await run_with_grace(self._execute_tool_result(fc), grace)
+                if not finished:
+                    detached = True
+                    # Declared so the log can match a call that has no inline
+                    # outcome: its real result lands later, in the trace.
+                    log_event(
+                        main_logger, "tool.execution.detached", "INFO", tool=name, grace_s=grace
+                    )
+                    REGISTRY.attach_task(hud_call, task)
+                    self._spawn_background_deliver(fc, hud_call, hud_args, task)
         finally:
+            # Released even when detached: this counter only protects the tool
+            # RESPONSE from a GoAway closing the socket under it, and the ack
+            # below is that response. Holding it for a 60 s detached job would
+            # block session renewal for a minute.
             self._tools_in_flight = max(0, getattr(self, "_tools_in_flight", 1) - 1)
             CURRENT_TOKEN.reset(token_reset)
-            REGISTRY.finish(hud_call)
-            if result is None:  # raised or was cancelled: never leave the row "running"
-                hud.tool_finished(
-                    hud_call,
-                    name,
-                    hud_args,
-                    ToolResult(success=False, error="No result (raised or cancelled)"),
-                )
+            if not detached:
+                REGISTRY.finish(hud_call)  # the worker retires a detached one
+                if result is None:  # raised/cancelled: never leave the row "running"
+                    hud.tool_finished(
+                        hud_call,
+                        name,
+                        hud_args,
+                        ToolResult(success=False, error="No result (raised or cancelled)"),
+                    )
+
+        if detached:
+            if not self.ui.muted and not self._standby_active:
+                self.ui.set_state("LISTENING")
+            return build_function_response(
+                fc,
+                ToolResult.ok(message=_BG_ACK_TEMPLATE.format(label=name)),
+                types.FunctionResponse,
+            )
 
         # ── Soft cancel: the owner abandoned this while it ran ──────────────
         # Most tool bodies sit in run_in_executor, a thread Python cannot
@@ -1101,6 +1631,9 @@ class ToolDispatchMixin:
         elif result.success:
             self._note_tool_success(name, fc_args_to_dict(fc))
 
+        # Every result passes here (the Spotify branches return before the generic
+        # refresh), so this is where the bridge's real state is attached.
+        result = _note_bridge_is_off(self, name, result)
         print(f"[era] [OUT] {name} -> {result.short_message(80)}")
         # Task trace (core/task_trace.py, 25/09/2026): the whole procedure of
         # this call on one line -- words, requested vs routed tool, safety,
@@ -1131,8 +1664,23 @@ class ToolDispatchMixin:
         hud.tool_finished(
             hud_call, name, hud_args, result, routed_to=(_routed[0] if _routed else None)
         )
+        self._learn_routed = _routed
         self._trace_routed = self._trace_safety = None
+        # Telemetry that was declared but never fed: tool_ms/tool_count in
+        # `turn.latency` read 0 on every turn because nothing called note_tool.
+        try:
+            from app.era_live.audio import _latency_mark
+
+            _latency_mark(self, "note_tool", result.duration_ms or 0)
+        except Exception:  # noqa: BLE001 - instrumentation never breaks a tool
+            pass
         if result.success:
+            try:
+                from core.completion_contract import completion_tag
+
+                _verdict = (completion_tag(result) or {}).get("verdict")
+            except Exception:  # noqa: BLE001
+                _verdict = None
             log_event(
                 main_logger,
                 "tool.execution.completed",
@@ -1140,6 +1688,11 @@ class ToolDispatchMixin:
                 tool=name,
                 duration_ms=result.duration_ms,
                 verification_status=result.verification_status,
+                verdict=_verdict,
+                # The tool that really ran, when the router swapped it. Without
+                # this the log shows computer_control "completed" for a
+                # netflix_control status.
+                ran=(_routed[0] if _routed and _routed[0] != name else None),
             )
 
         try:
@@ -1150,9 +1703,307 @@ class ToolDispatchMixin:
         if not self.ui.muted and not self._standby_active:
             self.ui.set_state("LISTENING")
 
+        # Every tool: say each thing once, never twice (app/era_live/speak_once.py).
+        # After the HUD and intent memory took the real result — model-facing only.
+        from app.era_live.speak_once import speak_once
+
+        result = speak_once(result, name, fc_args_to_dict(fc), getattr(self, "_live_turn_text", ""))
+        # Through the class: partial test stand-ins borrow this method without the mixin.
+        result = ToolDispatchMixin._attach_learned_fix(self, result, name, fc)
+        result = ToolDispatchMixin._attach_route_notice(self, result, name, fc)
         return build_function_response(fc, result, types.FunctionResponse)
 
+    def _attach_route_notice(self, result, name: str, fc):
+        """Tell the model when the router ran a DIFFERENT tool than it asked for.
+
+        The reply is returned under the REQUESTED name, so a `computer_control
+        press` answered with "Netflix state: unknown" read as a keypress that
+        worked (live 2026-11-15). Model-facing only; it never changes success,
+        the verdict or an error - those stay exactly as the tool left them.
+        """
+        try:
+            from dataclasses import replace
+
+            routed = getattr(self, "_learn_routed", None)
+            if not routed or not routed[0] or routed[0] == name:
+                return result
+            asked = fc_args_to_dict(fc)
+            ran_args = routed[1] if isinstance(routed[1], dict) else {}
+
+            def label(tool, args):
+                action = args.get("action") if isinstance(args, dict) else None
+                return f"{tool}({action})" if action else str(tool)
+
+            note = (
+                f"ROUTING NOTE: you asked for {label(name, asked)} but Era executed "
+                f"{label(routed[0], ran_args)} instead. The result below belongs to "
+                f"{routed[0]}; it does not prove the requested action happened."
+            )
+            data = dict(result.data) if isinstance(result.data, dict) else {"result": result.data}
+            data["routed"] = {"asked": label(name, asked), "ran": label(routed[0], ran_args)}
+            log_event(
+                main_logger,
+                "tool.routed",
+                "INFO",
+                asked=data["routed"]["asked"],
+                ran=data["routed"]["ran"],
+                success=bool(result.success),
+            )
+            return replace(
+                result, message=(note + chr(10) + (result.message or "")).strip(), data=data
+            )
+        except Exception:  # noqa: BLE001
+            return result
+
+    def _attach_learned_fix(self, result, name: str, fc):
+        """A failed call that Era has failed (and recovered from) before gets the
+        known fix attached, so she retries the right way in this same turn
+        (core/task_lessons.py). Model-facing only; never raises."""
+        try:
+            from dataclasses import replace
+
+            from core.task_lessons import diagnostic_for_failure, hint_for_failure
+            from core.tool_result import BENIGN_ERROR_TYPES
+
+            if result.success or result.error_type in BENIGN_ERROR_TYPES:
+                return result
+            # The routed tool, not the requested name: lessons are keyed by what ran.
+            routed = getattr(self, "_learn_routed", None) or (name, fc_args_to_dict(fc))
+            hint = hint_for_failure(
+                getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", ""),
+                routed[0] or name,
+                routed[1] if isinstance(routed[1], dict) else fc_args_to_dict(fc),
+                result.error_type,
+            )
+            diagnostic = diagnostic_for_failure(routed[0] or name, routed[1], result.error_type)
+            hint = "\n".join(part for part in (hint, diagnostic) if part)
+            if not hint:
+                return result
+            return replace(
+                result,
+                message=(result.message + chr(10) + hint).strip(),
+                error=((result.error or "") + chr(10) + hint).strip(),
+            )
+        except Exception:  # noqa: BLE001
+            return result
+
     # ── Crew: run off the receive loop, report the real outcome ─────────────
+    def _background_grace(self, name: str, args: dict) -> float | None:
+        """Seconds this tool may hold the receive loop, or None to stay inline.
+
+        New live tools also get a bounded grace; omission cannot stall the ear.
+        None for every case where an ack is the wrong answer -- a later step,
+        another lane or the batch itself needs the REAL result, not a promise.
+        """
+        grace = _BG_GRACE_S.get(name, 1.5)
+        if name == "era_workbench" and (args or {}).get("capability") == "web_api":
+            # A search or call takes 1-3 s and the model needs the answer to reply. Detached,
+            # the answer can only be spoken as one sentence, so it would be lost.
+            grace = _WEB_API_GRACE_S
+        from app.era_live.tool_batch import HALTING_TOOLS
+
+        if name in HALTING_TOOLS:
+            return None  # tool_batch decides what runs next from the real result
+        try:
+            from core.task_scheduler import current_task
+
+            if current_task.get() is not None:
+                return None  # a scheduled chain: a later step consumes this
+        except Exception:  # noqa: BLE001 — no scheduler context means the live path
+            pass
+        try:
+            from app.era_live.autopilot import LOCAL_EXECUTION
+
+            if LOCAL_EXECUTION.get():
+                return None  # autopilot awaits with wait_for(...,30) and reads .message
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._pending_cm_ask_active() or self._cm_handoff_active():
+                return None  # the CM holds must not be skipped by an ack
+        except Exception:  # noqa: BLE001
+            pass
+        if getattr(self, "ui", None) is not None and self.ui.muted:
+            return None  # nobody to deliver the later outcome to
+        if getattr(self, "_standby_active", False):
+            return None
+        return grace
+
+    def _spawn_background_deliver(self, fc, hud_call: str, hud_args: dict, task) -> None:
+        """Finish a detached tool: close its HUD row and report the real outcome.
+
+        The same shape as _start_background_crew_ask, generalised. The HUD row
+        stays *running* until the true result lands, so the panel never shows a
+        premature success, and the trace line keeps the inline path's fields.
+        """
+        name = fc.name or "unknown"
+        user_text = getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", "")
+        # Consume the router's crumbs now, or they leak onto the next call.
+        routed = getattr(self, "_trace_routed", None) or (name, dict(hud_args))
+        safety = getattr(self, "_trace_safety", None)
+        self._trace_routed = self._trace_safety = None
+
+        async def _worker_body() -> None:
+            try:
+                result = await task
+            except asyncio.CancelledError:
+                # Explicit: CancelledError does not inherit from Exception, and
+                # a cancel is an ordinary outcome here, not a crash to log.
+                result = ToolResult.fail(
+                    message="Cancelled.", error="Cancelled.", error_type="Cancelled"
+                )
+            except Exception as exc:  # noqa: BLE001 — a crash is still an outcome
+                result = ToolResult.fail(
+                    message=f"{name} failed: {type(exc).__name__}",
+                    error=f"{name} failed: {type(exc).__name__}",
+                    error_type="BotError",
+                )
+            if not isinstance(result, ToolResult):
+                result = ToolResult.from_any(result)
+
+            if REGISTRY.is_cancelled(hud_call):
+                print(f"[era] [CANCEL] Discarding {name}: cancelled while detached.")
+                self._trace_cancelled_call(name, fc, result)
+                return
+            try:
+                hud.tool_finished(hud_call, name, hud_args, result, routed_to=routed[0])
+            except Exception as e:  # noqa: BLE001 — the HUD never breaks the report
+                print(f"[era] [BG] HUD finish skipped: {e}")
+            try:
+                from core.task_trace import trace
+
+                trace(
+                    "tool",
+                    app="era",
+                    user_text=user_text,
+                    requested=name,
+                    requested_args=hud_args,
+                    tool=routed[0],
+                    args=routed[1],
+                    safety=safety,
+                    ok=bool(result.success),
+                    error_type=result.error_type,
+                    result=result.short_message(300),
+                    duration_ms=result.duration_ms,
+                    verification=result.verification_status,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            if result.success:
+                # The inline path logs this; a detached call never did, so 8 of
+                # 14 calls in the 2026-11-15 session had no outcome event at all.
+                log_event(
+                    main_logger,
+                    "tool.execution.completed",
+                    "INFO",
+                    tool=name,
+                    duration_ms=result.duration_ms,
+                    verification_status=result.verification_status,
+                    ran=(routed[0] if routed and routed[0] != name else None),
+                    detached=True,
+                )
+            if name == "web_search":
+                await self._report_search_outcome(hud_call, hud_args, result)
+            else:
+                self._deliver_tool_outcome(name, result)
+
+        async def _worker() -> None:
+            try:
+                await _worker_body()
+            finally:
+                # Keep a search cancellable while its report awaits the floor.
+                REGISTRY.finish(hud_call)
+
+        self._spawn_background_task(_worker(), f"bg-{name}")
+
+    async def _report_search_outcome(self, cid: str, args: dict, result: ToolResult) -> None:
+        """Serialize search reports; never inject one into the user's turn."""
+        from app.era_live.search_report import search_report_prompt
+        from core.model_reply import send_model_text
+
+        lock = getattr(self, "_search_report_lock", None)
+        if lock is None:
+            lock = self._search_report_lock = asyncio.Lock()
+        deadline = time.monotonic() + 120
+        if getattr(self, "_standby_active", False):
+            wake = getattr(self, "_request_completion_wake", None)
+            if callable(wake):
+                wake()
+        async with lock:
+            while not REGISTRY.is_cancelled(cid) and not getattr(
+                self, "_shutdown_requested", False
+            ):
+                tracker = getattr(self, "_model_reply_ownership", None)
+                busy = (
+                    getattr(self, "_is_speaking", False)
+                    or bool(getattr(self, "_inflight_user_text", ""))
+                    # An empty tool-call turn deliberately retains ownership;
+                    # it is awaiting THIS result, not still talking.
+                    or bool(tracker and tracker.active and not tracker.tools_seen)
+                    or getattr(self, "_tools_in_flight", 0) > 0
+                    or getattr(self, "_standby_active", False)
+                )
+                if getattr(self, "session", None) is not None and not busy:
+                    prompt = search_report_prompt(
+                        str(args.get("query") or ""),
+                        result.message or result.error or "",
+                        bool(result.success),
+                    )
+                    try:
+                        if tracker is not None:
+                            # This new text starts the report turn. A retained
+                            # empty-tool flag must not let the NEXT report overlap.
+                            tracker.tools_seen = False
+                        await send_model_text(self, prompt, internal=True)
+                        log_event(
+                            main_logger,
+                            "search.report.submitted",
+                            "INFO",
+                            cid=cid,
+                            success=result.success,
+                        )
+                        return
+                    except Exception as exc:
+                        log_event(
+                            main_logger,
+                            "search.report.retry",
+                            "WARNING",
+                            cid=cid,
+                            error_type=type(exc).__name__,
+                        )
+                if time.monotonic() >= deadline:
+                    self.ui.write_log(
+                        "SYS: Search report deferred: conversation busy or disconnected. Results remain in the HUD."
+                    )
+                    log_event(
+                        main_logger,
+                        "search.report.deferred",
+                        "WARNING",
+                        cid=cid,
+                        reason="busy_or_disconnected",
+                        success=result.success,
+                    )
+                    return
+                await asyncio.sleep(0.25)
+            log_event(main_logger, "search.report.cancelled", "INFO", cid=cid)
+
+    def _deliver_tool_outcome(self, name: str, result: ToolResult) -> None:
+        """Speak a detached tool's real outcome -- success OR failure.
+
+        Through the reconnect-surviving path, so a result is never swallowed
+        because the session rotated while the work ran, and the HUD and Era can
+        never disagree about what happened.
+        """
+        # One plain sentence, never the tool's internals read aloud
+        # (app/era_live/speak_once.spoken_outcome). The HUD keeps the full text.
+        from app.era_live.speak_once import spoken_outcome
+
+        spoken = spoken_outcome(name, result)
+        try:
+            self._deliver_or_queue_cm_report(spoken, verbatim=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[era] [BG] could not deliver the {name} outcome: {e}")
+
     def _crew_ask_should_background(self, name: str, args: dict) -> bool:
         """True for a crew `ask` that should run as a background task.
 
@@ -1208,9 +2059,8 @@ class ToolDispatchMixin:
         self._trace_routed = self._trace_safety = None
 
         async def _worker() -> None:
-            loop = asyncio.get_running_loop()
             try:
-                result = await loop.run_in_executor(None, lambda: run_tool(dict(hud_args)))
+                result = await offload(lambda: run_tool(dict(hud_args), user_text=user_text))
             except Exception as exc:  # noqa: BLE001 — a crew crash is still an outcome to report
                 result = ToolResult.fail(
                     message=f"The crew failed: {type(exc).__name__}",
@@ -1332,6 +2182,18 @@ class ToolDispatchMixin:
                 )
 
         label = MODE_LABELS[resolved]
+        if (
+            resolved == MODE_GEMINI_AUDIO
+            and getattr(self, "request_gemini_reconnect", lambda: False)()
+        ):
+            VOICE_CFG.set_mode(resolved)
+            self._tts_primary_retry_at = 0.0
+            self._tts_primary_mode = ""
+            self.ui.write_log("SYS: Gemini is not connected; retrying the cloud voice.")
+            return (
+                "Gemini is not connected. A reconnection was requested; do not "
+                "say it is already running or that the switch succeeded."
+            )
         if VOICE_CFG.mode == resolved:
             # Already speaking in this voice, but possibly only via a transient
             # fallback. Cancel any pending auto-restore and, when this isn't yet
@@ -1447,8 +2309,24 @@ class ToolDispatchMixin:
             # input transcription of its own.
             self._recap_pending_user = text
             self._recent_user_texts.append((said_at or time.time(), text))
-            if len(self._recent_user_texts) > 8:
-                del self._recent_user_texts[:-8]
+            if len(self._recent_user_texts) > 10:
+                del self._recent_user_texts[:-10]
+            try:
+                from memory.memory_context import capture
+
+                owner = getattr(self, "_input_envelope", None)
+                capture(
+                    text,
+                    getattr(owner, "source", "voice"),
+                    getattr(owner, "id", "") if getattr(owner, "text", None) == text else "",
+                )
+            except Exception as exc:
+                log_event(
+                    main_logger,
+                    "memory.context.capture_failed",
+                    "WARNING",
+                    error_type=type(exc).__name__,
+                )
 
     def _user_said(self, pattern: re.Pattern, window_s: float = 120) -> bool:
         """True only if the user themself said `pattern` in the last two minutes.
@@ -1494,10 +2372,14 @@ class ToolDispatchMixin:
         from core import era_relaunch
 
         supervised = era_relaunch.is_supervised()
-        era_relaunch.request_relaunch(reason=reason, source=source, **extra)
-        recoverable = supervised or era_relaunch.spawn_supervisor(_os.getpid())
+        flag_written = era_relaunch.request_relaunch(reason=reason, source=source, **extra)
+        recoverable = flag_written and (supervised or era_relaunch.spawn_supervisor(_os.getpid()))
         if not recoverable:
             print("[era] [RELAUNCH] WARNING: no supervisor and could not start one.")
+        elif reason == "user said 'reboot Era One'":
+            # This marker is separate from the supervisor's consumed relaunch
+            # flag and is spent only when the new engine reaches ready.
+            era_relaunch.arm_ready_ack(source, muted=bool(getattr(self.ui, "muted", False)))
         log_event(
             main_logger,
             "era.relaunch.requested",
@@ -1507,9 +2389,9 @@ class ToolDispatchMixin:
             reason=reason,
             source=source,
         )
-        self._shutdown_requested = True
+        self._shutdown_requested = bool(recoverable)
         self._shutdown_awaiting_confirm = False
-        return recoverable
+        return bool(recoverable)
 
     def _exit_after_speaking(self, *, close_hud: bool) -> None:
         """Leave the process on purpose, once Era has finished her sentence.
@@ -1542,9 +2424,21 @@ class ToolDispatchMixin:
             import os
 
             deadline = time.time() + 20
+
+            def _talking() -> bool:
+                # PF-045: the exit line is spoken by the voice the owner SELECTED
+                # (main.speak while _shutdown_requested). _exit_speech_pending covers
+                # the gap before its first audio (synthesis / Gemini latency); once
+                # sound is actually playing (_is_speaking, or _local_speaking for the
+                # local fallback) the wait is the playback itself.
+                if self._is_speaking or getattr(self, "_local_speaking", False):
+                    self._exit_speech_pending = False
+                    return True
+                return bool(getattr(self, "_exit_speech_pending", False))
+
             # She may not have started talking yet.
             for _ in range(30):
-                if self._is_speaking:
+                if _talking():
                     break
                 time.sleep(0.1)
             # Wait for speech to finish AND stay finished. The reload path
@@ -1553,7 +2447,7 @@ class ToolDispatchMixin:
             # — exiting in it truncates the sentence that explains the restart.
             quiet = 0
             while quiet < 15 and time.time() < deadline:
-                quiet = 0 if self._is_speaking else quiet + 1
+                quiet = 0 if _talking() else quiet + 1
                 time.sleep(0.1)
             if close_hud:
                 try:
@@ -1562,7 +2456,18 @@ class ToolDispatchMixin:
                     close_hud_windows()
                 except Exception as e:
                     print(f"[era] [SHUTDOWN] could not close the HUD window: {e}")
-            os._exit(0)
+                # A plain shutdown ends the conversation. Live 2026-11-17 the next
+                # boot resumed the saved Gemini session — whose last turn was the
+                # shutdown — and the model called shutdown_era again 2 s after the
+                # greeting. A relaunch (close_hud=False) keeps it (PF-026).
+                _forget_session_on_exit(self)
+            try:
+                from core import era_relaunch
+
+                # PF-024: no DLL teardown that can hang past the supervisor's grace.
+                era_relaunch.hard_exit(0)
+            finally:
+                os._exit(0)
 
         threading.Thread(target=_leave, daemon=True).start()
 
@@ -1741,13 +2646,17 @@ class ToolDispatchMixin:
         self._shutdown_awaiting_confirm = False
 
         if relaunch:
-            self._arm_relaunch(
+            if not self._arm_relaunch(
                 reason="user said 'reboot Era One'",
                 source=str(args.get("_source", "voice")),
                 interrupted_job=(f"{job.get('brand')}/{job.get('task_type')}" if job else None),
-            )
+            ):
+                self._shutdown_requested = False
+                self.speak("I could not schedule my restart. I am still running.")
+                return "Restart failed; Era is still running."
             self.ui.write_log("SYS: Reboot ordered; relaunching Era One.")
-            self.speak("Rebooting now, sir. Back in a few seconds.")
+            if not getattr(self.ui, "muted", False):
+                self.speak("I'm restarting now, sir.")
         else:
             # Tell the watchdog this exit is INTENTIONAL, BEFORE exiting, so it does
             # not relaunch Era. Same path era_supervisor.py watches: ~/.era/era.stop.
@@ -1767,6 +2676,9 @@ class ToolDispatchMixin:
                     f"[era] [SHUTDOWN] WARNING: could not write era.stop ({e}); watchdog MAY relaunch Era."
                 )
 
+            # Stop persisting fresh resumption handles from the goodbye turn on.
+            self._discard_session_on_exit = True
+            _forget_session_on_exit(self)
             self.ui.write_log("SYS: Shutdown confirmed; era.stop written.")
             self.speak("Goodbye, sir. When you want me back, double-click ERA ONE on your desktop.")
 
@@ -1987,6 +2899,9 @@ class ToolDispatchMixin:
 
         Returns whether it was SPOKEN: only then is a bare "yes" an answer to it
         (core/task_scheduler.mark_announced)."""
+        from app.away_calls import automatic_report
+
+        automatic_report(self, text, "scheduled")
         try:
             from app.notify import _tg_notify
 
@@ -2004,6 +2919,19 @@ class ToolDispatchMixin:
                 self.ui.write_log(f"SYS: {text}")
             except Exception:
                 pass
+            if asleep:
+                from core.task_scheduler import current_report
+
+                report = current_report.get() or {}
+                deliver = getattr(self, "_deliver_or_queue_cm_report", None)
+                if deliver is not None and report.get("status") in {
+                    "ok",
+                    "failed",
+                    "partial",
+                    "blocked",
+                    "missed",
+                }:
+                    deliver(text, verbatim=True)
             return False
         self.speak_dispatched(text)
         return True
@@ -2075,22 +3003,50 @@ class ToolDispatchMixin:
         return True
 
     async def _execute_tool_result(self, fc) -> ToolResult:
+        from core.tool_execution_lane import LANE, ToolLaneBusy, resource_tool
+
+        try:
+            with LANE.enter(resource_tool(fc.name, fc_args_to_dict(fc))):
+                return await ToolDispatchMixin._execute_tool_result_owned(self, fc)
+        except ToolLaneBusy:
+            return ToolResult.fail(
+                "Machine automation is running for a Telegram call. Please try again when it finishes.",
+                error_type="ExecutionBusy",
+                tool_name=fc.name,
+            )
+
+    async def _execute_tool_result_owned(self, fc) -> ToolResult:
         """Runs the call under its own id, so an exception a tool catches can
         only ever be attributed to the call it happened in — never to another
         tool, a background thread, or whatever a web page's text points at."""
         from core import handled_exceptions
+        from core.approval_execution import APPROVED_CONFIRMATION, publish_approved_result
 
         try:
             handled_exceptions.install_context_executor(asyncio.get_running_loop())
         except Exception as e:
             print(f"[era] [SELF-HEAL] context executor not installed: {e}")
         token = handled_exceptions.CURRENT_CALL.set(handled_exceptions.new_call_id())
+        approval_token = APPROVED_CONFIRMATION.set(None)
+        result = None
         try:
             # Through the class, not self: the confirmation tests bind this method
             # onto a stub object that has no _execute_tool_result_inner of its own.
-            return await ToolDispatchMixin._execute_tool_result_inner(self, fc)
+            result = await ToolDispatchMixin._execute_tool_result_inner(self, fc)
+            return result
         finally:
             handled_exceptions.CURRENT_CALL.reset(token)
+            cid = APPROVED_CONFIRMATION.get()
+            APPROVED_CONFIRMATION.reset(approval_token)
+            if cid is not None:
+                if not isinstance(result, ToolResult):
+                    # Cancellation after atomic consumption must resolve a parked
+                    # job too; otherwise it waits forever for the missing outcome.
+                    result = ToolResult.fail(
+                        "Approved action was interrupted; completion could not be verified.",
+                        error_type="ApprovalExecutionInterrupted",
+                    )
+                await asyncio.to_thread(publish_approved_result, cid, result)
 
     async def _execute_tool_result_inner(self, fc) -> ToolResult:
         tool_name = fc.name
@@ -2104,6 +3060,21 @@ class ToolDispatchMixin:
             )
         parameters = fc_args_to_dict(fc)
         original_name, original_params = tool_name, dict(parameters)
+        from core.approval_execution import REMOTE_APPROVAL, remote_approves
+
+        remote = REMOTE_APPROVAL.get()
+        if remote is not None and (
+            tool_name != remote.tool
+            or {k: v for k, v in parameters.items() if k not in CONFIRM_META}
+            != {k: v for k, v in remote.parameters.items() if k not in CONFIRM_META}
+            or parameters.get("confirmation_id") != remote.confirmation_id
+            or parameters.get("confirmed") is not True
+        ):
+            return ToolResult.fail(
+                message="Remote approval does not match this action.",
+                error_type="ConfirmationFailed",
+                tool_name=tool_name,
+            )
 
         try:
             user_text = getattr(self, "_last_user_text", "") or ""
@@ -2111,8 +3082,13 @@ class ToolDispatchMixin:
             # model often calls its tool before the turn completes, and "reboot" /
             # "Era One" can arrive in different chunks.
             inflight = getattr(self, "_inflight_user_text", "") or user_text
-            tool_name, parameters = divert_era_reboot(tool_name, parameters, inflight)
-            tool_name, parameters = route_tool_call(tool_name, parameters, user_text)
+            if remote is None:
+                tool_name, parameters = divert_era_reboot(tool_name, parameters, inflight)
+                tool_name, parameters = route_tool_call(tool_name, parameters, inflight)
+                from core.personal_media import divert_personal_song, resolve_song
+
+                tool_name, parameters = divert_personal_song(tool_name, parameters, inflight)
+                tool_name, parameters = resolve_song(tool_name, parameters, inflight)
             if (tool_name, parameters) != (original_name, original_params):
                 print(
                     f"[era] [ROUTE] routed {original_name} {original_params} -> {tool_name} {parameters}"
@@ -2122,6 +3098,45 @@ class ToolDispatchMixin:
 
         print(f"[era] [ARGS] {tool_name}  {parameters}")
         self._trace_routed = (tool_name, dict(parameters))  # for the task trace
+
+        # Live 2026-11-17: the model sent media_coordinator AND the platform tool for
+        # one "play X" (1-2 s apart, separate turns). After routing both were the same
+        # start; the second hit the still-loading player and was reported as a FAILED
+        # playback although the first one was playing. Start it once.
+        media_key = _media_start_key(tool_name, parameters)
+        if media_key is not None:
+            last = getattr(self, "_recent_media_start", None)
+            now_ts = time.monotonic()
+            asked = (getattr(self, "_last_user_text", "") or "").strip().lower()
+            if (
+                last is not None
+                and last[0] == media_key
+                and now_ts - last[1] < _MEDIA_DEDUPE_S
+                and last[2] == asked  # a new utterance ("try again") always runs
+            ):
+                print(f"[era] [DUP] {tool_name} {media_key[1]!r} already started; not repeated.")
+                log_event(main_logger, "tool.media.duplicate", "INFO", tool=tool_name)
+                return ToolResult.ok(
+                    f"Already started '{media_key[1]}' on {media_key[0]} a moment ago; not"
+                    " repeated. Report the first call's result only.",
+                    tool_name=tool_name,
+                    action_name=parameters.get("action"),
+                    data={"executed": False, "duplicate_media_start": True},
+                )
+            self._recent_media_start = (media_key, now_ts, asked)
+
+        from core.file_arguments import file_argument_error
+
+        argument_error = file_argument_error(tool_name, parameters)
+        if argument_error:
+            log_event(main_logger, "tool.arguments.invalid", "WARNING", tool=tool_name)
+            return ToolResult.fail(
+                argument_error,
+                error_type="InvalidArguments",
+                tool_name=tool_name,
+                action_name=parameters.get("action"),
+                data={"executed": False},
+            )
 
         start = time.perf_counter()
 
@@ -2134,7 +3149,7 @@ class ToolDispatchMixin:
 
             _jit_action = parameters.get("action", "")
             if isinstance(_jit_action, str):
-                await jit_vision_capture(tool_name, _jit_action.lower().strip())
+                await jit_vision_capture(tool_name, _jit_action.lower().strip(), parameters)
         except Exception:
             pass
 
@@ -2174,7 +3189,7 @@ class ToolDispatchMixin:
                 duration_ms=duration(),
             )
 
-        if requires_confirmation:
+        if requires_confirmation or remote is not None:
             print(f"[era] [WARN] confirmation required ({risk_level})")
             confirmed = bool(parameters.get("confirmed", False))
             confirmation_id = parameters.get("confirmation_id", "")
@@ -2203,7 +3218,16 @@ class ToolDispatchMixin:
                         action_name=parameters.get("action"),
                         duration_ms=duration(),
                     )
-                pending = self._pending_store.confirm(confirmation_id)
+                if remote is not None and not remote_approves(pending):
+                    return ToolResult.fail(
+                        message="This approval is no longer valid.",
+                        error_type="ConfirmationFailed",
+                        tool_name=tool_name,
+                    )
+                pending = self._pending_store.confirm(
+                    confirmation_id,
+                    **({"expected_created_at": remote.created_at} if remote is not None else {}),
+                )
                 if pending is None:
                     return ToolResult.fail(
                         message="Invalid or expired confirmation.",
@@ -2213,6 +3237,9 @@ class ToolDispatchMixin:
                         action_name=parameters.get("action"),
                         duration_ms=duration(),
                     )
+                from core.approval_execution import APPROVED_CONFIRMATION
+
+                APPROVED_CONFIRMATION.set(pending.confirmation_id)
                 stored_params = {
                     k: v for k, v in pending.parameters.items() if k not in CONFIRM_META
                 }
@@ -2312,8 +3339,24 @@ class ToolDispatchMixin:
             )
 
         try:
-            raw = await self._execute_tool_raw(tool_name, parameters, fc)
+            from core.task_recovery import execute_read_recovery
+
+            raw = await execute_read_recovery(
+                tool_name,
+                parameters,
+                lambda retry_parameters: self._execute_tool_raw(tool_name, retry_parameters, fc),
+            )
             self._last_tool_name = tool_name
+        except CancelledTask as e:
+            # Cooperative cancellation is a user decision, not an engine fault.
+            return ToolResult.fail(
+                message=str(e),
+                error=str(e),
+                error_type="Cancelled",
+                tool_name=tool_name,
+                action_name=parameters.get("action"),
+                duration_ms=duration(),
+            )
         except Exception as e:
             dur = duration()
             traceback.print_exc()
@@ -2339,49 +3382,22 @@ class ToolDispatchMixin:
                 duration_ms=dur,
             )
 
-        dur = duration()
+        verify_tool, verify_parameters = tool_name, parameters
+        if tool_name == "confirm_pending_confirmation":
+            confirmed = getattr(self, "_confirmed_action", None)
+            if isinstance(confirmed, tuple) and len(confirmed) == 2:
+                verify_tool, verify_parameters = confirmed
+                self._confirmed_action = None
 
-        if isinstance(raw, str) and ("Unknown tool:" in raw or "Unknown action:" in raw):
-            return ToolResult.fail(
-                message=raw,
-                error_type="UnknownTool",
-                tool_name=tool_name,
-                action_name=parameters.get("action"),
-                duration_ms=dur,
-            )
-
-        result = ToolResult.from_any(
+        return finalize_tool_result(
+            self,
+            verify_tool,
+            verify_parameters,
             raw,
-            tool_name=tool_name,
-            action_name=parameters.get("action"),
-            duration_ms=dur,
+            risk_level=risk_level,
+            requires_confirmation=requires_confirmation,
+            duration_ms=duration(),
         )
-
-        result.risk_level = risk_level
-        result.requires_confirmation = requires_confirmation
-
-        result = verify_tool_result(result, tool=tool_name, parameters=parameters)
-
-        if not result.success:
-            print(
-                f"[era] [ERROR] {tool_name} failed: {result.error_type} - {result.short_message(200)}"
-            )
-            log_event(
-                main_logger,
-                "tool.execution.failed",
-                "ERROR",
-                tool=tool_name,
-                action=parameters.get("action"),
-                error_type=result.error_type,
-                # Without the message, self_diagnosis could only guess at causes
-                # ("2x tool=file_controller") — and a cancelled confirmation looks
-                # identical to a crash. The message is what tells them apart.
-                error=result.short_message(200),
-                duration_ms=result.duration_ms,
-            )
-            self._log_caught_exception(tool_name, parameters, result)
-
-        return result
 
     def _log_caught_exception(self, tool_name: str, parameters: dict, result) -> None:
         """A tool that caught its own exception returned a string, so no stack
@@ -2461,6 +3477,39 @@ class ToolDispatchMixin:
         return told
 
     async def _execute_tool_raw(self, tool_name: str, args: dict, fc=None) -> str:
+        if tool_name == "code_mode":
+            from app.codemode_runtime import codemode_allowed, route
+            from core.codemode import ENTRY, EXIT, get_codemode
+
+            action = args.get("action", "status")
+            if not codemode_allowed():
+                # PF-050: switched off by the owner; say so instead of "accepted".
+                return ToolResult.fail(
+                    "CodeMode is turned off. For code work, hand it to the crew: "
+                    "call the crew tool with bot='cody'.",
+                    error_type="FeatureDisabled",
+                )
+            if action == "status":
+                return ToolResult.ok(
+                    message="Current CodeMode state", data=get_codemode().snapshot()
+                )
+            owner = getattr(self, "_input_envelope", None)
+            pattern = ENTRY if action == "enter" else EXIT if action == "exit" else None
+            if owner is None or pattern is None or not pattern.fullmatch(owner.text.strip()):
+                return ToolResult.fail(
+                    "CodeMode requires the user's explicit mode command.",
+                    error_type="UserIntentRequired",
+                )
+            route(self, owner.text, owner)
+            return ToolResult.ok(
+                message="CodeMode command accepted", data=get_codemode().snapshot()
+            )
+
+        if tool_name == "telegram_call":
+            from app.telegram_call_runtime import handle_tool
+
+            return await handle_tool(self, args)
+
         # ── Final safety guard before any tool execution ──
         # These holds stop the MODEL acting while muted/asleep or while another lane
         # owns the request. A scheduled task was authorised by the user in advance
@@ -2514,6 +3563,18 @@ class ToolDispatchMixin:
             )
         # ─────────────────────────────────────────────────
 
+        # Session-state tools need a matching order from the user, never just the
+        # model's say-so (ambient audio shut Era down and flipped standby/mic).
+        if not scheduled_run:
+            _ungrounded = _ungrounded_state_change(
+                self, tool_name, relaunch=bool((args or {}).get("relaunch"))
+            )
+            if _ungrounded:
+                return _ungrounded
+            _unasked_music = _ungrounded_media_start(self, tool_name, args)
+            if _unasked_music:
+                return _unasked_music
+
         # ── System-state awareness gate (pre-command telemetry) ──────────────
         # Before acting ON an application (pause/next/minimize/close/focus/…),
         # gather real telemetry for the target — process presence, a visible
@@ -2549,7 +3610,23 @@ class ToolDispatchMixin:
             print(f"[era] [STATE-GATE] skipped ({type(_gate_err).__name__}: {_gate_err})")
 
         if tool_name == "enter_standby":
+            from core.attention import is_silence_order
+
+            if is_silence_order(_current_user_text(self)):
+                # PF-039: "stay silent" means inactivity mode, never the real
+                # STANDBY (standby_enabled may be on: wake word only).
+                self._enter_inactivity("voice")
+                return "Inactivity mode: say nothing at all."
+            _no = None if scheduled_run else _not_a_standby_order(self)  # PF-045
+            if _no:
+                return _no
             self.enter_standby()
+            from core.session import standby_enabled
+
+            if not standby_enabled():
+                # One-mode session (2026-11-11): there is no teardown and no
+                # code-spoken notice, so the model owns the single line.
+                return "Session closed. Say exactly 'System offline.' once, then stop."
             # Do NOT ask the model to speak here — core/prompt.txt already
             # tells it to stay silent around this tool, and the code plays
             # its own "Standby mode active" line in wait_and_mute(). Telling
@@ -2608,6 +3685,21 @@ class ToolDispatchMixin:
             # here: Gemini IS the router in this path (it decided to call the tool),
             # so there is no parallel utterance to mute — muting would gag the ack.
             order = (args.get("order") or "").strip()
+            # Live 2026-11-17 "what's the status of the CM jobs?" reached here as
+            # order="status" and was treated as a NEW job needing a brand — one
+            # "Delta Cuisine" reply away from launching a job named "status". A
+            # status question is a read: answer it from the status file, start nothing.
+            if _CM_STATUS_QUESTION.match(order):
+                import era_dispatch
+
+                job = era_dispatch.current_job()
+                if not job:
+                    return "No community-management job is running right now. Nothing was started."
+                return (
+                    f"Running now: {job.get('brand', 'a brand')} {job.get('task_type') or 'job'}"
+                    f" (started {job.get('started', 'recently')}): "
+                    f"{(job.get('order') or '').strip()[:120]}. Nothing new was started."
+                )
             if not order:
                 return (
                     "Ask the user what community-management task they want — e.g. "
@@ -2623,8 +3715,19 @@ class ToolDispatchMixin:
                 "approve",
                 "ads",
                 "adcreative",
+                "package",
+                "edit",
             ):
                 task_type = _infer_cm_task_type(order)
+            elif task_type != "ads":
+                # The tool description tells the model to pass 'weekly' for any
+                # plan/produce/create order, so "prepare the package" would arrive as
+                # weekly and run the generating, Magnific-using brief. The two
+                # content-workflow lanes are specific enough that the inferred lane
+                # wins over a generic one the model picked.
+                inferred = _infer_cm_task_type(order)
+                if inferred in ("package", "edit"):
+                    task_type = inferred
             brand_in = (args.get("brand") or "").strip()
             brand_key = None
             try:
@@ -2749,7 +3852,9 @@ class ToolDispatchMixin:
                 self._blocked_memory_save = None
                 masked = value[:60] + "..." if len(value) > 60 else value
                 print(f"[Memory] [SAVE] save_memory: {category}/{key} = {masked}")
-            return "ok"
+                # A bare "ok" was read back to the owner as "ok" (live 2026-11-17).
+                return f"Saved to memory: {key.replace('_', ' ')} = {masked}."
+            return "Nothing saved: a memory needs both a key and a value."
 
         if tool_name == "retrieve_memory_context":
             query = args.get("query", "")
@@ -2759,8 +3864,15 @@ class ToolDispatchMixin:
             # so memories the user actually asks about rank higher over time.
             from memory.memory_manager import retrieve_context_reinforced
 
-            result = retrieve_context_reinforced(query, top_k=5)
-            return result if result else "No relevant memories found."
+            result = retrieve_context_reinforced(query, top_k=3)
+            if not result:
+                return "No relevant memories found."
+            # Live path only (the agent lane keeps bare lines): Gemini read the
+            # whole result aloud as its reply. Frame it as private input.
+            return (
+                "[Private notes for you, not for speech. Use them to act now; "
+                "never read, list or summarise these lines aloud.]\n" + result
+            )
 
         if tool_name == "list_memory_keys":
             from memory.memory_manager import list_memory_keys
@@ -2817,6 +3929,9 @@ class ToolDispatchMixin:
             pending = self._pending_store.confirm(pending.confirmation_id)
             if pending is None:
                 return "This confirmation is no longer valid."
+            from core.approval_execution import APPROVED_CONFIRMATION
+
+            APPROVED_CONFIRMATION.set(pending.confirmation_id)
             if confirmation_id and confirmation_id != pending.confirmation_id:
                 print(
                     f"[era] [WARN] confirmation id mismatch (got {confirmation_id!r}, "
@@ -2835,7 +3950,16 @@ class ToolDispatchMixin:
                 tool=pending.tool,
                 confirmation_id=pending.confirmation_id,
             )
-            return await self._execute_tool_raw(pending.tool, stored_params, fc)
+            raw = await self._execute_tool_raw(pending.tool, stored_params, fc)
+            # A confirm call RUNS a different tool than its own name. The outer
+            # dispatcher (and every duck-typed caller of this handler) only sees
+            # "confirm_pending_confirmation", so record what actually ran and
+            # with which parameters. `_execute_tool_result_inner` uses this to
+            # verify the real action; without it, verify_action_result looks up
+            # a verifier for the confirm handler, finds none, and the approved
+            # delete/send/overwrite is the one action never checked.
+            self._confirmed_action = (pending.tool, dict(stored_params))
+            return raw
 
         if tool_name == "cancel_pending_confirmation":
             if self._pending_store.is_pending():
@@ -2851,9 +3975,7 @@ class ToolDispatchMixin:
         result = "Done."
 
         if tool_name == "open_app":
-            r = await loop.run_in_executor(
-                None, lambda: open_app(parameters=args, response=None, player=self.ui)
-            )
+            r = await offload(lambda: open_app(parameters=args, response=None, player=self.ui))
             result = r or f"Opened {args.get('app_name')}."
 
         elif tool_name == "capability_check":
@@ -2934,8 +4056,8 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "system_performance":
-            r = await loop.run_in_executor(
-                None, lambda: system_performance(parameters=args, response=None, player=self.ui)
+            r = await offload(
+                lambda: system_performance(parameters=args, response=None, player=self.ui)
             )
             result = r or "Done."
 
@@ -2958,8 +4080,9 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "agent_task":
-            from agent.task_queue import get_queue
+            from agent.task_queue import DuplicateTaskError, get_queue
             from agent.types import TaskPriority
+            from app.away_calls import automatic_report
 
             priority_map = {
                 "low": TaskPriority.LOW,
@@ -2968,16 +4091,25 @@ class ToolDispatchMixin:
             }
             priority = priority_map.get(args.get("priority", "normal").lower(), TaskPriority.NORMAL)
             task_speak = getattr(self, "speak_dispatched", None) or self.speak
-            task_id = get_queue().submit(
-                goal=args.get("goal", ""), priority=priority, speak=task_speak
-            )
-            result = f"Task started (ID: {task_id})."
+            try:
+                task_id = get_queue().submit(
+                    goal=args.get("goal", ""),
+                    priority=priority,
+                    speak=task_speak,
+                    on_complete=lambda task_id, outcome: automatic_report(
+                        self, outcome.message, "background", f"{task_id}:{outcome.success}"
+                    ),
+                )
+                result = f"Task queued (ID: {task_id})."
+            except DuplicateTaskError as exc:
+                result = str(exc)
 
         elif tool_name == "web_search":
-            r = await loop.run_in_executor(
-                None, lambda: web_search_action(parameters=args, player=self.ui)
-            )
+            r = await offload(lambda: web_search_action(parameters=args, player=self.ui))
             result = r or "Done."
+
+        elif tool_name == "era_workbench":
+            result = await offload(lambda: era_workbench(args))
 
         elif tool_name == "file_processor":
             if not args.get("file_path") and self.ui.current_file:
@@ -3002,9 +4134,7 @@ class ToolDispatchMixin:
         elif tool_name == "spotify_control":
             from actions.spotify_control import spotify_control
 
-            r = await loop.run_in_executor(
-                None, lambda: spotify_control(parameters=args, player=self.ui)
-            )
+            r = await offload(lambda: spotify_control(parameters=args, player=self.ui))
             result = r or "Done."
 
         elif tool_name == "spotify_bridge":
@@ -3035,9 +4165,7 @@ class ToolDispatchMixin:
             result = r or "Done."
 
         elif tool_name == "media_coordinator":
-            r = await loop.run_in_executor(
-                None, lambda: media_coordinator(parameters=args, player=self.ui)
-            )
+            r = await offload(lambda: media_coordinator(parameters=args, player=self.ui))
             result = r or "Done."
 
         elif tool_name == "window_control":
@@ -3075,9 +4203,17 @@ class ToolDispatchMixin:
         elif tool_name == "crew":
             # Laura and the specialists (crew/). One "working on it" if the call is
             # still running after 2.5 s — per call, never per bot turn or handoff.
+            from core.approval_execution import APPROVED_CONFIRMATION
             from crew.runtime import await_with_ack, run_tool
 
-            pending = loop.run_in_executor(None, lambda: run_tool(dict(args)))
+            # Read here, on the loop: run_in_executor does not carry ContextVars into
+            # the worker thread, so a verify_candidate approval would be invisible.
+            approved = APPROVED_CONFIRMATION.get()
+            said = getattr(self, "_inflight_user_text", "") or getattr(self, "_last_user_text", "")
+            pending = loop.run_in_executor(
+                None,
+                lambda: run_tool(dict(args), approved_confirmation=approved, user_text=said),
+            )
             if str(args.get("action") or "ask").lower() == "ask":
                 # _say_exactly: in gemini_audio mode speak() feeds the live session, which
                 # would otherwise improvise its own reaction instead of saying this.
@@ -3248,6 +4384,19 @@ class ToolDispatchMixin:
                     reason="user_enabled_auto_memory" if enable else "user_disabled_auto_memory",
                     allowed=True,
                 )
+            elif pref_action in ("set_session_window", "set_session"):
+                from core.session import set_window_from_text
+
+                seconds = args.get("seconds")
+                if seconds in (None, ""):
+                    # The phrase itself, when the model passed words instead of
+                    # the converted number ("2 minutes").
+                    seconds = args.get("rule") or args.get("value") or ""
+                result = set_window_from_text(seconds)
+            elif pref_action in ("get_session_window", "session_status"):
+                from core.session import describe
+
+                result = describe()
             elif pref_action == "add_rule":
                 result = add_behavior_rule(pref_rule)
             elif pref_action == "remove_rule":
@@ -3296,18 +4445,77 @@ class ToolDispatchMixin:
                     self.speak("The self-diagnosis hit an error — check the log.")
 
             self._spawn_background_task(_run_self_diagnosis(), "self_diagnosis")
-            result = "Deep self-diagnosis started in the background — I'll report when it's done."
+            # run_self_diagnosis skips the deep analysis on deep=false; say which ran
+            # (live 2026-11-17 a quick check was announced as "Deep").
+            depth = "Quick" if diag_args.get("deep") is False else "Deep"
+            result = (
+                f"{depth} self-diagnosis started in the background — I'll report when it's done."
+            )
+
+        elif tool_name == "deep_think":
+            # Owner 2026-11-18 (PF-044): only on request or for genuinely deep
+            # questions. Local Qwen (then Gemma) reasons WITHOUT tools; the full
+            # answer is delivered through the reconnect-surviving report path, not
+            # the one-sentence background outcome, so it is not cut short.
+            from core.deep_think import think as _deep_think
+
+            question = str(args.get("question") or "").strip()
+            context = str(args.get("context") or "")
+            if not question:
+                result = "deep_think needs the question to think about; nothing started."
+            else:
+
+                async def _run_deep_think():
+                    try:
+                        ok, text, _route = await asyncio.to_thread(_deep_think, question, context)
+                    except Exception as e:  # noqa: BLE001 - think() never raises; belt and braces
+                        ok, text = False, type(e).__name__
+                    try:
+                        self.ui.write_log(f"DEEP THINK: {text[:2000]}")
+                    except Exception:
+                        pass
+                    spoken = (
+                        text if ok else f"I couldn't finish thinking that through, sir — {text}."
+                    )
+                    self._deliver_or_queue_cm_report(spoken, verbatim=True)
+
+                self._spawn_background_task(_run_deep_think(), "deep_think")
+                result = (
+                    "Deep thinking started on the local model. It is STILL RUNNING. Tell the "
+                    "user in one short phrase that you are thinking it over. Do NOT answer the "
+                    "question yourself, do NOT guess, and do NOT call deep_think again — the "
+                    "full answer is spoken automatically when it is ready."
+                )
 
         elif tool_name == "protocol_one":
             from actions.protocol_one import (
                 confirm_pending_fixes,
                 launch_protocol_one,
                 protocol_status,
+                read_recent,
+                read_report,
             )
 
             p1_args = dict(args)
             p1_action = str(p1_args.get("action") or "status").lower().strip()
-            if p1_action == "confirm":
+            if p1_action == "recent":
+                # Read-only: what Era's last tool calls REALLY did (asked vs ran,
+                # confirmed or not), straight from the task trace. The answer to
+                # "did you actually do that?" - never the model's own recollection.
+                result = {
+                    "success": True,
+                    "message": await asyncio.to_thread(read_recent, p1_args.get("limit")),
+                }
+            elif p1_action == "report":
+                # Read-only: hand back the real report file (or one section), with
+                # its age and whether the code changed since. Explicit success, for
+                # the same reason as status: the text is made of "failed"/"error".
+                section = str(p1_args.get("section") or "").strip() or None
+                result = {
+                    "success": True,
+                    "message": await asyncio.to_thread(read_report, section),
+                }
+            elif p1_action == "confirm":
                 # The one-word approval: apply the fixes a prior cycle staged.
                 # Same word-grounding as launch — the user must have SAID "yes"
                 # and a fresh batch must be waiting — so a stray affirmation, or
@@ -3403,14 +4611,17 @@ class ToolDispatchMixin:
             from core import visual_engine
 
             try:
-                command = json.loads(args.get("command", "{}"))
-                result = json.dumps(
-                    await asyncio.to_thread(
-                        visual_engine.snapshot
-                        if command.get("action") == "snapshot"
-                        else lambda: visual_engine.apply(command)
-                    )
+                raw_command = args.get("command", "{}")
+                command = json.loads(raw_command) if isinstance(raw_command, str) else raw_command
+                if not isinstance(command, dict):
+                    raise ValueError("Visual command must be a JSON object")
+                result = await asyncio.to_thread(
+                    visual_engine.snapshot
+                    if command.get("action") == "snapshot"
+                    else lambda: visual_engine.apply(command)
                 )
+                if "success" not in result:
+                    result = {"success": True, "message": "HUD command applied.", "data": result}
             except ValueError as exc:
                 # apply()/snapshot() reject an invalid HUD command by design —
                 # edited state is never trusted as markup (and json.loads raises
@@ -3430,42 +4641,53 @@ class ToolDispatchMixin:
         elif tool_name == "autonomous_development":
             from core import development, feature_engine
 
-            action = args.get("action", "status")
-            if action == "propose":
-                paths = json.loads(args.get("file_paths", "[]"))
-                if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
-                    raise ValueError("file_paths must be a JSON array of strings")
-                job = await asyncio.to_thread(
-                    development.propose,
-                    args.get("request", ""),
-                    paths,
-                    reload=args.get("reload", True),
-                )
-                result = f"Development {job['id']} started in staging. Review verified changes in the HUD; final approval is required."
-            elif action == "inspect":
-                result = json.dumps(
-                    await asyncio.to_thread(development.inspect_request, args.get("request", ""))
-                )
-            elif action == "retry":
-                result = json.dumps(
-                    await asyncio.to_thread(development.retry, args.get("job_id", ""))
-                )
-            elif action == "reject":
-                result = json.dumps(
-                    await asyncio.to_thread(development.reject, args.get("job_id", ""))
-                )
-            elif action == "status":
-                await asyncio.to_thread(feature_engine.restore)
-                result = json.dumps(
-                    {
-                        "jobs": await asyncio.to_thread(development.list_jobs),
-                        "features": feature_engine.catalog(),
-                    }
-                )
-            else:
-                raise ValueError(
-                    "Only inspect/propose/status/retry/reject are allowed; final approval belongs to the user in the HUD"
-                )
+            try:
+                action = args.get("action", "status")
+                if action == "propose":
+                    paths = json.loads(args.get("file_paths", "[]"))
+                    if not isinstance(paths, list) or any(
+                        not isinstance(path, str) for path in paths
+                    ):
+                        raise ValueError("file_paths must be a JSON array of strings")
+                    job = await asyncio.to_thread(
+                        development.propose,
+                        args.get("request", ""),
+                        paths,
+                        reload=args.get("reload", True),
+                    )
+                    result = f"Development {job['id']} started in staging. Review verified changes in the HUD; final approval is required."
+                elif action == "inspect":
+                    result = json.dumps(
+                        await asyncio.to_thread(
+                            development.inspect_request, args.get("request", "")
+                        )
+                    )
+                elif action in ("retry", "reject"):
+                    job_id = str(args.get("job_id", "") or "").strip()
+                    if job_id.lower() in ("", "latest", "last", "newest", "current"):
+                        # The model says "the latest job"; ids are 16 hex chars.
+                        jobs = await asyncio.to_thread(development.list_jobs)
+                        job_id = jobs[0]["id"] if jobs else ""
+                    act = development.retry if action == "retry" else development.reject
+                    result = json.dumps(await asyncio.to_thread(act, job_id))
+                elif action == "status":
+                    await asyncio.to_thread(feature_engine.restore)
+                    result = json.dumps(
+                        {
+                            "jobs": await asyncio.to_thread(development.list_jobs),
+                            "features": feature_engine.catalog(),
+                        }
+                    )
+                else:
+                    raise ValueError(
+                        "Only inspect/propose/status/retry/reject are allowed; final approval belongs to the user in the HUD"
+                    )
+            except (ValueError, FileNotFoundError) as exc:
+                result = {
+                    "success": False,
+                    "message": f"Development request rejected: {exc}. Use status to list valid job IDs.",
+                    "error_type": "ValidationError",
+                }
 
         elif tool_name == "run_feature":
             from core import feature_engine
@@ -3564,6 +4786,18 @@ class ToolDispatchMixin:
 
         elif tool_name == "scheduled_task":
             from actions.scheduled_task import scheduled_task
+            from core.cancel_intent import is_cancel_all_live_order, is_spoken_cancel_task_order
+
+            utterance = getattr(self, "_inflight_user_text", "") or getattr(
+                self, "_last_user_text", ""
+            )
+            if args.get("action") not in {"list", "history", "status", "get", "unread"} and (
+                is_cancel_all_live_order(utterance) or is_spoken_cancel_task_order(utterance)
+            ):
+                return ToolResult.fail(
+                    "That command cancels Live Activity work, not scheduled jobs. Schedules were not changed.",
+                    error_type="BlockedAction",
+                )
 
             st_args = dict(args)
             # Authority comes from what the USER said, never from the arguments.
@@ -3608,4 +4842,6 @@ class ToolDispatchMixin:
         else:
             result = f"Unknown tool: {tool_name}"
 
-        return result
+        from core.live_app_state import refresh_after_command
+
+        return await refresh_after_command(tool_name, args, result)

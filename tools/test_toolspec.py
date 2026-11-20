@@ -78,7 +78,7 @@ from core.llm.toolspec import (
 # 58 -> 57 on 2026-10-06: `claude_bridge` removed — Era no longer drives or reads the
 # Claude Code GUI (window-polling gave false statuses, e.g. "still working, 3 min").
 # Self-improve uses `claude -p` internally; core/claude_headless.py is kept as a library.
-EXPECTED_TOOL_COUNT = 57
+EXPECTED_TOOL_COUNT = 61  # 60 -> 61 on 2026-11-18: `deep_think` (PF-044).
 
 # Tools declaring at least one required parameter. Pinned for the same reason as
 # EXPECTED_TOOL_COUNT: it is the non-vacuity floor for test_required_sets_survive,
@@ -97,7 +97,8 @@ EXPECTED_TOOL_COUNT = 57
 # 40 -> 42 on 2026-10-04: `vault_bridge` and `crew` each require `action`, so a bare
 # call can never be read as a write or as a task for the crew.
 # 42 -> 41 on 2026-10-06: `claude_bridge` (required `action`) removed.
-EXPECTED_TOOLS_WITH_REQUIRED = 41
+# 44 -> 45 on 2026-11-18: `deep_think` requires `question` (nothing to think about without it).
+EXPECTED_TOOLS_WITH_REQUIRED = 45
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "tool_declarations_anthropic.json"
 

@@ -119,6 +119,9 @@ _lock = threading.RLock()
 _scheduler = None
 _executor = None  # (tool, args, task) -> {"success": bool, "message": str}
 _reporter = None  # (text, urgent) -> None
+current_report: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "era_scheduled_report", default=None
+)
 
 
 def set_executor(fn) -> None:
@@ -228,9 +231,14 @@ def create_task(
 ) -> dict:
     """`voice_authorized`: True/False, or the list of Protocol tools the user named."""
     name = (name or "").strip()[:80]
+    args, kind = strip_args(args), (kind or "tool").strip().lower()
+    # Live 2026-11-17: "remind me in 3 minutes to stretch" failed with "Give the task
+    # a name" — nobody names a reminder. Its message is its name.
+    derived_name = not name and kind == "reminder" and bool((message or "").strip())
+    if derived_name:
+        name = " ".join(message.split())[:60]
     if not name:
         raise TaskError("Give the task a name.")
-    args, kind = strip_args(args), (kind or "tool").strip().lower()
     steps = normalize_steps(steps)
     condition = normalize_condition(condition)
     if steps and kind != "reminder":
@@ -249,7 +257,15 @@ def create_task(
 
     with _lock:
         data = _load()
-        if any(t["name"].lower() == name.lower() and not t.get("finished") for t in data.values()):
+
+        def _taken(n: str) -> bool:
+            return any(
+                t["name"].lower() == n.lower() and not t.get("finished") for t in data.values()
+            )
+
+        if derived_name and _taken(name):
+            name = f"{name} ({datetime.now().strftime('%H:%M:%S')})"
+        if _taken(name):
             raise TaskError(f"There is already a task named '{name}'.")
         task = {
             "id": secrets.token_hex(3),
@@ -544,7 +560,11 @@ def _maybe_finish_on_condition(task: dict, run: dict | None) -> None:
     if task.get("notify") != "silent":
         text = f"Scheduled task '{task['name']}' is complete — its condition was met, so it won't run again."
         try:
-            (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, False)
+            token = current_report.set({"task_id": task["id"], "status": "ok"})
+            try:
+                (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, False)
+            finally:
+                current_report.reset(token)
         except Exception as exc:
             print(f"[TASKS] report failed: {exc}")
     _update_status()
@@ -785,7 +805,11 @@ def _record(task_id, status, message, trigger="schedule", safety=None, steps=Non
     text = task_reports.report_text(task, entry)
     if text:
         try:
-            heard = (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, status != "ok")
+            token = current_report.set({"task_id": task_id, "status": status})
+            try:
+                heard = (_reporter or (lambda t, _u: print(f"[TASKS] {t}")))(text, status != "ok")
+            finally:
+                current_report.reset(token)
         except Exception as exc:
             heard = False
             print(f"[TASKS] report failed: {exc}")

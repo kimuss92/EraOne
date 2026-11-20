@@ -249,7 +249,7 @@ def resolve(query: str, flow: str | None = None) -> tuple[Endpoint | None, Audio
         return None, _ambiguous(q_raw, matches)
 
     # 1. exact id
-    hit = [e for e in eps if _norm_id(e.id) == _norm_id(q_raw)]
+    hit = [e for e in pool if _norm_id(e.id) == _norm_id(q_raw)]
     if hit:
         return done(hit)
     # 2. exact name
@@ -284,7 +284,7 @@ def resolve(query: str, flow: str | None = None) -> tuple[Endpoint | None, Audio
         if hit:
             return done(hit)
     if words & _INPUT_WORDS and len(words) == 1:
-        hit = [e for e in eps if e.flow == INPUT]
+        hit = [e for e in pool if e.flow == INPUT]
         if hit:
             return done(hit)
 

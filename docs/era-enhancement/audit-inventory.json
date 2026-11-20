@@ -1,0 +1,3821 @@
+{
+  "date": "2026-10-11",
+  "head": "304c573ffb023f1c6b23ca1441c6b130792d43e1",
+  "graph_commit": "419645a6c190d43d744f503392d15cadcbaac351",
+  "counts": {
+    "tracked": 1773,
+    "scoped_files": 632,
+    "graph_covered": 585,
+    "changed_since_graph": 215
+  },
+  "roots": {
+    "(root)": 75,
+    "actions": 58,
+    "agent": 6,
+    "app": 49,
+    "config": 18,
+    "core": 144,
+    "crew": 10,
+    "memory": 10,
+    "scripts": 5,
+    "tools": 209,
+    "ui_src": 41,
+    "utils": 5,
+    "windows": 2
+  },
+  "files": [
+    {
+      "path": ".mcp.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "AGENTS.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "AUDIT_REPRISE.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "AUTONOMY_HUD_RELEASE.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "AUTOPILOT_ARCHITECTURE.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "AUTOPILOT_VALIDATION.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "CLAUDE.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "LEGAL_MONETIZATION_PROPOSAL.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "LUNAR_HANDOFF.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "PATCH_NOTES_REPRISE_2.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "README_STABILITY.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "REPRISE_WINDOWS.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "SECURITY_ROTATION.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "STABILITY_AUDIT.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "SWARM_AUDIT.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "TODO.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "VALIDATION_RESULTS.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "VISUAL_DEVELOPMENT_VALIDATION.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "VISUAL_ENGINE_ARCHITECTURE.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "VOICE_24_7_PROPOSAL.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "WINDOWS_TEST_SCENARIOS.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "WORKFLOW.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/_netflix/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/_netflix/js_snippets.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/_netflix/player_api.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/_netflix/player_js.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/_netflix/profile_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/agent_browser_use.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/audio_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/browser_control.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/browser_driver_health.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/browser_intelligence.py",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/claude_self_improve.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/code_helper.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/computer_control.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/computer_settings.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/design_studio.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/desktop.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/desktop_ops.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/desktop_preview.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/dev_agent.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/feature_inspire.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/file_controller.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/file_indexer.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/file_processor.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/flight_finder.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/game_updater.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/gmail_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/legal_automation.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/media_coordinator.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/monitor_move.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/netflix_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/open_app.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/page_refs.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/path_anchors.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/platform_tab.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/premiere_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/protocol_one.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/protocol_zero.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/reminder.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/scheduled_task.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/screen_processor.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/self_diagnosis.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/self_heal.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/self_improve.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/self_improve_locator.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/self_improve_targets.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/self_improve_verifier.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/send_message.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/spotify_control.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/spotify_exact.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/spotify_gsmtc_host.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/spotify_ui.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/system_performance.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/text_edit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/vault_writer.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/weather_report.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/web_search.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/window_control.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "actions/youtube_video.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "agent/error_handler.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "agent/executor.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "agent/planner.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "agent/task_queue.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "agent/task_store.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "agent/types.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/audio_config.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/cm_intents.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_constants.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/audio.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "app/era_live/audio_output.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "app/era_live/autopilot.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/cancel.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/cascade.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/claude_voice.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/cm_flow.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "app/era_live/dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/local_fallback.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/local_guards.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/mic_mute.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/model_route.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/panic.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/reconnect_mixin.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "app/era_live/session_runtime.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/speech_out.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "app/era_live/tool_batch.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/tool_dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/era_live/tts_text.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/api.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/browser.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/bus_approval.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/bus_const.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/bus_legacy.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/bus_tools.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/events.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/instance.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/launcher.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/launcher_ui.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/schedule_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/schedule_view.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/settings.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/shortcuts.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/status.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "app/hud/tool_adapter.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/hud/ui_base.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/notify.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/reconnect.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/system_prompt.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/text_intents.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/tool_declarations.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/wake.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "app/websocket_server.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "audio_detect.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "brands.yaml",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "calibrate_spotify.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "clean_zero_kb.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/api_keys.example.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/autopilot.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/cody.yaml",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/drew.yaml",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/laura.yaml",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/maya.yaml",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/nabar.yaml",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/prompts/cody.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/prompts/drew.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/prompts/laura.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/prompts/maya.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/prompts/nabar.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/prompts/tom.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/crew/tom.yaml",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/llm.yaml",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/voice.json",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "config/wake_word.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "conftest.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "constraints.stability.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/action_registry.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/action_verifiers.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/ai_provider.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/app_state_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/async_submit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/attention.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/audio_battery.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/audio_devices.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/audio_endpoints.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/audio_pcm.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/audio_policy.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/autopilot.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/autopilot_coding.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/background_manager.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/browser_grid_state.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/cancel_intent.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/cancel_registry.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/capability_index.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/capture_utils.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/claude_headless.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/cm_learning.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/cm_vault.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/command_registry.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/confirmation.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/confirmation_preview.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/conversation_log.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/daily_note.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/development.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/era_relaunch.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/era_state.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/feature_engine.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/gmail_auth.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/gmail_priority.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/gmail_service.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/gmail_watcher.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/handled_exceptions.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/hive.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/input_safety_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/intent_memory.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/lint_feedback.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/live_health.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/live_turn_state.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/adapters/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/adapters/claude_cli.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/llm/adapters/claude_voice.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/adapters/gemini_generate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/adapters/ollama_chat.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/adapters/omniroute.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/adapters/openai_compat.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/claude_accounts.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/codecraft_failover.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/exec_ledger.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/provider.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/quota_failover.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/registry.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/router.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/shadow.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/spend.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/taskclass.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/toolspec.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/llm/types.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/local_brain.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/local_stt.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/local_tool_calls.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/local_tts.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/logger.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/loop_rate_limit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/main_tool_bridge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/media_activity.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/media_state.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/memory_intent.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/mic_mute.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/omniroute.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/panic_stop.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/pending_confirmation.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/process_awareness.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/prompt.txt",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/protocol_checks.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/protocol_spies.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/ram_watchdog.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/root_file_guard.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/safety_guard.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/schedule_parser.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/self_heal.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/self_heal_incidents.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/self_heal_patch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/self_healing_router.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/self_learning.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/session_manager.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/source_discovery.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/speaker_recognition.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/spotify_bridge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/state_store.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/stdio_log.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/system_monitor.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/task_catchup.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/task_chain.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/task_reports.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/task_scheduler.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/task_store.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/task_trace.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/text_ollama.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/tool_recovery.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/tool_registry_validator.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/tool_result.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/transcribe.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/tts_fish.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/tts_kokoro.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/tts_router.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/turn_latency.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/turn_memory.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/auto_memory.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/behavior_rules.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/close_waiver.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/feedback_promotion.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/file_creation_waiver.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/minimize_rule.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/prompt_format.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/user_prefs/risk_waiver.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/utils.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vad.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vault_audit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vault_bridge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vault_maintenance.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/verification.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_classifier.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_config.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_context.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_ollama.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_openai.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_policy.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_resilience.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_service.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_types.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/vision_worker.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/visual_engine.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/voice_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/voice_input.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/voice_mode.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/voice_output.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "core/win_subprocess.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "core/window_awareness.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/cache.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/capabilities.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "crew/hermes_transport.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/nabar.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/registry.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/router.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/runtime.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/step_budget.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "crew/transport.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "design_suggestions_prompt.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "era.agent.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "era_dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "era_offers.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "era_scheduler.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "era_supervisor.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "era_telegram.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "fable_handoff.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "fable_meta.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "failed_tasks.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "final_standalone.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "fish_openapi.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "handoff.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "lane_dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "lane_router.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "main.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "maintenance.agent.md",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "media_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "media_host.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/__init__.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/config_manager.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/feedback_memory.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/injector.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/memory_audit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/memory_manager.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/persistence.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/safe_store.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/semantic_recall.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "memory/transient_filter.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "model_update_prompt.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "music_generate.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "package-lock.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "package.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "pytest.ini",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "readme.md",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "register_era_supervisor.ps1",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "requirements.local.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "requirements.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "requirements.windows.txt",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ruff.toml",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "scripts/cleanup_delete.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "scripts/cleanup_memory.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "scripts/install_shortcuts.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "scripts/migrate_vault_to_jaredrhod.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "scripts/task_log.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "setup.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "setup_windows.ps1",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "skills-lock.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_caption_footer.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_cm_reconnect_continuity.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_lane_router.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_lane_wiring.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_memory_guard.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_pending_ask_suppression.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_quota_cooldown.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_reconnect_acknowledgment.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_reconnect_classify.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_session_persistence.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_task_queue.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "test_verify_changes.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/_verifier_selftest.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/calibrate_barge_in.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/crew_testkit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/enroll_speaker.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/era_autopilot.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/era_development_worker.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/era_doctor.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/era_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/era_manifest.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/fish_audio_check.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/fish_audio_clone.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/golden/semantic_recall_store.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/golden/tool_declarations_anthropic.json",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/live_netflix_smoke.py",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/llm_bench.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/local_voice_bench.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/run_all_checks.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/smoke_test.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_ads_dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_agent_task_outcomes.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_ai_provider_contract.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_api_key_failover.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_app_state_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_attention.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_audio_app_preference.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_audio_devices.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_audio_endpoints.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_audio_output.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "tools/test_audio_pcm.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_autonomy_recovery.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_autopilot.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_background_loops.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_barge_in.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_browser_driver_recovery.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_browser_intelligence.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_browser_media_routing.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_cancel_flow.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_cancel_intent.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_cancel_registry.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_capability_index.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_cascade.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_claude_account_failover.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_claude_cli_adapter.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_claude_headless.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_claude_self_improve.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_claude_voice.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_cm_knowledge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_cm_report_delivery.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_confirm_self_approval.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_confirmation_flow.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_crew_background_honesty.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_crew_loop.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_crew_registry.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_crew_router.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_daily_note.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_development.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_disconnect_classification.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_domain_validation.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_era_doctor.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_era_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_era_manifest.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_era_relaunch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_exec_ledger.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_execution_layer.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_file_candidates.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_file_controller.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_file_indexer.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_file_processor_edit.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_file_safety.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_first_patch_smoke.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_gemini_adapter.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_gmail_browser_robustness.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_gmail_module.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_grid_selection.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_guard_protected_paths.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_handled_exceptions.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hermes_transport.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_approval.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_approval_prompt_location.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_approval_timeout.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_context_cards.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_events.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_launcher.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_schedule.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_hud_server.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_input_safety_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_lint_feedback.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_live_netflix_smoke.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_live_recovery.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_bench.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_dispatch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_health.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_registry.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_router.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_shadow.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_llm_spend.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_local_brain.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_local_fallback.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_logging.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_main_tool_bridge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_media_host.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_media_selection.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_memory_intent.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_memory_isolation.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_memory_recall.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_memory_safety.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_mic_mute.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_model_indicator.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_model_intent.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_monitor_move.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_morning_routine_reliability.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_msi_scenario.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_music_generate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_nabar.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_browser_hard_lock.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_next_episode.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_play.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_profile_and_player.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_question_vs_action_routing.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_scan_js.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_search_robust.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_simple_mode.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_netflix_vision_fallback.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_no_window.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_omniroute_adapter.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_page_refs.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_panic_stop.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_path_anchors.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_process_awareness.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_protocol_one.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_protocol_zero.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_quota_failover.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_ram_watchdog.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_regression_14b1.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_review_fixes.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_risk_waivers.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_root_file_guard.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_safe_store_replace.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_scroll_control.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_heal.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_improve_header.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_improve_honesty.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_improve_locator.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_improve_reload.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_improve_targets.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_self_improve_verifier.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_semantic_recall.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_session_continuity.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_session_manager.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_smoke_e2e.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_speaker_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_speech_out.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_speech_out_threading.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_spotify_search.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_stability_regressions.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_state_store.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_task_api.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_task_reports.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_task_scheduler.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_task_scheduler_authority.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_task_store.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_telegram_voice.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_text_command_parity.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_token_clear_1008.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_tool_batch.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_tool_recovery.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_tool_registry_validator.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_tool_result_classification.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_toolspec.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_tts_fish.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_tts_kokoro.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_turn_latency.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_turn_memory.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_ui_window.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vault_bridge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vault_maintenance.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vault_writer.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_verification_layer.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_context.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_policy.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_proactive_completion.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_resilience.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_router_policy.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_screen_process_async.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_service.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_silent.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_vision_worker.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_visual_engine.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_cascade_chaos.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_input_pin.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_lock.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_media_persistence.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_mode.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_output.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "tools/test_voice_output_glass_alias.py",
+      "in_graph": false,
+      "changed_since_graph": true,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "tools/test_voice_switch_intent.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_voice_vault_roundtrip.py",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_wake_word_config.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_weather_report.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_websocket_bridge.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_window_awareness.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_youtube_direct_play.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_youtube_grid_match.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_youtube_next_video.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_youtube_volume_routing.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/test_zz_check_gate.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/verify_autonomous_development.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/verify_media_fix.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "tools/verify_voice_route.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/package-lock.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/package.json",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "targeted_source_inspection"
+    },
+    {
+      "path": "ui_src/src/App.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ActivityPanel.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ApprovalPrompt.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/CapabilitiesDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/CommandBar.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/CommandPalette.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ContextPanel.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ConversationDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/CoreStage.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/DevelopmentDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/DiagnosticsDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/Drawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/HudHeader.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/LiveTranscript.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ModelIndicator.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/NeuralCore.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/NotificationRail.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/PathText.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ScheduleDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ScheduledPanel.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/SettingsDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/ShortcutsDrawer.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/SystemPanel.tsx",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/TaskProgress.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/components/VisualWorkspace.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/context.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/development.tsx",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/format.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/notifications.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/schedule.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/shortcuts.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/sounds.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/store.ts",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/transport.ts",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/lib/types.ts",
+      "in_graph": true,
+      "changed_since_graph": true,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/main.tsx",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/src/vite-env.d.ts",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/tsconfig.json",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "ui_src/vite.config.ts",
+      "in_graph": false,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "utils/find_position.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "utils/human_click.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "utils/media_match.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "utils/ordinal_selection.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "utils/scroll.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "windows/media_exclusivity.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    },
+    {
+      "path": "windows/state_sync.py",
+      "in_graph": true,
+      "changed_since_graph": false,
+      "review": "inventory_only"
+    }
+  ],
+  "coverage_note": "All scoped Python parsed; graph and test coverage are separate from source review. Targeted inspection may cover relevant sections, not every line."
+}
