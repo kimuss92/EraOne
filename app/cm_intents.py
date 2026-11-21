@@ -19,6 +19,21 @@ _PUBLISH_INTENT = re.compile(
     r"|\bschedule\s+(the\s+)?(post|reel|carousel|carrousel|story)\b",
     re.IGNORECASE,
 )
+# PF-073: "Draft only, do not publish anything" was routed to the PUBLISH lane (live
+# 2026-11-20 21:24) because the word "publish" matched. A negated publish/post is a
+# prohibition, never an order: it is removed before the publish lane is considered.
+NEGATED_PUBLISH = re.compile(
+    r"\b(?:do\s+not|don'?t|never|not|no|without|nothing\s+to|sans|ne\s+pas|ne\s+rien|pas\s+de)"
+    r"\s+(?:\w+\s+){0,2}?(?:publish\w*|post(?:ing)?|publi\w*|poste[rz]?|schedul\w*)\b"
+    r"(?:\s+(?:anything|it|this|them|these|yet|now|rien))?",
+    re.IGNORECASE,
+)
+
+
+def says_do_not_publish(text: str) -> bool:
+    """True when the order forbids publishing ("do not publish", "sans publier")."""
+    return bool(NEGATED_PUBLISH.search(text or ""))
+
 
 # Content workflow (2026-10-16): Karim generates images/video himself.
 #   package → Era writes the prompts/text/drafts and stops at Gate A (no generation).
@@ -71,7 +86,20 @@ _CAMPAIGN_INTENT = re.compile(r"\b(campaign|campagne)\b", re.IGNORECASE)
 # an ads order when paired with one of these ad-specific terms.
 _ADS_INTENT = re.compile(
     r"\b(meta\s*ads?|facebook\s*ads?|paid\s*(?:ad|campaign)|sponsor(?:ed|ing|isé[e]?)?|"
-    r"publicit[ée]|boost(?:ed|ing)?\s+(?:this\s+)?post|ad\s*budget|budget\s*publicitaire)\b",
+    r"publicit[ée]|boost(?:ed|ing)?\s+(?:this\s+)?post|ad\s*budget|budget\s*publicitaire|"
+    # "boost the last reel / my new video / ce reel" (2026-11-20): only with a media noun, so
+    # "boost engagement" or "boost the volume" never becomes a paid order.
+    # French paid-campaign wording (2026-11-20): "lance une campagne Meta" went to the ORGANIC lane.
+    r"campagnes?\s+(?:meta|facebook|publicitaires?|sponsoris[ée]e?s?|payantes?)|"
+    # 2026-11-20: "Activate the Meta campaign 52593521115440" went to the ORGANIC lane. A
+    # Meta/Facebook campaign, or any campaign named by its numeric id, is a paid one.
+    r"(?:meta|facebook|instagram)\s+(?:ads?\s+)?campaigns?|campaigns?\s+(?:id\s+)?\d{6,}|"
+    r"ads?\s*manager|gestionnaire\s+de\s+publicit[ée]s?|"
+    r"(?:pub|publicit[ée]s?)\s+(?:meta|facebook|instagram)|sponsoris(?:e[rz]?|[ée]e?s?)|"
+    r"booste[rz]?\s+(?:ce\s+|cette\s+|le\s+|la\s+|mon\s+|ma\s+|dernier\s+|derni[èe]re\s+)*"
+    r"(?:post|reel|vid[ée]o|story|carrousel|publication)s?|"
+    r"boost(?:ed|ing)?\s+(?:this\s+|the\s+|my\s+|our\s+|that\s+|last\s+|latest\s+|newest\s+|new\s+)*"
+    r"(?:post|reel|video|story|carousel|publication)s?)\b",
     re.IGNORECASE,
 )
 
@@ -110,7 +138,7 @@ _ADS_REPORT_INTENT = re.compile(
 )
 _ADS_MANAGE_INTENT = re.compile(
     r"\b(?:extend|prolong|prolonge[rz]?|pause|pauser|resume|reprendre|relance[rz]?|scale|"
-    r"duplicate|duplique[rz]?|stop|arr[êe]te[rz]?)\b.{0,30}?\b" + _ADS_TARGET + r"\b"
+    r"duplicate|duplique[rz]?|stop|arr[êe]te[rz]?)\b.{0,60}?\b" + _ADS_TARGET + r"\b"
     r"|\b(?:add|more|increase|raise|reduce|lower|cut|extra|augmente[rz]?|ajoute[rz]?|"
     r"diminue[rz]?|baisse[rz]?)\b.{0,25}?\bbudget\b"
     r"|\b(?:extend|prolong|prolonge[rz]?)\b.{0,25}?\b(?:days?|jours?|weeks?|semaines?|end\s*date|"
@@ -121,8 +149,10 @@ _ADS_MANAGE_INTENT = re.compile(
     # Added 2026-09-25 — "switch placements to manual, remove Facebook Feed" and
     # "pause ad 52579562852040" fell through to BUILD/REPORT and changed nothing.
     # A bare "ad" is still never a target; an ad named by its numeric id is.
-    r"|\b(?:pause|pauser|resume|reprendre|stop|arr[êe]te[rz]?|activate|active[rz]?)\b"
-    r".{0,15}?\bads?\s+(?:id\s+)?\d{6,}"
+    r"|\b(?:pause|pauser|resume|reprendre|stop|arr[êe]te[rz]?|activate|active[rz]?|"
+    r"reactivate|r[ée]active[rz]?|unpause)\b"
+    # an ad, ad set or campaign named by its numeric id (campaign ids added 2026-11-20)
+    r".{0,25}?\b(?:ads?|ad\s*sets?|adsets?|campaigns?|campagnes?)\s+(?:id\s+)?\d{6,}"
     r"|\b(?:remove|exclude|drop|turn\s+off|disable|switch|change|edit|set|keep|retire[rz]?|"
     r"enl[èe]ve[rz]?|exclu(?:re|ez)|d[ée]sactive[rz]?)\b.{0,40}?\b(?:placements?|emplacements?|"
     r"(?:facebook|instagram)\s+(?:feed|reels|stories)|audience\s*network)\b"
@@ -132,7 +162,27 @@ _ADS_MANAGE_INTENT = re.compile(
     r"|\b(?:reallocate|re-allocate|move|shift|transfer|r[ée]allou\w*|d[ée]place[rz]?|"
     r"transf[èe]re[rz]?)\b.{0,40}?\bbudget\b"
     r"|\b(?:change|set|restrict|limit|narrow|exclude|remove)\b.{0,25}?\b(?:ages?|[âa]ges?|"
-    r"genders?|locations?|regions?|cities)\b",
+    r"genders?|locations?|regions?|cities)\b"
+    # Live 2026-11-20 23:28: "I approve the drafts, publish them in the Meta Ads Manager"
+    # and "publish the budget increases on BLACK FRIDYA" went to the ORGANIC publish lane.
+    r"|\b(?:publish|publie[rz]?|approve|approuve[rz]?|confirm|apply|push|activate)\w*\b"
+    r"[^.]{0,60}?\b(?:(?:in|on|dans)\s+(?:the\s+|le\s+)?(?:meta\s+)?ads?\s*manager"
+    r"|budget\s+(?:increases?|changes?|raises?)|(?:ads?|campaigns?|campagnes?)\s+drafts?)\b"
+    # Owner 2026-11-21: campaigns are found BY NAME, never by a number he has to paste:
+    # "pause the Delta Cuisine dressing reel", "boost budget on the Taj Mahal messages
+    # campaign", "rename the active Delta campaigns to the naming standard".
+    r"|\b(?:rename|renomme[rz]?)\b.{0,70}?\b" + _ADS_TARGET + r"\b"
+    # Live 2026-11-21 01:30: "Fix the two Delta Cuisine La Maison Equipee campaign names" and
+    # "Make every active Brico Kitchen campaign name unique" were blocked as not-an-ads-order.
+    r"|\b(?:fix|correct|change|make|update|corrige[rz]?|modifie[rz]?)\b.{0,80}?"
+    r"\b(?:campaigns?|campagnes?)(?:'s)?\s+(?:names?|noms?)\b"
+    r"|\b(?:boost|bump)\w*\b.{0,25}?\bbudget\b"
+    r"|\b(?:pause|pauser|unpause|resume|reprendre|activate|reactivate|r[ée]activ\w*"
+    r"|turn\s+(?:on|off))\b.{0,40}?\b(?:reels?|posts?|carousels?|carrousels?|stor(?:y|ies))\b"
+    # "Extend the winners to 30 November": an end date with a month is a campaign date.
+    r"|\b(?:extend|prolong|prolonge[rz]?)\w*\b.{0,70}?\b(?:to|until|till|through|jusqu'?(?:au|à))"
+    r"\s+(?:the\s+|le\s+)?\d{1,2}(?:st|nd|rd|th|er)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul"
+    r"|aug|sep|oct|nov|dec|janv|f[ée]v|avr|mai|juin|juil|ao[uû]|d[ée]c)\w*",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -232,7 +282,7 @@ def _infer_cm_task_type(text: str) -> str:
         return "revise"
     if _APPROVE_INTENT.search(t):
         return "approve"
-    if _PUBLISH_INTENT.search(t):
+    if _PUBLISH_INTENT.search(NEGATED_PUBLISH.sub(" ", t)):
         return "publish"
     if _PACKAGE_INTENT.search(t):
         return "package"

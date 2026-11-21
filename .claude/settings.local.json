@@ -123,7 +123,8 @@
       "Bash(grep -nEi \"\\(api[_-]?key|token|secret|password|bearer\\)\\\\s*[:=]\\\\s*['\\\\\"]?[A-Za-z0-9_\\\\-]{12,}|sk-[A-Za-z0-9]{10,}|AIza[0-9A-Za-z_\\\\-]{20,}\" docs/sessions/* \"docs/ERAONE UNIFIED MASTER PROMPT.md\" docs/HERMES_SESSION_START.md docs/AUDIT_2026-10-09.md core/llm/adapters/omniroute.py tools/test_omniroute_adapter.py handoff.md TODO.md)",
       "Bash(nvidia-smi --query-gpu=name,memory.total --format=csv)",
       "Bash(ls \"D:/Kokoro/kokoro-multi-lang-v1_0\" | head -20; grep -n \"speaker\\\\|sid\\\\|speed\\\\|26\" \"C:/Users/nesri/OneDrive/Documents/EraOne/core/tts_kokoro.py\" | head -20)",
-      "Bash(cd C:\\\\Users\\\\nesri\\\\OneDrive\\\\Documents\\\\EraOne *)"
+      "Bash(cd C:\\\\Users\\\\nesri\\\\OneDrive\\\\Documents\\\\EraOne *)",
+      "mcp__exa__web_fetch_exa"
     ]
   },
   "enableAllProjectMcpServers": true,

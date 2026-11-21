@@ -49,6 +49,14 @@ defaults:
       # you have it open is a merge conflict nobody asked for.
       cron: "10 3 * * *"
       enabled: true
+    meta_spec_watch:
+      # Mondays 11:00 (Karim 2026-11-20: Era is not running at 04:00). Read-only: compares Meta's
+      # help-center rules (button availability, conversion locations, messaging and policy
+      # articles) with the last digest and flags a difference in every ads brief
+      # (core/meta_spec_watch.py). Never edits anything. If Era was off at that hour, a catch-up
+      # check runs 5 minutes after the next start (era_scheduler._schedule_meta_watch_catchup).
+      cron: "0 11 * * 1"
+      enabled: true
 
 # ============================================================================
 # BRANDS
@@ -806,15 +814,30 @@ brands:
     # GROUP") and flagged the conflict rather than guessing. Karim confirmed
     # directly, same day: act_33183820 — fable_meta.md's original 2026-07-07
     # pick — is the correct account. The other candidate is now excluded.
+    # Motion Design: see ceram_quartz.motion. Logos added 2026-11-20 (1192 px).
+    motion:
+      format: "1080x1920"
+      text_policy: ask
+      text_language: French
+      logos:
+        transparent: "D:\\master folder\\delta cuisine\\logos\\logo dc transparent.png"   # 1192 px, 80% clear
+        with_background: "D:\\master folder\\delta cuisine\\logos\\logo dc.png"                # 1192 px, opaque
     ads:
       enabled: true                     # OAuth confirmed reachable headless 2026-07-20
+      campaign_code: DC                 # campaign naming standard (Karim 2026-11-21)
       meta_ad_account_id: "act_33183820"   # CONFIRMED by Karim 2026-07-20
       meta_ad_account_excluded:
       - {id: "act_1033832265075508", name: "DELTA CUISINE GROUP", business: "DeltaCuisine",
         note: "flagged 2026-07-20 as a look-alike candidate; Karim confirmed the SAME
           day this is NOT the account to use — never select it"}
       page_id: "115558078454323"        # matches platforms.facebook.composio_page_id — no conflict here
-      default_objective: OUTCOME_LEADS  # premium custom kitchens → lead/DM driven
+      # The Page's linked WhatsApp Business number (+216 22 806 608). A WHATSAPP ad set must
+      # carry it in promoted_object as page_whatsapp_number_id (Meta accepted it 2026-11-20).
+      whatsapp_number_id: "29253255124257898"
+      # Interactions (messages on Messenger/Instagram/WhatsApp) is Delta's main campaign
+      # (Karim 2026-11-20). OUTCOME_LEADS only for a qualified-lead chat on Messenger/IG; Meta's
+      # button table has no WhatsApp button under Leads (see the era-ads-manager skill gate).
+      default_objective: OUTCOME_ENGAGEMENT
       currency: EUR                     # confirmed by Karim 2026-09-25 (was TND). Delta takes the big share of the shared act_33183820 budget; Brico Kitchen the smaller one.
       # Spec derived from the brand's real IG performance report (fable_meta.md
       # Step 3). Build as a saved audience with this exact name if the Ads MCP
@@ -868,6 +891,7 @@ brands:
 
     ads:
       enabled: true
+      campaign_code: BK                 # campaign naming standard (Karim 2026-11-21)
       scope: boost_only                 # published posts only — never create content for this brand
       meta_ad_account_id: "act_33183820"   # SHARED with delta_cuisine (same group, same card)
       meta_ad_account_excluded:
@@ -1185,8 +1209,31 @@ brands:
     # business "Ceram Quartz" — identical to fable_meta.md's 2026-07-07 pick,
     # its page_id matches platforms.facebook.composio_page_id exactly, and
     # Karim independently confirmed this same ID directly the same day.
+    # Motion Design (code-built animation, no video model): where the brand's assets live.
+    # Used by the crew's motion.brief capability and the motion-design skill (core/motion
+    # brief, 2026-11-20). text_policy: the skill ASKS before every build (owner rule):
+    # French text, or no text (Karim adds it later); never Arabic or English on screen.
+    motion:
+      format: "1080x1920"
+      text_policy: ask            # ask | french | none; "ask" = the build asks Karim first
+      text_language: French
+      logos:
+        transparent: "D:\\master folder\\ceram quartz\\logos\\logo ceram transparent.png"   # 11811 px, 86% clear
+        with_background: "D:\\master folder\\ceram quartz\\logos\\logo ceram.png"            # 11811 px, opaque
+        master_psd: "D:\\master folder\\ceram quartz\\logos\\logo ceram 1m.psd"
+      textures_dir: "D:\\master folder\\ceram quartz\\textures"   # the master library now includes Alya, HAZE BREZEE, PALETINO, TAJ ROYAL (410x819 px except TAJ ROYAL), copied 2026-11-20
+      references_dir: "D:\\master folder\\ceram quartz\\references"
+      # The brand's motion look (Karim 2026-11-20: the first build looked like the OLD reference and he did
+      # not like it; the winning style follows https://www.pinterest.com/pin/415949715610741662/).
+      template_dir: "D:\\master folder\\ceram quartz\\motion\\_template_ceram_3d"
+      reference_url: "https://www.pinterest.com/pin/415949715610741662/"
+      style: "BACKGROUND (owner rule 2026-11-20): never blue navy. Pick ONE by the texture: very dark / near-black studio (#0A0D10) for light or white textures; Ceram Quartz logo petrol (#103C4E, deep, lit, not a flat wall) as the brand variant; clean white/soft light-grey studio for dark or black textures. SLABS look normal: thin real slabs (about 3 cm, never chunky), true proportions (about 1:2), the real texture, matte-satin finish with a soft edge highlight, no mirror gloss, no glow. ANIMATION (from the White Quartz Premium Product Commercial reference, motion only): 1) one tall slab leaning, slow push-in while a hard diagonal light band sweeps over it; 2) camera drops to a macro of the surface and a plinth edge; 3) a dense row of slabs leaning like files, camera travels along it; 4) the row bursts into floating square and rectangular tiles in zero gravity, hard light and shadow; 5) tiles assemble into one upright slab standing on a thin plinth; 6) soft flash to the light background, brand logo, hold. One continuous camera push, no loops, no random jumps. Text only French or none: name top-left, contact lower-left."
+      background_rule: "dark (near-black) OR logo petrol #103C4E OR white, chosen by the texture's lightness: light textures on dark/petrol, dark textures on white. Never blue navy, never a flat teal wall."
+      animation_reference: "D:\\telechargements\\White Quartz Premium Product Commercial.mp4 (720x1280, 12 s; analysis in C:\\Users\\nesri\\.era\\motion_refs\\white-quartz-ref)"
+      avoid: "Blue navy backgrounds; chunky, glossy or glowing slabs; the old teal (#143D4B) flat-wall Monolithe/Nuancier look; blurred logo reveal; tagline-led end card."
     ads:
       enabled: true                     # OAuth confirmed reachable headless 2026-07-20
+      campaign_code: CQ                 # campaign naming standard (Karim 2026-11-21)
       meta_ad_account_id: "act_1698581228193609"   # confirmed 2026-07-20, no conflict
       page_id: "788466647689882"        # matches platforms.facebook.composio_page_id
       default_objective: OUTCOME_LEADS  # sales close via DM/WhatsApp/phone

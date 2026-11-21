@@ -101,7 +101,33 @@ def _run_vault_maintenance():
     return report
 
 
-GLOBAL_TASK_MAP = {"vault_maintenance": _run_vault_maintenance}
+def _run_meta_spec_watch():
+    """Weekly: compare Meta's help-center rules with the last digest (core/meta_spec_watch.py).
+
+    Read-only. A real difference is written to the vault Inbox and flagged in every ads
+    brief; it never edits the skill or a campaign. A change earns one Telegram message."""
+    from core import meta_spec_watch
+
+    st = meta_spec_watch.check()
+    print(f"[era_scheduler] {time.strftime('%Y-%m-%d %H:%M')} meta_spec_watch -> {st}")
+    if st.get("changed") and not st.get("acknowledged", True):
+        try:
+            from app.notify import _tg_notify
+
+            _tg_notify(
+                "Meta may have changed its ads rules: "
+                + ", ".join(st["changed"])
+                + ". Review the Inbox note, update the era-ads-manager skill, then ack."
+            )
+        except Exception as exc:
+            print(f"[era_scheduler] meta watch alert not sent: {exc}")
+    return st
+
+
+GLOBAL_TASK_MAP = {
+    "vault_maintenance": _run_vault_maintenance,
+    "meta_spec_watch": _run_meta_spec_watch,
+}
 
 
 def _register_global(cfg, registered):
@@ -117,6 +143,31 @@ def _register_global(cfg, registered):
             misfire_grace_time=3600,
         )
         registered.append(("_global", task_key, sched["cron"]))
+    _schedule_meta_watch_catchup(cfg)
+
+
+def _schedule_meta_watch_catchup(cfg):
+    """Era is often not running at the scheduled hour, and APScheduler drops a run missed by
+    more than the grace time. If the Meta watch has no good check from the last week, run one
+    shortly after startup (a one-off job, 5 minutes in, off the startup path)."""
+    try:
+        sched = ((cfg.get("defaults") or {}).get("schedules") or {}).get("meta_spec_watch") or {}
+        if not sched.get("enabled"):
+            return
+        from datetime import datetime, timedelta
+
+        from core import meta_spec_watch
+
+        if meta_spec_watch.needs_catchup():
+            _scheduler.add_job(
+                _run_meta_spec_watch,
+                "date",
+                run_date=datetime.now() + timedelta(minutes=5),
+                id="_global:meta_spec_watch:catchup",
+                replace_existing=True,
+            )
+    except Exception as exc:  # noqa: BLE001 - a catch-up never blocks the scheduler
+        print(f"[era_scheduler] meta watch catch-up not scheduled: {exc}")
 
 
 def reload():

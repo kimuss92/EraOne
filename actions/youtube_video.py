@@ -105,18 +105,10 @@ def _is_valid_youtube_url(url: str) -> bool:
     return bool(re.search(r"(youtube\.com|youtu\.be)", url or ""))
 
 
-def _ask_for_url(prompt_text: str = "YouTube video URL:") -> str | None:
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
-
-        root = tk._default_root or tk.Tk()
-        root.withdraw()
-        url = simpledialog.askstring("Era One", prompt_text, parent=root)
-        return url.strip() if url else None
-    except Exception as e:
-        print(f"[YouTube] ⚠️ UI Dialog failed: {e}")
-        return None
+_NO_VIDEO_OPEN = (
+    "No YouTube video is open and no link was given, sir. "
+    "Tell me which video, or open one and ask again."
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -620,8 +612,8 @@ def _handle_summarize(params: dict, player, speak, browser_name: str) -> str:
         except Exception:
             pass
     if not url:
-        url = _ask_for_url("Paste the YouTube video URL:")
-    if not url or not _is_valid_youtube_url(url):
+        return _NO_VIDEO_OPEN
+    if not _is_valid_youtube_url(url):
         return "A valid YouTube URL is required, sir."
     video_id = _extract_video_id(url)
     if not video_id:
@@ -658,8 +650,8 @@ def _handle_get_info(params: dict, player, speak, browser_name: str) -> str:
         except Exception:
             pass
     if not url:
-        url = _ask_for_url("Paste the YouTube video URL:")
-    if not url or not _is_valid_youtube_url(url):
+        return _NO_VIDEO_OPEN
+    if not _is_valid_youtube_url(url):
         return "Please provide a valid YouTube URL, sir."
     video_id = _extract_video_id(url)
     if not video_id:

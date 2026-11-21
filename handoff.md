@@ -9,6 +9,108 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 > **EVERY AGENT, BEFORE ANY EDIT:** read `docs/PROTECTED_FIXES.md` and follow
 > `AGENTS.md` §0. The gate re-runs every protected fix's guard tests.
 
+### 2026-11-21 · Claude · Live: renames published; owner's words reach the agent; unique names (PF-079)
+- **Live 01:12–01:24 (after PF-078):** all three runs exited 0.
+  - Delta rename: 1.65M input tokens, was 3.5M.
+  - Report: 0.83M.
+  - Brico: 8 campaigns, 4.0M tokens over 32 turns, phantom $16.
+- **Results:**
+  - Delta: vente flash renamed (`DC - POST_VenteFlash - MSG - TN_NOV26`); names published and read back live. Ended 2025 campaigns were left as drafts (correct: active only).
+  - Brico: 8 campaigns renamed BK and published.
+- **Bugs found:**
+  - Era paraphrased the owner's order into "include 'vente flash'", so the agent wrote `_VenteFlash` into two La Maison Équipée names.
+  - Two Brico campaigns got the same name.
+  - Black Friday and vente flash still end 2026-11-22: last night's stop_time 30 Nov never went live.
+- **Fixed:**
+  - `_with_owner_words` appends the owner's exact words to every CM order.
+  - The naming rule now requires unique names, with the Asset taken from the post, never from the order.
+  - Windows: 800 protected guards pass.
+- **Correction run 01:30:** both corrections were BLOCKED by PF-074, because "fix/make ... campaign names" and "extend <long names> campaigns to 30 November" were not recognised as ads orders. Router fixed: verbs + "campaign name(s)", and wider extend windows.
+- **Correction run 01:45–01:53:**
+  - Delta: the two La Maison Équipée names fixed and read back live (`DC - REEL_LaMaisonEquipee - MSG - TN_NOV26`, `DC - POST_LaMaisonEquipee - MSG - TN_NOV26`).
+  - Brico: the duplicate names were made unique (InfinityLaveVaisselle, LaveLingeIN, LaveVaisselle) and published.
+  - Input tokens: 0.39M–1.79M per run.
+- **NOT live: the extension to 30 Nov.**
+  - The end dates are on the ad sets (52594979606440 BLACK FRIDAY, 52594130859040 vente flash).
+  - `end_time` was staged on both, but Meta attached error 2446289 to each draft: "the post/reel selected for your ad is not available (deleted or no permission)". The run also activated the campaigns instead of the ad sets.
+  - Both still end 2026-11-22. Owner must do it in Ads Manager.
+  - Brief now: publish the edited object itself; a draft with active_errors is NOT live and is said first; never "done" without a read-back.
+- **Seen:** Gemini still calls community_manager with a report's suggested command; PF-074 blocks it correctly (01:52, 01:53).
+- **Owner items:**
+  - Extend the two ad sets in Ads Manager before tonight.
+  - Check the draft "Delta Cuisine - Interactions - WhatsApp Messages" budget (shown as 500 €/day; probably 5 €/day in cents).
+  - Decide whether to discard the 8 rename drafts on ended 2025 campaigns.
+
+### 2026-11-21 · Claude · Lean ads runs: ~120 KB → ~33 KB re-sent per step; safe publishing of staged changes (PF-078)
+- **Cause:**
+  - The CM runs only on the free `era-cm` gateway (the Claude subscriptions were removed in PF-043), which does not cache.
+  - Each step re-sent the 66 KB brief (44 vault notes) plus both ads skills loaded whole (53 KB).
+  - Claude Code prices the unrecognised free model as premium ("costBasis unknown"), so the "$15" was phantom, but the cap still killed runs before their read-back.
+- **Changed:**
+  - Ads report/manage runs get a focused vault: 6 paid-media notes, ≤12 KB.
+  - They read exact skill sections by offset/limit, with the Skill tool disallowed.
+  - The manage brief adds lean rules: one campaign-level query, never Read tool-output files, each change once, one read-back.
+  - New safe-publish rule: `ads_activate_entity` per campaign, only when ACTIVE and its draft holds only this run's changes.
+  - The cap follows the route: 40 on the free route, 15 when a paid Claude brain is pinned.
+  - MSG for any chat destination; "active" = effective_status ACTIVE and end date not past.
+  - Briefs name only their own brand (a Delta product example had leaked into the Ceram brief).
+  - Lessons: approvals with judgement are lessons again; orders naming Ads Manager are one-offs.
+- **Verified:** Windows: 798 protected guards pass, registry OK. Manage brief 11 KB + ~9 KB of skill sections; report 8 KB + ~22 KB.
+
+### 2026-11-21 · Claude · Campaign naming standard + find-by-name, never by id (PF-077)
+- **Owner order:** every campaign is named `[DC|CQ] - [FORMAT]_[Asset] - [OBJECTIVE] - [CC]_[MONYY]`; rename the ACTIVE ones with a before/after table; find campaigns from his words, never ask for a numeric id.
+- **Changed:**
+  - `brands.yaml` gets `ads.campaign_code` (DC, CQ, BK for Brico Kitchen — owner 2026-11-21: "use BK for Brico Kitchen and rename them too").
+  - `era_dispatch._ads_naming_rule` goes into the report, manage and build briefs: the pattern, the objective mapping, find-by-name, "all active" = this brand's Page, a rename is its own confirmation with read-back plus a table in `ads_reports`.
+  - The manage TARGET line no longer stops to ask for an id.
+  - Ads skill: new section with the same rules.
+  - Era's community pack and the voice manual: never ask for a number; name-based example phrases.
+  - `cm_intents`: rename … campaigns, boost/bump … budget, and pause/activate … reel/post/carousel/story are ads manage orders.
+- **Verified:** Windows: 795 protected guards pass, registry OK.
+- **Live 2026-11-21 00:15-00:28, both runs stopped by the $15 cap (`_ADS_OPS_MAX_BUDGET_USD`, error_max_budget_usd):**
+  - The gateway does not cache, so each run re-read 3.5-3.7M input tokens.
+  - Rename run: 10 Delta campaigns renamed with `ads_update_entity`, but every rename is a Meta DRAFT (`is_draft: true`), so nothing is live yet. Brico campaigns were correctly left alone. The table is in `D:\master folder\delta cuisine\ads_reports\campaign_rename_2026-11-21.md`.
+  - Rename run, issues: vente flash (52594130859240) was missing; old 2025 campaigns were counted as active; OUTCOME_LEADS with WhatsApp was named MSG.
+  - Find-by-name run: it found BLACK FRIDYA (52594979610240) and vente flash (52594130859240) WITHOUT an id. It staged stop_time 2026-11-30 on both, then `ads_activate_entity` returned PUBLISHING (asynchronous) for both. The cap hit before the read-back, so the live state is unverified.
+  - The Brico Kitchen rename was not sent: at the current cost it would stop half-done.
+
+### 2026-11-21 · Claude · Owner's "yes" to an ads change was blocked 4×; ads-draft publish ran the organic lane (PF-074, PF-075 amended)
+- **Found in the CM logs (2026-11-20 23:23–23:44, owner's own session):**
+  - 23:23 "pause appel and electro, move their budget to the two winners" ran (owner's words). Read back: Appel and Electro PAUSED; BLACK FRIDYA 11.50 EUR/day and vente flash 12.50 EUR/day were only STAGED AS META DRAFTS. They are still not published.
+  - 23:28 "I approve the drafts, publish them in the Meta Ads Manager" arrived as task_type=publish. It ran the ORGANIC publish brief: 4.5 min, ~3.3M input tokens, "no approved assets", nothing changed.
+  - 23:40–23:44: Era asked "Shall I extend BLACK FRIDYA and vente flash to 30 Nov?" and the owner said yes four times ("proceed", "send that request", "yes", "yes"). Every call was BLOCKED, because PF-074 required the exact same order text and Gemini re-worded it each time.
+  - Both orders were stored as Delta "lessons".
+- **Fixed:**
+  - A go-ahead within 120 s of a refusal (yes / proceed / do it / send it / tell the community manager / oui / vas-y, never with no / don't / wait) now runs the REFUSED order Era asked about. Each utterance approves only one order.
+  - An inferred ads lane beats the model's organic lane.
+  - Publishing ads drafts or budget increases in Ads Manager, and "extend … to <day> <month>", are ads manage orders.
+  - An order that starts with a do-it-now verb and has no rule word is never a lesson. Removed the two lessons; backup at `~/.era/backups/cm_lessons.before-cleanup-20261121.json`.
+- **Verified:**
+  - Windows: 791 protected guards pass, registry OK, ruff clean.
+  - The live sequence is replayed in `test_a_yes_after_a_refusal_runs_the_refused_order_even_when_reworded`.
+- **Not live-tested:** Era must be restarted to load the fix. Then say "publish the budget increases on BLACK FRIDYA and vente flash", or "yes" after Era asks.
+- **Open (owner):** the two budget increases are still unpublished Meta drafts. The ads skill forbids publish-all (the account holds unrelated drafts), so publish only those two objects.
+
+### 2026-11-20 · Claude · Campaign reactivated; lessons cleaned; any file/link/text/misheard input reaches CM (PF-075, PF-076)
+Owner: reactivate the campaign, re-run the last test, correct contradictory lessons/feedback, and make Era "smart like Claude" with any file type, link or text, also outside the master folder, and with misheard input.
+Done: (1) Delta campaign "Appel La Maison Équipée" 52593521115440 reactivated by a bridge order (agent read back ACTIVE, 6 EUR/day, end 23 Nov); that order first exposed that "Activate the Meta campaign <id>" routed to the ORGANIC lane and "Unpause the Meta ads campaign X" to BUILD; a Meta/numeric-id campaign is now an ads order and activate/reactivate/unpause + id is manage (no-number activation still goes to build = paused drafts, PF-063). (2) Lessons: 15 of 16 stored "lessons" were one-off orders rendered into every brief as standing rules ("Abort all tasks related to the Meta Ads campaign...", "CONNECTIVITY TEST ONLY...", the test's "do not publish", "said 3x — firm rule"). Removed with `cm_learning.forget_lessons` (backup `~/.era/backups/cm_lessons.before-cleanup-20261120.json`); kept Delta "too much spend — adjust budget down". `record_feedback` now skips one-off orders and `render_lessons` never renders one (PF-075). user_prefs has no CM rules; the vault run logs are `era_brief: false`; feedback_memory.jsonl is a history, not a brief input. (3) PF-076: `ground_order` lists any file type (text inlined), paths outside the master folder, links (WebFetch), "the file I sent" (Telegram attachment, `~/.era/last_attachment.json`), and fuzzy-matches misheard paths/names (spoken numbers = digits); Telegram documents/photos/videos are saved to `~/.era/inbox` and their caption runs as the order; the `community_manager` order parameter tells Gemini to copy paths/links/text verbatim. Real-disk check: "...\motion\ceram reel v3\out" -> `ceram-reel-v3\out` (stated in the brief), "'ceram alya reel v three francais'" -> the v3 file, TODO.md + a link inlined/listed.
+Correction to earlier: 'new 2' and 'HB' DO exist now (`references\videos\new 2.mp4`, `hb.mp4`); both were moved there at 21:32:55, after the 21:20 refusal, so "not found" was true when said (by the owner or the 21:30 Ceram run: not determined).
+Verified: 787 protected guards pass on Windows, registry OK, ruff clean; 88 CM tests. `tools/test_file_controller.py::TestDiagnosisReportRead` fails because it reads the machine's real self-diagnosis report (unrelated). Root `test_memory_guard.py` expects save_memory to return "ok" (changed 11-17 by another session; unrelated).
+
+### 2026-11-20 · Claude · Live bridge test of the CM fixes: 4 more bugs found and fixed (PF-072 ext., PF-073, PF-074)
+Owner asked for a real live test; typed commands sent to the running Era over the LAN bridge (token read from the user env, never printed), Era rebooted after each fix.
+Found live and fixed: (1) the "couldn't find 'new 2'" refusal reached Gemini as plain text and she invented a folder (`...EraOne\brands\ceram_quartz`); failures are now spoken verbatim and the error names the real brand folder. (2) The verbatim refusal was then muted by the CM hand-off window (Era said nothing); `_deliver_or_queue_cm_report` now closes the window before speaking. (3) "Draft only, do not publish anything" was routed to the PUBLISH lane (Composio pre-approved); the model only wrote two caption files, nothing posted. `_infer_cm_task_type` now ignores negated publishing, `run_task` refuses a publish run on such an order, and `cm_learning.carries_judgement` no longer stores "do not publish" as a brand lesson (PF-073). (4) **A Delta report ended "Command: pause campaign Appel La Maison Équipée" and Gemini executed it: live campaign 52593521115440 was PAUSED at 21:45 without the owner's request. It is still paused; reactivating is the owner's decision.** `_ads_change_refusal` now blocks any ads manage/build call unless the owner's own latest words asked for an ads change (or a "yes" right after Era asked about that exact order); it returns a FAILED result that forbids claiming a hand-off (PF-074). Live re-test: Era's own "extend Black Friday to 30 Nov" was blocked (`cm.ads.change_refused`), nothing dispatched.
+Verified live: C (unknown reels: exact refusal spoken), B (two-reel folder, weekly lane, two caption files `... - francais_description.txt` / `... - sans texte_description.txt` in `motion\ceram-reel-v3\out`), A (report delivered; "what did the Meta check say?" answered from the stored result). Windows: 780 protected guards pass, registry OK, ruff clean.
+NOT fixed / owner: the bogus Ceram lesson "material/avoid: Create Facebook descriptions ... do not publish anything" (3 hits) is still in `memory/cm_lessons.json` (guarded state file, left for the owner to remove); the earlier publish-lane run also left `Ceram_Alya_reel_v3_*_description.txt` duplicates in that folder; Era may still call `crew` on a report's suggestion (read-only, not gated); the B run's final message was about Telegram timeouts, so Era's spoken summary of it was thin; the OmniRoute gateway took 11 min for a 2-min run once.
+Final re-run (after the FAILED-result wording change) did not happen: the report order arrived 15 s after reconnect, Gemini dropped (1006) 16 s later and the resume replayed the greeting tail ("task on your list?") instead of the order; no CM job started. The FAILED-result wording is tested, not live-verified; the lost-order-on-1006 is a separate reconnect issue, not investigated.
+
+### 2026-11-20 · Claude · CM orders reach a model that can read them; reels grounded; last CM result readable (PF-071, PF-072)
+Owner: Era said she "handed the Meta check to the CM agent but has no output" and the reel descriptions were about something else. Root cause (real logs, `~/.era/cm_logs`): both bad runs (Ceram 15:12, Delta 18:06) ran on local Qwen with `inputTokens: 2050`: Ollama's context on this PC is 2048 (`/api/ps`), the brief is 10-65 KB and Claude Code adds ~20k, so the model never saw the order and said "I've loaded my full suite of skills" (not caught by `_hollow_reply`), which Era spoke as the result. Separately a result was only spoken/queued, never stored, and nothing resolved 'new 2'/'HB' to real files.
+Changed: `era_dispatch.py` (`_routes_for` skips the local route when its context cannot hold overhead+brief, `_local_ctx`, broader `_hollow_reply`, `ground_order` wired before `build_brief`), `app/era_live/cm_flow.py` (`_record_cm_outcome` -> `~/.era/cm_last_result.json`), `app/era_live/tool_dispatch.py` (status question + session prompt "LAST COMMUNITY-MANAGER RESULT"), `tools/test_cm_grounding.py` (new), `tools/test_ads_dispatch.py` (autouse fixture pinning `ERA_CM_LOCAL_CTX`), `docs/PROTECTED_FIXES.md` (PF-071, PF-072, PF-056 amended).
+Verified (Windows): 772 protected guards pass, registry OK, ruff clean. Live, real `run_task`: (A) Delta Meta report through `_run_cm_flow_job` returned a real six-campaign report in ~1-2 min, stored and readable (Telegram stubbed); (B) two-reel folder `motion\ceram-reel-v3\out` -> plan naming exactly the two real files (Alya, French captions), local route skipped (`local_ctx 2048`); (C) `'new 2'`/`'HB'`, a missing folder and an empty folder are refused in under a second, nothing spawned.
+NOT verified: Era speaking the stored result by voice after a restart; 'new 2' and 'HB' do not exist under `D:\master folder\ceram quartz`, so give their folder path. Slow/queued sub-agent and consecutive multi-job cases were reasoned from code, not run. To use the local model for CM again: raise `OLLAMA_CONTEXT_LENGTH` (32768+) and set `ERA_CM_LOCAL_CTX`.
+**Incident:** while tidying ruff's reformat I ran `git checkout tools/test_ads_dispatch.py`, which discarded that file's UNCOMMITTED changes (the PF-056/057/060-062 guard tests; HEAD never had them). Restored from Claude Code's file-history backup v7 (2026-11-20 10:39) plus my fixture: all 12 registry-cited tests are back and pass (97 in the three CM test files). That backup is a pre-edit snapshot, so an edit made after 10:39 in that file could be missing: review `git diff tools/test_ads_dispatch.py`. The copy as it was right after my checkout is kept in the session scratchpad.
+
 ### 2026-11-20 · Claude · Post-restart check: CM hollow reply (PF-069), slow close (PF-070)
 Restarted Era (supervisor relaunch flag) and checked live logs. Working: browser idle release (CDP dropped ~60 s after use, twice; it reattaches whenever Spotify's "browser media blanket pause" runs), "stay silent" then "Era" (15:10-15:11), crew (Tom answered through Hermes in 4.5 s; last real failure was a Hermes 429 usage limit at 10:10). Found and fixed: a Ceram CM run on local Qwen answered "I'm ready to help!", wrote 0 files and was logged ok (now falls to the next route, else fails honestly: `era_dispatch._hollow_reply`); "Close Photoshop" said "still running" 0.5 s after it closed (close now polls up to 15 s). Not re-run live: the Ceram descriptions order, a close after restart. Uncommitted (with others' work).
 

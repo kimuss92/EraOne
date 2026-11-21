@@ -63,12 +63,47 @@ class ModelRouteMixin:
     def model_override(self) -> str | None:
         return getattr(self, "_model_override", None)
 
+    def _sync_task_brain(self, token: str | None) -> str | None:
+        """Keep the task brain (core/llm/brains.py) in step with spoken orders.
+
+        Returns the line to say for the brain-only tokens (OmniRoute, status); returns
+        None for the alias tokens, which also set the brain but then continue through
+        the normal alias override. Never raises."""
+        try:
+            from core.llm import brains
+
+            if token == "brain:status":
+                brains.refresh_async()
+                states = brains.cached_snapshot()
+                probed = any(s.checked_at for s in states.values())
+                return (
+                    brains.status_line(states)
+                    if probed
+                    else "Checking all three brains now; ask me again in a moment."
+                )
+            if token == "brain:omniroute":
+                brains.set_choice("omniroute")
+                brains.refresh_async()
+                return brains.pick("normal", brains.cached_snapshot()).describe()
+            mapped = {"era.reason": "claude", "era.deep": "claude", "era.classify": "local"}
+            if token == MODEL_INTENT_AUTO:
+                brains.set_choice("auto")
+            elif token in mapped:
+                brains.set_choice(mapped[token])
+                brains.refresh_async()
+        except Exception:  # noqa: BLE001 - a brain preference never breaks the handler
+            return None
+        return None
+
     def apply_model_override(self, token: str | None) -> str:
         """Set or clear the override. Returns the line to show the user.
 
         Never raises: this runs from a text-command handler, and a bad word
         should cost an explanation, not the handler.
         """
+        brain_message = self._sync_task_brain(token)
+        if brain_message is not None:
+            return brain_message
         if token == MODEL_INTENT_AUTO:
             previous = self.model_override
             self._model_override = None

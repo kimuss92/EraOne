@@ -1,0 +1,19 @@
+I want to create a prompt for Era One in a new chat. She is failing on key media control tasks.
+
+1. Issue with YouTube: When I ask her to play a song on YouTube, she opens the browser but does not play the result. Trying to play automatically on new tab failed. I need her to successfully and automatically control YouTube playback via standard browser commands or by fixing direct playback.
+2. Issue with Spotify: When I ask her to play my specific track, like 'Sabr El Rijal', she keeps searching for a different song ('Savad Al Ghaim') or failing to start playback at all, even after repeated attempts.
+3. Issue with Crew and Fixes: When she tries to fix issues with her crew (Drew or Cody), the fixes are not sticking and commands continue to fail, like the recent attempts to hide HUD panels.
+
+Please analyze these issues and show that you are working with the crew to find permanent solutions, not just trying temporary fixes that don't work. The goal is for these commands to work perfectly.
+
+Here are further strategic details to help you fix this, in collaboration with the crew:
+
+*   Crew Coordination Issue: Instead of trying simple, disconnected fixes, Laura must coordinate an integrated approach. Drew needs to research the EXACT command payloads visual_engine expects by reading the engine source. Cody must then update the voice command code (MODEL_COMMANDS.md, visual_engine dispatcher) and run rigorous unit tests for the FULL voice-to-action pipeline (including transcript parsing) using valid semantic IDs. Nabar should verify these tests are conclusive and cover regressions.
+*   Media Control Strategy: Stop generic open_app or simple click attempts for media. For YouTube, analyze the DOM to interact reliably. For Spotify, fix the search-and-play logic to handle exact titles consistently and verify playback directly through its API.
+*   General Rule: If a fix for a problem is deployed and fails, root cause analysis must be escalated immediately instead of blindly repeating the failed approach. Every failure should add a diagnostic case to prevents future regression.
+
+*   GENERALIZED ENGINEERING REQUIREMENT: Moving forward, the crew (particularly Cody and Drew) must prioritize systemic fixes over isolated, symptomatic patches. For ANY reported capability failure:
+    1.   Drew MUST conduct a thorough root cause analysis, documenting the specific source module, configuration file, or API interaction at fault.
+    2.   Cody MUST implement a generalized solution within the core functionality (e.g., dispatcher, parser, provider module) that resolves the direct issue AND proactively prevents similar failures in related commands or scenarios.
+    3.   Nabar MUST verify that the solution is comprehensive and does not introduce regressions, using automated testing wherever possible.
+    The objective is permanent, reliable function, not temporary workarounds.

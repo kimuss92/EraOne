@@ -6,7 +6,7 @@
 
 This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 
-**457 source modules** · 155,730 lines · 322 test modules · 61 declared tools · 57 registered actions
+**462 source modules** · 157,638 lines · 329 test modules · 61 declared tools · 57 registered actions
 
 ## 1. Where do I go?
 
@@ -16,7 +16,7 @@ This is the map. Find the subsystem, jump to the file, skip the repo-wide scan.
 | **Tool dispatch & declarations** | a tool is not called, called wrongly, or needs adding | `app/era_live/tool_dispatch.py`, `app/tool_declarations.py` |
 | **HUD (browser UI)** | anything the user SEES | `app/hud/__init__.py`, `app/hud/api.py`, `app/hud/approval.py`, `app/hud/audio_route.py` _(+25 more)_ |
 | **Safety & confirmation** | gates, approvals, owner-only checks, abort | `core/confirmation.py`, `core/confirmation_preview.py`, `core/input_safety_gate.py`, `core/panic_stop.py` _(+3 more)_ |
-| **Model routing & Claude** | which model answers, cost, quota failover, Claude CLI | `core/llm/__init__.py`, `core/llm/adapters/__init__.py`, `core/llm/adapters/claude_cli.py`, `core/llm/adapters/claude_voice.py` _(+17 more)_ |
+| **Model routing & Claude** | which model answers, cost, quota failover, Claude CLI | `core/llm/__init__.py`, `core/llm/adapters/__init__.py`, `core/llm/adapters/claude_cli.py`, `core/llm/adapters/claude_voice.py` _(+18 more)_ |
 | **Memory** | recall, save_memory, long-term facts | `core/intent_memory.py`, `core/memory_intent.py`, `core/turn_memory.py`, `memory/__init__.py` _(+10 more)_ |
 | **Actions (what Era can DO)** | desktop, browser, media, files, apps | `actions/_netflix/__init__.py`, `actions/_netflix/js_snippets.py`, `actions/_netflix/player_api.py`, `actions/_netflix/player_js.py` _(+64 more)_ |
 | **Vision** | screen understanding | `core/vision_classifier.py`, `core/vision_config.py`, `core/vision_context.py`, `core/vision_ollama.py` _(+6 more)_ |
@@ -101,31 +101,31 @@ Most-imported first. A change here has the widest blast radius.
 
 | Module | Imported by | Purpose |
 |---|---|---|
-| `core.tool_result` | 99 |  |
+| `core.tool_result` | 101 |  |
 | `core.utils` | 94 |  |
 | `core.logger` | 62 |  |
 | `app.era_live.tool_dispatch` | 51 | Tool dispatch + tool result handling + session config for EraLive (from main.py). |
 | `app.hud.events` | 51 | The HUD's single, truthful event stream and agent state machine. |
 | `core.cancel_registry` | 47 | Per-task cancel tokens for work already in flight. |
-| `core.win_subprocess` | 41 | One definition of "run a helper program without flashing a window at Karim". |
+| `core.win_subprocess` | 42 | One definition of "run a helper program without flashing a window at Karim". |
 | `app.era_live` | 39 | EraLive behavioral mixins (extracted from main.py). |
 | `core.llm.types` | 39 | Provider-neutral request/response types for Era's LLM layer. |
 | `core.pending_confirmation` | 35 |  |
 | `core.safety_guard` | 33 |  |
 | `app.hud` | 32 | Localhost HUD layer: event bus, HTTP/WebSocket server glue, launcher helpers. |
 | `main` | 30 |  |
+| `core.llm` | 28 | Provider-neutral LLM layer for Era One. |
 | `core.llm.registry` | 28 | Alias registry — the one place that maps Era's internal model aliases to a provider and a  |
+| `era_dispatch` | 28 | era_dispatch.py — Era One → Claude Code dispatcher. |
 | `actions.netflix_control` | 26 |  |
-| `app.era_live.audio` | 25 | Audio I/O loops for EraLive (extracted from main.py). |
+| `app.era_live.audio` | 26 | Audio I/O loops for EraLive (extracted from main.py). |
+| `app.text_intents` | 26 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
+| `actions.browser_control` | 25 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
 | `core.input_envelope` | 25 | Source identity captured before commands cross thread boundaries. |
 | `core.user_prefs` | 25 | Persistent user-granted preference exceptions and behavior rules. |
-| `actions.browser_control` | 24 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
-| `app.text_intents` | 24 | Typed/spoken text-intent parsing + path helpers (extracted from main.py). |
 | `core.voice_mode` | 24 | Era's voice mode — which backend speaks. |
-| `era_dispatch` | 24 | era_dispatch.py — Era One → Claude Code dispatcher. |
 | `core.development` | 23 | Stage Claude-generated changes, verify them, and activate an approved revision. |
 | `core.fabric` | 23 | Era Fabric: shared contracts between Era, her tools, the crew and Development. |
-| `core.llm` | 23 | Provider-neutral LLM layer for Era One. |
 
 ## 4. Module index
 
@@ -136,7 +136,7 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `app/era_live/__init__.py` | 2 | EraLive behavioral mixins (extracted from main.py). |
-| `app/era_live/audio.py` | 2215 | Audio I/O loops for EraLive (extracted from main.py). |
+| `app/era_live/audio.py` | 2227 | Audio I/O loops for EraLive (extracted from main.py). |
 | `app/era_live/audio_capture.py` | 142 | Keep a healthy microphone briefly across provider reconnects, without replay. |
 | `app/era_live/audio_output.py` | 421 | Self-healing speaker output for Era's Live voice. |
 | `app/era_live/autopilot.py` | 239 | Run the lane router's offline lanes before any Gemini request or local brain turn. |
@@ -148,7 +148,7 @@ Every source module, its size, and what it is for.
 | `app/era_live/local_fallback.py` | 812 | Local fallback voice loop — Era keeps hearing and acting while Gemini is down. |
 | `app/era_live/local_guards.py` | 70 | Security gates for the local fallback loop (app/era_live/local_fallback.py). |
 | `app/era_live/mic_mute.py` | 315 | Voice-controlled microphone mute for EraLive (see core/mic_mute.py for the model). |
-| `app/era_live/model_route.py` | 322 | Era's session-scoped model preference, and the routing decision it feeds. |
+| `app/era_live/model_route.py` | 357 | Era's session-scoped model preference, and the routing decision it feeds. |
 | `app/era_live/panic.py` | 154 | Runtime half of "abort mission" for EraLive (model in core/panic_stop.py). |
 | `app/era_live/reconnect_mixin.py` | 799 | Reconnect / standby / status-reporting mixin for EraLive (extracted from main.py). |
 | `app/era_live/report_pump.py` | 128 | Speak the reports Era owes the owner (core/report_outbox) when she can. |
@@ -173,7 +173,7 @@ Every source module, its size, and what it is for.
 | File | Lines | Purpose |
 |---|---:|---|
 | `app/hud/__init__.py` | 6 | Localhost HUD layer: event bus, HTTP/WebSocket server glue, launcher helpers. |
-| `app/hud/api.py` | 680 | REST endpoints for the localhost HUD. |
+| `app/hud/api.py` | 691 | REST endpoints for the localhost HUD. |
 | `app/hud/approval.py` | 74 | Authenticated HUD decisions bind to the exact displayed confirmation. |
 | `app/hud/audio_route.py` | 48 | Where Era's voice actually goes in and out, for the HUD's System awareness. |
 | `app/hud/browser.py` | 243 | Open (or re-focus) the HUD as a Chromium app window. |
@@ -226,6 +226,7 @@ Every source module, its size, and what it is for.
 | `core/llm/adapters/ollama_chat.py` | 353 | Local LLM over Ollama's /api/chat — the brain that needs no cloud. |
 | `core/llm/adapters/omniroute.py` | 287 | OmniRoute lane — Era's reasoning calls through the `era-gateway` combo. |
 | `core/llm/adapters/openai_compat.py` | 479 | OpenAI-compatible chat completions — the cloud brain of the cascade mode. |
+| `core/llm/brains.py` | 354 | The three reasoning brains Era can use for tasks: Claude, OmniRoute and the local model. |
 | `core/llm/claude_accounts.py` | 256 | Which Claude subscription account runs a call, and what to do when it can't. |
 | `core/llm/codecraft_failover.py` | 77 | CodeCraft as a text step in the Gemini quota failover (core/llm/quota_failover.py). |
 | `core/llm/exec_ledger.py` | 327 | Idempotency ledger for model-requested tool execution. |
@@ -271,7 +272,7 @@ Every source module, its size, and what it is for.
 | `actions/agent_browser_use.py` | 99 | Agent-browser CLI integration for Era One. |
 | `actions/api_anything.py` | 519 | Pinned api-anything CLI: read public website data over plain HTTP. |
 | `actions/audio_control.py` | 352 | audio_control - list / switch audio devices and control any ONE device. |
-| `actions/browser_control.py` | 2636 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
+| `actions/browser_control.py` | 2681 | Era One Browser Controller — Playwright-based, tab-aware, Brave-first. |
 | `actions/browser_driver_health.py` | 118 | Liveness checks for the Playwright driver behind a _BrowserSession. |
 | `actions/browser_intelligence.py` | 1500 | Browser Intelligent Automation for YouTube and Netflix grid/card selection. |
 | `actions/claude_self_improve.py` | 158 | Claude-Code-as-generator for self_improve. |
@@ -330,7 +331,7 @@ Every source module, its size, and what it is for.
 | `actions/window_control.py` | 726 | Advanced window management for Era One. Features an aggressive Windows 11 foreground stealer and class-based m |
 | `actions/window_evidence.py` | 81 | Turn a window_control result into evidence when the handler READ the result back. |
 | `actions/world_tools.py` | 168 | Explicit geospatial queries, circuit guidance and Home Assistant control. |
-| `actions/youtube_video.py` | 1459 | Era One YouTube Controller — tab-aware, browser-integrated. |
+| `actions/youtube_video.py` | 1451 | Era One YouTube Controller — tab-aware, browser-integrated. |
 
 ### Vision
 
@@ -373,7 +374,7 @@ Every source module, its size, and what it is for.
 | `core/vault_audit.py` | 383 | vault_audit.py — what is WRONG with the era_brain vault. Read-only, always. |
 | `core/vault_bridge.py` | 768 | core/vault_bridge.py — the one safe door into the Obsidian vault for tools and the crew. |
 | `core/vault_maintenance.py` | 447 | vault_maintenance.py — the routine that ACTS on what vault_audit.py found. |
-| `era_dispatch.py` | 3032 | era_dispatch.py — Era One → Claude Code dispatcher. |
+| `era_dispatch.py` | 3205 | era_dispatch.py — Era One → Claude Code dispatcher. |
 
 ### Self-healing & diagnosis
 
@@ -397,13 +398,13 @@ Every source module, its size, and what it is for.
 |---|---:|---|
 | `actions/scheduled_task.py` | 476 | actions/scheduled_task.py — the `scheduled_task` tool: create, list, modify, cancel, approve and waive the use |
 | `core/task_scheduler.py` | 944 | core/task_scheduler.py — the user's own scheduled tasks ("run X every monday at 9"). |
-| `era_scheduler.py` | 214 | era_scheduler.py — runs each brand's recurring jobs (weekly plan, auto-publish) at the times set in brands.yam |
+| `era_scheduler.py` | 265 | era_scheduler.py — runs each brand's recurring jobs (weekly plan, auto-publish) at the times set in brands.yam |
 
 ### Health & tests
 
 | File | Lines | Purpose |
 |---|---:|---|
-| `conftest.py` | 378 | Pytest bootstrap. |
+| `conftest.py` | 419 | Pytest bootstrap. |
 | `tools/era_doctor.py` | 696 | Era One Doctor — healthcheck tool. Read-only, no side effects. |
 | `tools/run_all_checks.py` | 419 | One-command validation runner for Era One. |
 

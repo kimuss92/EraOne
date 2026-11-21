@@ -1,0 +1,18 @@
+Here is a prompt for an external coding agent based on the Era One crew's analysis:
+
+---
+**Subject: Enhancement Proposal for Era One Multi-Agent System**
+
+**Context:**
+You are analyzing the source code for the "Era One" project, which is structured as a multi-agent system. The goal is to improve reliability, speed, and capability.
+
+**Crew Suggestions for Improvement:**
+Based on an initial review, the following areas have been identified for enhancement:
+
+1.  **Data Flow Optimization (Cody's Suggestion):** Analyze and improve the data flow between different agent modules to reduce latency and prevent blockages.
+2.  **Concurrent Processing (Cody's Suggestion):** Implement or enhance concurrent processing for background tasks to ensure the main assistant remains responsive during heavy operations.
+3.  **Localized Knowledge Retrieval (Drew's Suggestion):** Integrate a localized knowledge retrieval mechanism (e.g., using a vector database) to make long-term memory access more robust and efficient.
+
+**Your Task:**
+Review the current implementation and suggest concrete architectural changes or code improvements to fulfill these suggestions.
+---

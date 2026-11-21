@@ -425,6 +425,21 @@ _DEEP_THINK_ALIAS = "era.reason"
 # The sentinel meaning "stop overriding and route normally again".
 MODEL_INTENT_AUTO = "auto"
 
+# "Use OmniRoute", "switch to the gateway", "change your brain to omni route".
+_BRAIN_OMNIROUTE = re.compile(
+    r"^\W*(?:era\s*[,;:]?\s*)?(?:please\s+)?"
+    r"(?:use|switch\s+to|go\s+to|route\s+to|change\s+(?:your\s+)?brain\s+to)\s+"
+    r"(?:the\s+|your\s+)?(?:omni\s*-?\s*route|gateway)(?:\s+(?:model|brain|router))?\W*$",
+    re.IGNORECASE,
+)
+# "Which brain are you using?", "brain status", "check your brains".
+_BRAIN_STATUS = re.compile(
+    r"^\W*(?:era\s*[,;:]?\s*)?(?:please\s+)?"
+    r"(?:(?:which|what)\s+brain\s+(?:are\s+you\s+using|is\s+(?:up|available|best))"
+    r"|brain\s+status|check\s+(?:your\s+)?brains?)\W*$",
+    re.IGNORECASE,
+)
+
 
 def _model_intent(text: str) -> str | None:
     """Return a routing token for a standalone model-override order.
@@ -432,6 +447,13 @@ def _model_intent(text: str) -> str | None:
     'auto' means "clear the override". None means this was not such an order —
     which is the answer for ordinary conversation that merely mentions a model.
     """
+    # The task brains (Claude / OmniRoute / local, core/llm/brains.py). OmniRoute and the
+    # status question are new words; Claude, local and automatic keep their alias token
+    # (apply_model_override also keeps the task brain in step with them).
+    if _BRAIN_OMNIROUTE.match((text or "").strip()):
+        return "brain:omniroute"
+    if _BRAIN_STATUS.match((text or "").strip()):
+        return "brain:status"
     m = _MODEL_INTENT.match((text or "").strip())
     if not m:
         return None
