@@ -39,7 +39,7 @@ how it was verified. Paired with `TODO.md` (the board) and `docs/MANIFEST.md`
 - **Owner items:**
   - Extend the two ad sets in Ads Manager before tonight.
   - Check the draft "Delta Cuisine - Interactions - WhatsApp Messages" budget (shown as 500 €/day; probably 5 €/day in cents).
-  - Decide whether to discard the 8 rename drafts on ended 2025 campaigns.
+  - DONE 2026-11-21 02:02 (owner: "delete the 8 old drafts"): the pending rename drafts on the 8 ended 2025 campaigns were discarded through Era. For each campaign the preview showed only `pending_edit`, then the confirmed discard returned `draft_changes_discarded: true`. The campaigns are unchanged.
 
 ### 2026-11-21 · Claude · Lean ads runs: ~120 KB → ~33 KB re-sent per step; safe publishing of staged changes (PF-078)
 - **Cause:**
