@@ -96,6 +96,30 @@ Never infer a budget from a past campaign, a competitor, or a rule of thumb —
 if Karim hasn't answered both questions for *this* campaign, the CM does not
 create it yet, paused or not.
 
+## Campaign names and finding a campaign (Karim, 2026-11-21) — every brand
+
+**Pattern:** `[BRAND] - [FORMAT]_[Asset] - [OBJECTIVE] - [CC]_[MONYY]`
+Example: `DC - REEL_DressingAuMetre - MSG - TN_NOV26`.
+
+| Part | Values | Read from |
+|---|---|---|
+| BRAND | `DC` Delta Cuisine, `CQ` Ceram Quartz, `BK` Brico Kitchen (`ads.campaign_code` in brands.yaml) | brands.yaml. A brand with no code = never rename, say a code is needed |
+| FORMAT | `REEL`, `POST`, `CAROUSEL`, `STORY` | the published post the ad uses |
+| Asset | the product/creative in CamelCase, no spaces/accents (`TajMahal`, `CuisineNoire`) | the post's caption or video title |
+| OBJECTIVE | `LEADS` (OUTCOME_LEADS), `MSG` (OUTCOME_ENGAGEMENT opening a chat), `ENGAGE` (other engagement: calls, visits, views), `TRAFFIC`, `AWARENESS`, `SALES` | campaign objective + ad set destination |
+| CC_MONYY | ISO country of the ad sets' targeting (several: `TN-CI`) + start month (`NOV26`) | targeting + start_time |
+
+- Every campaign created gets this name; never an id in a name; a part Meta cannot show is
+  reported, not invented.
+- **Rename** changes no spend: a complete rename order is the confirmation. One campaign at a
+  time, read back, then a before → after table (old, new, id, status, source of each part) in
+  `ads_reports\`. On the shared `act_33183820`, only the campaigns whose ads use the ordered
+  brand's Page.
+- **Finding a campaign:** Karim never gives a number, and the CM never asks for one. Match
+  his words (brand, product, format, objective, country, "the winners") against names,
+  objectives and ad creatives of ACTIVE and recently delivering campaigns, spelling loosely.
+  Act on the best match and name it. Ask only when two match equally, listing them by name.
+
 ## Campaign construction
 
 - **Creative = an already-published post** (Karim, 2026-09-25): find it on the
@@ -118,13 +142,17 @@ create it yet, paused or not.
   vault's brand Resources notes).
 - **A/B test one variable at a time** (creative OR audience OR copy, not all
   three at once) so a result is actually attributable.
-- **Messaging ads: no automated greeting (Karim, 2026-09-19).** On any ad that
-  opens Messenger/WhatsApp/Instagram DM, the customer types their own request.
-  Turn OFF the "Conversations" template — welcome/introduction message and the
-  suggested Questions et réponses — instead of accepting Meta's default
-  ("Bonjour Karim ! Dites-nous comment nous pouvons vous aider" + 3 canned
-  questions). Applies to both brands, every new messaging campaign or ad set.
-  Existing live campaigns are only changed when Karim names them.
+- **Messaging ads and the welcome message (rule changed by Karim, 2026-11-20).**
+  **Delta Cuisine: ALWAYS use the saved Conversations template "Démarrer des
+  conversations 29/11/2025"** (Meta's "Start conversations" template: an
+  introduction in Tunisian Arabic, «مرحبا بيك في دلتا كويزين! نورتنا. قولي، في شنوة
+  تحب نعاونك؟», and NO "Questions et réponses"). The customer still types their own
+  message: never Automated chat, quick replies or canned questions. The ads tool has
+  no field for it, so every Delta messaging draft must end with this manual step:
+  "Open the ad > Conversations > Modèles enregistrés > select that template."
+  **Ceram Quartz and Brico Kitchen:** the 2026-09-19 rule stands (no automated
+  greeting: turn the "Conversations" template OFF, no canned questions) until Karim
+  changes it. Existing live campaigns are only changed when Karim names them.
 
 ### Named audiences (from real report data — build these first)
 
@@ -259,6 +287,216 @@ order into the report mode.
 
 **Never use paid plugins** (HYPD, Adspirer, …) — Karim won't pay for them; the analyst
 skill is the free replacement, and they are not on the ads allowlist.
+
+## Meta specs reference — dated, sourced, refreshed (added 2026-11-19)
+
+last_verified: 2026-11-20
+
+Era checks this date: a build brief is told when it is older than 120 days
+(`crew/cm_stage.py::specs_age_note`). **Refresh procedure:** re-read the Sources below,
+change only what differs, update `last_verified` and the line items, and say what
+changed in `handoff.md`. Meta's approval is the only real compliance test — everything
+here is a draft-time check. Where this section and the Ads Guide disagree, the Ads
+Guide wins.
+
+**Formats (official Ads Guide, awareness image/video pages):**
+| Placement | Ratio | Size | Notes |
+|---|---|---|---|
+| Facebook Feed (image/video) | 4:5 | 1440 x 1800 | image JPG/PNG up to 30 MB; video 1 s to 241 min, up to 4 GB, MP4/MOV, H.264, AAC 128 kbps+ |
+| Instagram/Facebook Reels, Stories | 9:16 | 1440 x 2560 (Reels) | keep 14% top, 35% bottom, 6% each side free of text/logos; Reels ads: no licensed music, no face/camera effects, no GIFs, no product tags |
+| Facebook Stories video | 9:16 | | 15 s or less plays whole; longer is split into cards |
+| In-stream image | 1.91:1 to 1:1 | 1080 x 1080 min | avoid text on the image; supply 4:5 and 9:16 first, 1:1 as the third crop |
+
+**Text:** primary text 125 characters visible (Feed guide: 50-150 recommended; Reels
+placement guide: 44), headline 27 recommended (40 allowed in in-stream), description 27-30.
+The skill's working limits stay 125 / 27 / 27 (the strictest of the guides above).
+
+**Campaign architecture (2026):** Advantage+ is no longer a campaign type. A Sales, App
+or Leads campaign is Advantage+ when three settings stay automated: campaign-level
+budget, Advantage+ audience, Advantage+ placements. The state is read-only and shown as
+on/off. Audience *suggestions* (age, gender, interests, lookalikes) are a starting point,
+not a limit; real limits (location, minimum age, language, excluded audiences) go in
+audience *controls*. Excluding placements turns the label off; "limited spend" can still
+send up to ~5% of spend to an excluded placement. The legacy Advantage+ shopping and app
+campaign creation paths are closed in the Marketing API (v24.0 from 2025-10-08, all
+versions 2026-05-19). For messaging ads follow `default_objective` in brands.yaml.
+
+**Tracking readiness:** Meta Pixel and/or Conversions API events must reach Meta,
+deduplicated and matched (the Events Manager "verify your setup" step). For click-to-
+message ads there is no pixel dependency, but Messaging events can be sent through
+Conversions API for optimisation. Do not promise conversion tracking Karim has not set up.
+
+**Compliance checklist for copy and creative (draft-time):** no personal-attribute claims
+("Are you ...?"), no before/after or guaranteed-result promises, no misleading urgency,
+no discount language the offer does not carry, no text covering more than the safe zones,
+no licensed music in Reels.
+
+Sources: facebook.com/business/ads-guide/update (image/facebook-feed,
+video/facebook-feed, video/instagram-reels, video/facebook-story);
+developers.facebook.com/blog/post/2026/02/13/asc-and-aac-deprecation-mapi-v25;
+developers.facebook.com/docs/graph-api/changelog/version24.0;
+developers.facebook.com/docs/marketing-api/conversions-api;
+mockingbird.digital/blog/advantage-plus-campaigns-2026 (secondary, read 2026-11-19).
+
+## Objective, destination and button must agree — the pre-build gate (Meta official, read 2026-11-20)
+
+A "pure success" ad starts with a combination Meta actually supports. The ads tool will
+STAGE combinations that Meta's own tables do not clearly offer (it accepted OUTCOME_LEADS +
+WHATSAPP + "Send WhatsApp message" on 2026-11-19, which Meta's button table does not list), so
+the tool's acceptance proves nothing. Check this table BEFORE any create call. If the
+combination is not here, stop and say which part fails; never improvise.
+
+**Rule: the button must be one Meta lists for that objective AND conversion location.**
+Sources: Meta Business Help Center "Available call-to-action buttons in Ads Manager"
+(en-gb.facebook.com/business/help/410873986524407) and the Marketing API "Destination
+Type" page (developers.facebook.com/docs/marketing-api/adset/destination_type).
+
+| Goal | Objective | Conversion location | `destination_type` | Button (UI) | `call_to_action_type` |
+|---|---|---|---|---|---|
+| WhatsApp conversations (Delta default) | `OUTCOME_ENGAGEMENT` | Messaging apps | `WHATSAPP` | Send WhatsApp message | `WHATSAPP_MESSAGE` |
+| Messenger conversations | `OUTCOME_ENGAGEMENT` | Messaging apps | `MESSENGER` | Send message | `MESSAGE_PAGE` |
+| Instagram DM conversations | `OUTCOME_ENGAGEMENT` | Messaging apps | `INSTAGRAM_DIRECT` | Send message | `INSTAGRAM_MESSAGE` |
+| All three apps in one ad | `OUTCOME_ENGAGEMENT` | Messaging apps | `MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP` | one button per app (Meta: `asset_feed_spec`, `optimization_type: DOF_MESSAGING_DESTINATION`) | `MESSAGE_PAGE` + `WHATSAPP_MESSAGE` + `INSTAGRAM_MESSAGE` |
+| Qualified leads through a chat | `OUTCOME_LEADS` | Messenger / Instagram | `LEAD_FROM_MESSENGER` / `LEAD_FROM_IG_DIRECT` | Send message (or Contact us, Get quote, Apply now) | `MESSAGE_PAGE` |
+| Phone calls | Traffic, Engagement or Leads | Calls | `PHONE_CALL` | Call now (Engagement: on your ad) | `CALL_NOW` |
+| Sales through WhatsApp (needs conversion events) | `OUTCOME_SALES` | WhatsApp | `WHATSAPP` | Send WhatsApp message | `WHATSAPP_MESSAGE` |
+
+What Meta's table says, so a model never has to guess:
+- **Leads and WhatsApp: Meta's own articles disagree.** The button table has no WhatsApp
+  column and no "Send WhatsApp message" button under Leads, while the "conversion locations
+  by objective" article lists WhatsApp under Leads (read through `ads_get_help_article`,
+  2026-11-20). When Meta contradicts itself, take the unambiguous rows: WhatsApp
+  conversations go to Engagement (Messaging apps) or Sales (WhatsApp).
+- **Engagement x Messaging apps** offers: Apply now, Book now, Contact us, Donate now,
+  Get promotions, Get quote, Get updates, Learn more, Order now, See details,
+  **Send message, Send WhatsApp message**, Shop now, Sign up, Subscribe. For a Delta
+  conversation ad pick the Send message / Send WhatsApp message button, never Learn more
+  (it sends people away from the chat) and never NO_BUTTON.
+- **Traffic**: Messenger = Send message, WhatsApp = Send WhatsApp message, Calls = Call now.
+  **Awareness** only offers Apply now, Book travel, Contact us: no messaging button.
+- The multi-app destination is valid under Engagement only (not Leads). Whether the ads tool
+  accepts it has not been verified: test it on a draft before promising it.
+- An objective cannot be changed after creation, so the gate runs before the campaign exists.
+
+**Pre-build gate (all must be true, else stop and report which one failed):**
+0. **Live check first.** Search Meta's help center with `ads_get_help_article` (read-only) for
+   "Available call-to-action buttons" and "Available conversion locations and events by
+   objective" (and the topic of the build) and compare with the row you plan to use. The
+   tool returns the article text with its tables flattened, so use it to spot a changed
+   or contradicting rule, not to read column positions. If the live article contradicts
+   this file, follow the safer reading, say so, and flag the file for an update (see
+   "Staying current with Meta's changes").
+1. Objective, conversion location, `destination_type`, optimization goal and button form a
+   row of the table above (or Meta's current official table, if newer: re-read it).
+2. Page id and Instagram account id read from the tools, and the brand's Page, never another brand's.
+3. Budget, currency and dates stated before building (ask rule above), and the ad set end
+   date is not later than the offer's last day.
+4. Creative is an already-published post of the right format (specs above), vertical first.
+5. The brand's welcome-message rule (messaging rule above) is stated as a manual step.
+6. Every Meta fact in the summary has a source in this file or is marked `unknown`
+   (adapted from the MIT-licensed claude-ads skill by AgriciDaniel: source-grounded claims,
+   `unknown` instead of a guess, gates before changes, drafts until a human approves).
+
+**Post-build read-back (mandatory):** read every created object back (drafts are returned
+with `object_state=draft`) and compare with the order: objective, destination, goal, dates,
+budget, targeting, the stored `call_to_action` type, creative source; each object exists
+exactly once (check by exact name); `active_errors` empty. Report observations, then
+diagnoses, then proposals, separately. State anything unverifiable: WhatsApp number link,
+calling eligibility, the welcome template, the video id.
+
+## Staying current with Meta's changes (Karim, 2026-11-20: this skill must always follow them)
+
+Meta changes objectives, buttons, destinations, policies and conditions often, and an
+outdated rule here costs real ad spend. Four layers keep this file current:
+1. **At build time:** step 0 of the pre-build gate reads Meta's live help articles. A
+   contradiction means follow the safer reading and flag it. Never build on a remembered rule.
+2. **Weekly watch (`core/meta_spec_watch.py`, scheduled by `era_scheduler`: Mondays 11:00, with a catch-up 5 minutes after startup if Era missed the week):** a read-only
+   run searches Meta's help center for the pinned topics (button availability, conversion
+   locations, messaging ads rules, ads policy changes, creative specs), extracts the rule
+   statements, and compares them with the last digest. A difference writes a dated note to
+   the vault Inbox and raises a "Meta may have changed" warning in every ads brief until
+   it is reviewed. It detects and flags; it never edits this file or any campaign by itself.
+3. **Date check:** `last_verified` above; older than 30 days adds a re-verify warning.
+4. **Review and update:** read the Inbox note, re-read the cited Meta articles, edit only
+   what differs in this file, set `last_verified`, run `python -m core.meta_spec_watch ack`
+   (clears the warning and stores the new digest), and log the change in `handoff.md`.
+Limits, stated honestly: the help-center tool flattens tables and cannot see every Meta
+announcement; the watch can miss a change or flag one that is only a rewording. A flag
+means "a human re-reads the source", not "the rule changed".
+
+## Click-to-message build — the recipe Meta actually accepted (verified live 2026-11-19)
+
+Built end to end on Delta Cuisine's account (campaign, ad set, ad, creative all staged as
+drafts, validation `active_errors: []`). **Correction 2026-11-20:** that run used OUTCOME_LEADS +
+WHATSAPP, which Meta's official table does not list (see the gate above): use the parameter
+shapes below, but with OUTCOME_ENGAGEMENT for WhatsApp conversations. Use these exact shapes and do NOT go to Composio
+or ask the user to authenticate: `facebook-ads` is signed in, and a rejection from it is a
+parameter problem, not a login problem. Fix the parameter; after three rejections of the
+same call, stop and report the exact error text.
+
+| Tool | What Meta accepted | What it rejected (and the error said) |
+|---|---|---|
+| `ads_create_campaign` | `ad_account_id`, **`campaign_name`**, `objective: OUTCOME_ENGAGEMENT` (messaging; OUTCOME_LEADS only for Messenger/IG lead chats), `buying_type: AUCTION`, `campaign_daily_budget: "500"` (minor units: 500 = 5.00 in the account currency, EUR here), `special_ad_categories: "[]"` | `name` (use `campaign_name`); **`status` is not an argument**: objects are staged drafts and cannot be created PAUSED through this tool |
+| `ads_create_ad_set` | (WHATSAPP) `promoted_object` MUST also carry `page_whatsapp_number_id` (`ads.whatsapp_number_id` in brands.yaml: the Page's linked number); `campaign_id`, `ad_set_name`, `optimization_goal: CONVERSATIONS`, `billing_event: IMPRESSIONS`, **`destination_type: WHATSAPP`**, ISO `start_time`/`end_time` with `+0000`, `targeting` as a JSON string (`geo_locations.countries`, `age_min`, `age_max`), `promoted_object: {"page_id": "<page>"}` | `daily_budget`, `bid_strategy`, `bid_amount` (campaign budget optimization: the campaign owns them); `custom_event_type` and `destination_type` INSIDE `promoted_object`; `destination_type: MESSENGER` (the tool said: under `OUTCOME_LEADS`, CONVERSATIONS is supported only on a WhatsApp-including destination, a quirk to avoid: use Engagement); the combined multi-app destination (use ONE of MESSENGER, WHATSAPP, INSTAGRAM_DIRECT) |
+| `ads_create_creative` | `page_id`, `instagram_user_id`, `source_instagram_media_id` (the published reel), `call_to_action_type: WHATSAPP_MESSAGE` with `link_url: https://api.whatsapp.com/send` passed as its OWN parameter (accepted by Meta 2026-11-20, validated); build it with this button from the start, never NO_BUTTON on a messaging ad, `name` | `object_story_id` of a post that does not belong to the ad's Page ("the post does not belong to the Page"); `WHATSAPP_MESSAGE` on an Instagram post without `link_url`, or with the link inside another field ("too many parameters") |
+| `ads_create_ad` | `ad_set_id`, `ad_name`, `creative: {"creative_id": "<id>"}` | |
+
+Find the ids first: `ads_get_ad_account_pages` (Delta = DELTA CUISINE, NOT Brico Kitchen on
+the shared account), `ads_get_ig_accounts`, `ads_get_ig_media` (newest reel). Never invent
+interest ids: with none verified, leave interests out and keep Advantage+ audience on
+(age_min 25 is Meta's floor with it).
+
+**Verification and open flags (say them in the summary every time):**
+- Staged objects show a configured status of ACTIVE: **Publish in Ads Manager makes them
+  live and spending.** Nothing may be published or activated without Karim's explicit yes.
+- The default read query does not return drafts; they are found as drafts (status
+  EDITING). Check duplicates by exact name before creating anything.
+- Not verified by the tool: a WhatsApp Business number connected to the Page, the welcome
+  template (Delta: select the saved one; other brands: off; see the messaging rule above),
+  and the ad's video id against the creative's. The first draft used NO_BUTTON, which is
+  wrong for a messaging ad: see the CTA rule in the Delta playbook below.
+- An offer that ends before the ad set does is a risk: end the ad set on the offer's last
+  day or say so. Currency: the order may say dollars; the account bills in EUR, say it.
+
+## Delta Cuisine messaging playbook (Karim, 2026-11-20)
+
+What Delta runs most: **Interactions** campaigns (objective `OUTCOME_ENGAGEMENT`,
+conversion location Messaging apps) to get messages on Messenger, Instagram Direct and
+WhatsApp, or `OUTCOME_LEADS` with messaging; plus notoriety campaigns to win followers.
+The team also encourages calls over WhatsApp. The goal is sales at a low cost per
+conversation. Use the saved welcome template (rule above), never an automated chat.
+
+- **Objective:** Interactions = `OUTCOME_ENGAGEMENT`, conversion location Messaging apps,
+  is the default for conversations on any app. `OUTCOME_LEADS` only for qualified leads
+  through a Messenger or Instagram chat (it has no WhatsApp). Pick before building: an
+  objective cannot be changed after creation.
+- **Destinations:** default WHATSAPP (Delta's customers lean on it); MESSENGER or
+  INSTAGRAM_DIRECT when Karim names them. The all-apps destination
+  (`MESSAGING_INSTAGRAM_DIRECT_MESSENGER_WHATSAPP`) is valid under Engagement; try it on a
+  draft and keep the single destination as the fallback; never split a small budget over
+  three ad sets to imitate it.
+- **Button (never NO_BUTTON on a messaging ad):** WHATSAPP = Send WhatsApp message
+  (`WHATSAPP_MESSAGE`, with `link_url` `https://api.whatsapp.com/send` on an Instagram-sourced
+  creative); MESSENGER = Send message (`MESSAGE_PAGE`); INSTAGRAM_DIRECT = Send message
+  (`INSTAGRAM_MESSAGE`). `CALL_NOW` only for a calls ad. The newer labels (CHAT_NOW,
+  START_A_CHAT, ASK_US...) are not in Meta's official table: do not use them.
+- **Calls over WhatsApp:** "Call on WhatsApp" is a button inside the chat; it exists only
+  if WhatsApp Business Calling is enabled on the number and the customer's country is
+  eligible (unverified for Tunisia). Never promise a call button in the ad. Encourage the
+  call in the first human reply, not in the fixed welcome text.
+- **Low cost per conversation (Meta Ads Guide and developer docs; practitioner blogs
+  are secondary):** optimization goal CONVERSATIONS; one budget at campaign level;
+  Advantage+ audience (geo TN, minimum age only) and Advantage+ placements; a vertical
+  9:16 reel keeping Reels' safe zones (14% top, 35% bottom, 6% sides) plus a 4:5 for Feed;
+  the best aspirational reel (storytelling beats discount; promo inside a story); one ad
+  at 5 EUR/day; end the ad set on the offer's last day; change one variable at a time and
+  do not edit during the learning phase (about 50 conversations a week to exit it, so at
+  5 EUR/day expect a learning-limited campaign: say so).
+- **Sales are not in Ads Manager:** it shows conversations started, not sales. Ask Karim
+  to note the deals that came from each ad.
+- **Every Delta messaging draft summary must end with the manual steps:** (1) select the
+  saved welcome template; (2) confirm the WhatsApp Business number is linked to the Page;
+  (3) optionally switch to multi-destination in Ads Manager.
 
 ## Performance playbook — lowest cost per result (added 2026-09-25)
 

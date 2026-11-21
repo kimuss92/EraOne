@@ -101,7 +101,15 @@ improvement themes to revisit against evidence; #44 visual polish stays paused.
 
 ## 🔴 In progress
 
+**2026-11-21 · Campaign naming standard + find-by-name (Claude, PF-077) and the ads yes-gate fix (PF-074):** coded and guarded; live rename and find-by-name test run through Era (results in handoff). Brico Kitchen = BK (owner), renamed too; owner: check the rename table in `D:\master folder\delta cuisine\ads_reports\`.
+
+**2026-11-20 · Owner decisions after the CM live test (Claude, PF-073/074):** (a) DONE: campaign 52593521115440 reactivated (ACTIVE); (b) DONE: lessons cleaned (PF-075); (e) live: send Era a file on Telegram with a caption, and one without then "use the file I sent"; (c) delete the duplicate `Ceram_Alya_reel_v3_*_description.txt` files in `motion\ceram-reel-v3\out` if unwanted; (d) by voice: "pause campaign X" yourself must still work, and a "yes" after Era asks.
+
+**2026-11-20 · CM grounding + last result (Claude, PF-071/072):** coded, guarded, live-run on Windows (Meta report, two-reel folder, refusals). Owed live: restart Era, say "check the Delta Meta campaigns and report" then ask again "what did it say?" (she must answer from the stored result); give the real folder of the 'new 2' / 'HB' reels and re-ask for descriptions; review `git diff tools/test_ads_dispatch.py` (restored from a backup after an accidental checkout, see handoff).
+
 **2026-11-20 · Inactivity / HUD "i" key (Claude, PF-066):** coded and guarded on Windows, NOT live-verified. Owed: restart Era; talk past the 2-minute window (long reply and long owner speech); "stay silent" / "can you stay silent" / "Era silent"; press "i" in the HUD (on and off); say "hide telemetry". Details in handoff.md.
+
+**2026-11-19 · Live tool audit (Claude):** PF-055 fixed (YouTube dialog). Owed live: restart Era, re-ask "what is playing on YouTube?"; reconnect gateway Claude login / top up OpenRouter then re-run the Delta Cuisine ads draft; approve the WhatsApp test on Telegram; confirm whether the Telegram call rang; decide on agent_browser 429 honesty. Details in handoff.md.
 
 **2026-11-19 · Crew end-to-end fix (Claude):** CodeMode is OFF (PF-050). The crew now survives
 Hermes stalls (PF-051), stages exact edits without a second model and never claims an unstaged

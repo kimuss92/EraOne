@@ -232,3 +232,23 @@ def test_any_app_uses_the_exe_its_launcher_resolves_not_a_guess(monkeypatch):
     monkeypatch.setattr(oa, "inspect_shortcut", lambda p: ("C:\\x\\Update.exe", ""))
     assert oa.known_exe_names("Some Electron App") == frozenset()
     oa._EXE_HINTS.clear()
+
+
+def test_a_slow_closing_app_is_not_called_still_running(monkeypatch):
+    """PF-070: Photoshop closed ~3 s after the command; Era read it at 0.5 s."""
+    import asyncio
+    from unittest.mock import AsyncMock, Mock
+
+    from core import live_app_state as live
+
+    reads = [[7]] * 6 + [[]]  # still running for six reads, then gone
+    monkeypatch.setattr(live, "_processes", Mock(side_effect=reads))
+    monkeypatch.setattr(live, "_windows", Mock(return_value=[]))
+    monkeypatch.setattr(live.asyncio, "sleep", AsyncMock())
+    result = asyncio.run(
+        live.refresh_after_command(
+            "window_control", {"action": "close", "title": "Photoshop"}, "Closed Photoshop."
+        )
+    )
+    assert live._processes.call_count == 7
+    assert result.data["live_app_state"]["process_running"] is False

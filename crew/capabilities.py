@@ -73,7 +73,21 @@ def describe(names) -> str:
     return "\n".join(lines) if lines else "(none — answer from the task alone)"
 
 
+def _unfold_path_title(args: dict) -> dict:
+    """A bot reads the signature "path|title" and sends that literal key (live, 2026-11-19:
+    Tom's vault.read of the Motion Design guide failed on it). Treat it as `path` when the
+    value looks like a path or a .md name, else as `title`; an explicit path/title wins."""
+    combined = args.get("path|title")
+    if combined in (None, ""):
+        return args
+    text = str(combined)
+    key = "path" if ("/" in text or "\\" in text or text.lower().endswith(".md")) else "title"
+    rest = {k: v for k, v in args.items() if k != "path|title"}
+    return rest if rest.get(key) not in (None, "") else {**rest, key: combined}
+
+
 def _pick(args: dict, *keys: str) -> dict:
+    args = _unfold_path_title(args)
     return {k: args[k] for k in keys if k in args and args[k] not in (None, "")}
 
 
@@ -101,6 +115,74 @@ def _vault_create(ctx, args):
     return vault_bridge.run(
         {"action": "create", **_pick(args, "title", "content", "brand", "note_type")},
         caller=ctx.caller,
+    )
+
+
+def _item_text(v) -> str:
+    """A shot may arrive as a string or as an object (time, frame, one_line, what_moves ...)."""
+    if isinstance(v, dict):
+        keys = ("time", "frame", "one_line", "what_moves", "how_it_becomes_next", "becomes")
+        parts = [str(v[k]).strip() for k in keys if v.get(k)]
+        parts += [str(val).strip() for k, val in v.items() if k not in keys and val]
+        return " | ".join(parts)
+    return str(v).strip()
+
+
+def _as_list(value) -> list[str]:
+    """A bot may send a list or one text block with a line per item."""
+    if isinstance(value, (list, tuple)):
+        return [t for t in (_item_text(v) for v in value) if t]
+    return [ln.strip(" -\t") for ln in str(value or "").splitlines() if ln.strip(" -\t")]
+
+
+@capability(
+    "motion.brief",
+    "Save a Motion Design brief (fixed format: logos, textures, vertical format and the owner's "
+    "French-or-no-text ASK-FIRST rule are filled in by code) to the vault Inbox. Returns the note "
+    "path and the sentence Karim says in Claude Code. You only propose: nothing is built.",
+    "brand, title, shots (list, numbered storyboard), ending, length_s?, textures? (names), "
+    "reference_url?, reference_notes?, notes?",
+)
+def _motion_brief(ctx, args):
+    from crew import motion_brief
+    from crew.transport import fail
+
+    brand = str(args.get("brand") or "").strip().lower().replace(" ", "_")
+    title = str(args.get("title") or "").strip()
+    shots = _as_list(args.get("shots"))
+    if not title or not shots:
+        return fail("BadRequest", "A motion brief needs a title and a numbered storyboard (shots).")
+    if not motion_brief.motion_config(brand):
+        return fail("BadRequest", f"No motion settings for brand {brand!r} (delta_cuisine or ceram_quartz).")
+    note_title = f"Motion brief {title}"
+    body = motion_brief.render_brief(
+        brand,
+        note_title,
+        shots,
+        str(args.get("ending") or ""),
+        length_s=args.get("length_s") or "",
+        textures=_as_list(args.get("textures")),
+        reference_url=str(args.get("reference_url") or ""),
+        reference_notes=str(args.get("reference_notes") or ""),
+        notes=str(args.get("notes") or ""),
+    )
+    problems = motion_brief.validate_brief(body) + [
+        "style: " + w for w in motion_brief.style_warnings(shots)
+    ]
+    result = vault_bridge.run(
+        {"action": "create", "title": note_title, "content": body, "brand": brand,
+         "note_type": "plan"},
+        caller=ctx.caller,
+    )
+    if not result.success:
+        return result
+    rel = (result.data or {}).get("rel", "")
+    say = motion_brief.sentence_for(note_title)
+    warn = (" Problems to fix before building: " + "; ".join(problems) + ".") if problems else ""
+    return ToolResult.ok(
+        message=f"Saved the motion brief at {rel}. To build it, say in Claude Code: {say}. "
+        f"Nothing is built yet.{warn}",
+        data={"rel": rel, "problems": problems, "say": say},
     )
 
 

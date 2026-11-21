@@ -29,6 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import era_dispatch as ed  # noqa: E402
 import main  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _local_model_context_is_big_enough(monkeypatch):
+    """PF-071 admits the local route only when its context fits the brief; these tests are
+    about route ORDER and failover, not the live Ollama's context (2048 on the owner's PC)."""
+    monkeypatch.setenv("ERA_CM_LOCAL_CTX", "65536")
+
+
 # Captured BEFORE the autouse fixture below replaces it, so the preflight's own
 # tests can still exercise the real function against a temp credentials file.
 _REAL_CONNECTION_PROBLEM = ed._ads_connection_problem
@@ -644,8 +652,9 @@ def test_report_and_manage_runs_are_spend_capped_and_build_is_not(monkeypatch):
         ed.run_task(order, task_type="ads", brand_key="ceram_quartz")
         assert ("--max-budget-usd" in got["cmd"]) is capped, order
         if capped:
+            # PF-078: the cap follows the route (phantom price on the free combo).
             assert got["cmd"][got["cmd"].index("--max-budget-usd") + 1] == str(
-                ed._ADS_OPS_MAX_BUDGET_USD
+                ed._ads_ops_budget()
             )
 
 
@@ -976,16 +985,20 @@ _GATEWAY = {
 }
 
 
-def test_ads_run_goes_direct_without_gateway_vars(monkeypatch):
+def test_ads_run_goes_to_the_local_model_without_gateway_vars(monkeypatch):
+    """Owner 2026-11-19: the local model first; the gateway's key/model never leak in."""
     for k, v in _GATEWAY.items():
         monkeypatch.setenv(k, v)
+    monkeypatch.delenv("ERA_CM_DIRECT_ROUTES", raising=False)
     calls = []
     outcomes = [(0, json.dumps({"result": "Built, paused.", "session_id": "d-1"}))]
     monkeypatch.setattr(ed.subprocess, "run", _capture_runs(calls, outcomes))
     res = ed.run_task("run a Meta ad campaign", task_type="ads", brand_key="ceram_quartz")
     assert res["ok"] and len(calls) == 1
-    assert calls[0]["cmd"][calls[0]["cmd"].index("--model") + 1] == ed._ADS_DIRECT_MODEL
-    assert not any(k in calls[0]["env"] for k in _GATEWAY)
+    assert calls[0]["cmd"][calls[0]["cmd"].index("--model") + 1] == ed._LOCAL_MODEL
+    env = calls[0]["env"]
+    assert env["ANTHROPIC_BASE_URL"] == ed._LOCAL_URL
+    assert env["ANTHROPIC_API_KEY"] == "" and "ANTHROPIC_MODEL" not in env
 
 
 _FREELANCE, _DELTA = r"C:\p\.claude-freelance", r"C:\p\.claude-delta"
@@ -1005,26 +1018,34 @@ def _two_profiles(monkeypatch):
     monkeypatch.setattr(ed, "load_brands", lambda: real)
 
 
+_LOCAL_DOWN = (1, "ECONNREFUSED 127.0.0.1:11434")
+
+
 def test_a_signed_out_profile_fails_over_to_the_other_profile(monkeypatch):
+    """Direct subscription routes are opt-in (ERA_CM_DIRECT_ROUTES) behind the local model."""
     _two_profiles(monkeypatch)
+    monkeypatch.setenv("ERA_CM_DIRECT_ROUTES", "1")
     calls = []
-    monkeypatch.setattr(ed.subprocess, "run", _capture_runs(calls, [_AUTH_FAIL, _BUILT]))
+    runs = _capture_runs(calls, [_LOCAL_DOWN, _AUTH_FAIL, _BUILT])
+    monkeypatch.setattr(ed.subprocess, "run", runs)
     res = ed.run_task("run a Meta ad campaign", task_type="ads", brand_key="ceram_quartz")
-    assert res["ok"] and len(calls) == 2
-    assert calls[0]["env"]["CLAUDE_CONFIG_DIR"] == _FREELANCE
+    assert res["ok"] and len(calls) == 3
+    assert calls[1]["env"]["CLAUDE_CONFIG_DIR"] == _FREELANCE
+    calls[:] = calls[1:]
     assert calls[1]["env"]["CLAUDE_CONFIG_DIR"] == _DELTA
     assert "--model" in calls[1]["cmd"] and "ANTHROPIC_BASE_URL" not in calls[1]["env"]
 
 
-def test_both_profiles_down_falls_back_to_the_gateway(monkeypatch):
+def test_local_and_both_profiles_down_falls_back_to_the_gateway(monkeypatch):
     _two_profiles(monkeypatch)
+    monkeypatch.setenv("ERA_CM_DIRECT_ROUTES", "1")
     calls = []
-    runs = _capture_runs(calls, [_AUTH_FAIL, _AUTH_FAIL, _BUILT])
+    runs = _capture_runs(calls, [_LOCAL_DOWN, _AUTH_FAIL, _AUTH_FAIL, _BUILT])
     monkeypatch.setattr(ed.subprocess, "run", runs)
     res = ed.run_task("run a Meta ad campaign", task_type="ads", brand_key="ceram_quartz")
-    assert res["ok"] and len(calls) == 3
-    assert "--model" not in calls[2]["cmd"]
-    assert calls[2]["env"]["ANTHROPIC_BASE_URL"] == _GATEWAY["ANTHROPIC_BASE_URL"]
+    assert res["ok"] and len(calls) == 4
+    assert "--model" not in calls[3]["cmd"]
+    assert calls[3]["env"]["ANTHROPIC_BASE_URL"] == _GATEWAY["ANTHROPIC_BASE_URL"]
 
 
 def test_a_profile_without_meta_is_never_an_ads_failover(monkeypatch):
@@ -1065,15 +1086,42 @@ def test_a_real_task_failure_does_not_rerun_elsewhere(monkeypatch):
     assert not res["ok"] and len(calls) == 1
 
 
-def test_route_order_is_each_profile_direct_then_the_gateway():
+def test_route_order_is_the_local_model_then_the_gateway(monkeypatch):
+    """Owner 2026-11-19: CM work uses the local model, OmniRoute is the fallback."""
+    monkeypatch.delenv("ERA_CM_DIRECT_ROUTES", raising=False)
     routes = ed._routes_for([_FREELANCE, _DELTA], dict(_GATEWAY))
-    assert [r[0] for r in routes] == [
+    assert [r[0] for r in routes] == [f"local:{ed._LOCAL_MODEL}", "gateway:.claude-freelance"]
+    local_env, gateway_env = routes[0][1], routes[1][1]
+    assert local_env["ANTHROPIC_BASE_URL"] == ed._LOCAL_URL
+    assert local_env["ANTHROPIC_API_KEY"] == "" and routes[0][2] == ["--model", ed._LOCAL_MODEL]
+    assert local_env["CLAUDE_CONFIG_DIR"] == _FREELANCE  # the MCP servers live here
+    assert gateway_env["ANTHROPIC_BASE_URL"] == _GATEWAY["ANTHROPIC_BASE_URL"]
+    # the fallback uses the combo of tool-verified free/local models, not the user's
+    # era-gateway combo (expired Claude first, then paid OpenAI)
+    assert gateway_env["ANTHROPIC_MODEL"] == ed._GATEWAY_COMBO == "era-cm"
+
+
+def test_direct_subscription_routes_are_opt_in(monkeypatch):
+    monkeypatch.setenv("ERA_CM_DIRECT_ROUTES", "1")
+    names = [r[0] for r in ed._routes_for([_FREELANCE, _DELTA], dict(_GATEWAY))]
+    assert names == [
+        f"local:{ed._LOCAL_MODEL}",
         "direct:.claude-freelance",
         "direct:.claude-delta",
         "gateway:.claude-freelance",
     ]
-    assert routes[2][1]["ANTHROPIC_BASE_URL"] == _GATEWAY["ANTHROPIC_BASE_URL"]
-    assert all(k not in routes[0][1] for k in _GATEWAY)
+
+
+def test_a_down_local_model_hands_the_run_to_the_gateway(monkeypatch):
+    monkeypatch.delenv("ERA_CM_DIRECT_ROUTES", raising=False)
+    calls = []
+    outcomes = [(1, "ECONNREFUSED 127.0.0.1:11434"), (0, json.dumps({"is_error": False}))]
+    monkeypatch.setattr(ed.subprocess, "run", _capture_runs(calls, outcomes))
+    monkeypatch.setattr(ed, "_ensure_gateway", lambda env: None)
+    routes = ed._routes_for([_FREELANCE], dict(_GATEWAY))
+    proc, used = ed._run_on_routes(routes, ["claude", "-p"], "hi", ".", 30, "delta_cuisine")
+    assert proc.returncode == 0 and len(calls) == 2
+    assert calls[1]["env"]["ANTHROPIC_BASE_URL"] == _GATEWAY["ANTHROPIC_BASE_URL"]
 
 
 def test_briefs_point_at_the_ads_skill_by_absolute_path():
@@ -1164,3 +1212,193 @@ def test_analysis_questions_are_read_only_reports():
     # A change order is still a change order, even with analysis words in it.
     assert ads_mode("lower the cost per conversation of the packs campaign") == "manage"
     assert ads_mode("launch meta ads for the last story, 14 days, 3 dollars a day") == "build"
+
+
+# ── a run that stops on a login request did no work (PF-060) ──────────────────
+
+_AUTH_ASK = (
+    "I need to set up the Meta Ads connection. Please click this link to authenticate:\n\n"
+    "**[Connect metaads](https://connect.composio.dev/link/lk_A7R0oUK4UGJR)**\n\n"
+    "Once you've completed the authentication, reply and I'll continue building the campaign."
+)
+
+
+def test_a_run_that_ends_on_a_login_request_is_a_failure_not_an_ok(monkeypatch):
+    """Live 2026-11-19: exit 0, 'ok (wrote 0 files)', and the summary asked for a login."""
+    calls = []
+    monkeypatch.setattr(
+        ed.subprocess, "run", _capture_runs(calls, [(0, json.dumps({"result": _AUTH_ASK}))])
+    )
+    res = ed.run_task("run a Meta ad campaign", task_type="ads", brand_key="ceram_quartz")
+    assert res["ok"] is False
+    assert "asked for a login or connection" in res["error"] and "composio" in res["error"].lower()
+
+
+def test_a_long_real_report_that_mentions_authentication_is_not_flagged():
+    report = "Built paused. " * 120 + "Note: please authenticate the pixel in Events Manager."
+    assert len(report) > 1200 and not ed._stalled_on_login(report)
+    assert ed._stalled_on_login(_AUTH_ASK) and not ed._stalled_on_login("Built, paused.")
+    assert not ed._stalled_on_login("") and not ed._stalled_on_login(None)
+
+
+def test_the_skill_keeps_the_verified_click_to_message_recipe():
+    """Live 2026-11-19: free models failed 5x on the ad set and wandered to Composio; Claude's
+    accepted parameters are recorded in the skill so a weaker model does not rediscover them."""
+    skill = ed._ADS_SKILL_PATH.read_text(encoding="utf-8")
+    for needle in (
+        "Click-to-message build",
+        "`campaign_name`",
+        "destination_type: WHATSAPP",
+        "source_instagram_media_id",
+        "do NOT go to Composio",
+        "Publish in Ads Manager makes them",
+    ):
+        assert needle in skill, needle
+
+
+def test_the_skill_carries_the_delta_welcome_template_rule_and_the_cta_rule():
+    """Karim, 2026-11-20: Delta ALWAYS uses the saved welcome template; others keep the old no-greeting rule."""
+    skill = " ".join(ed._ADS_SKILL_PATH.read_text(encoding="utf-8").split())
+    for needle in (
+        "Delta Cuisine: ALWAYS use the saved Conversations template",
+        "Démarrer des conversations 29/11/2025",
+        'NO "Questions et réponses"',
+        "Ceram Quartz and Brico Kitchen:** the 2026-09-19 rule stands",
+        "never NO_BUTTON on a messaging ad",
+        "WHATSAPP_MESSAGE",
+        "MESSAGE_PAGE",
+        "INSTAGRAM_MESSAGE",
+        "Open the ad > Conversations > Modèles enregistrés",
+    ):
+        assert needle in skill, needle
+
+
+# ── a changed skill is never ignored by a resumed session (PF-062) ────────────
+
+
+def test_a_saved_ads_session_is_not_resumed_after_the_skill_changes(monkeypatch, tmp_path):
+    """Owner 2026-11-20: the skill must always follow Meta's changes. A session started under
+    the old skill kept applying the old greeting rule for hours."""
+    monkeypatch.setattr(ed, "_ADS_SESSIONS_PATH", tmp_path / "sessions.json")
+    ed._save_ads_session("delta_cuisine", "sess-1", r"C:\p\.claude-freelance")
+    assert ed._load_ads_session("delta_cuisine") == "sess-1"
+    monkeypatch.setattr(ed, "_ads_skill_fingerprint", lambda: "a-newer-skill")
+    assert ed._load_ads_session("delta_cuisine") is None
+
+
+def test_the_follow_up_prompt_defers_to_the_skill_not_to_old_rules():
+    text = ed._ads_followup_prompt("go ahead")
+    assert "era-ads-manager skill" in text and "no automated greeting" not in text
+
+
+def test_boost_with_a_media_noun_is_an_ads_order_but_plain_boost_is_not():
+    """2026-11-20: "Boost the last reel for Delta Cuisine" went to the organic weekly lane."""
+    from app.cm_intents import _infer_cm_task_type
+
+    for text in (
+        "Boost the last reel for Delta Cuisine",
+        "boost this reel",
+        "Boost my latest video",
+        "Booste ce reel",
+        "boost this post",
+    ):
+        assert _infer_cm_task_type(text) == "ads", text
+    for text in ("boost engagement on the page", "boost the volume", "plan this week's reels"):
+        assert _infer_cm_task_type(text) != "ads", text
+
+
+def test_french_paid_campaign_orders_reach_the_ads_lane_but_organic_ones_do_not():
+    from app.cm_intents import _infer_cm_task_type
+
+    for text in (
+        "Lance une campagne Meta pour Delta Cuisine",
+        "Fais une campagne publicitaire pour le dernier reel",
+        "Sponsorise le dernier reel de Delta Cuisine",
+        "Une pub Facebook pour la promo",
+    ):
+        assert _infer_cm_task_type(text) == "ads", text
+    for text in ("Planifie la semaine de Delta Cuisine", "Fais une campagne de contenu pour l'été"):
+        assert _infer_cm_task_type(text) != "ads", text
+
+
+def test_campaigns_are_named_to_the_standard_and_found_by_name_never_by_id():
+    """PF-077. Owner 2026-11-21: every campaign is named "[DC|CQ] - FORMAT_Asset - OBJECTIVE -
+    CC_MONYY", active ones are renamed to it, and a campaign is found from his words
+    ("pause the Delta Cuisine dressing reel") — never by asking him for a numeric id."""
+    import era_dispatch as d
+
+    brands = d.load_brands()["brands"]
+    assert brands["delta_cuisine"]["ads"]["campaign_code"] == "DC"
+    assert brands["ceram_quartz"]["ads"]["campaign_code"] == "CQ"
+    assert brands["brico_kitchen"]["ads"]["campaign_code"] == "BK"
+    for mode in ("report", "manage"):
+        b = d._build_ads_ops_brief(mode, "delta_cuisine", brands["delta_cuisine"], "x", "", "")
+        assert "DC - REEL_ProductName - MSG - TN_NOV26" in b and "CQ -" not in b
+        assert "you NEVER ask him for one" in b
+    manage = d._build_ads_ops_brief("manage", "delta_cuisine", brands["delta_cuisine"], "x", "", "")
+    assert "RENAME changes no spend" in manage and "before -> after table" in manage
+    assert "never ask for an id" in manage
+    build = d._build_ads_brief("ceram_quartz", brands["ceram_quartz"], "run a Meta ad", "", "")
+    assert '"CQ - FORMAT_Asset - OBJECTIVE - CC_MONYY"' in build
+    assert "DC -" not in build and "DressingAuMetre" not in build  # brand isolation
+    # A brand with no code is never renamed by guesswork.
+    assert "never rename its campaigns" in d._ads_naming_rule({}, "manage")
+
+
+def test_ads_change_and_report_runs_are_lean_and_publish_safely(monkeypatch):
+    """PF-078. Live 2026-11-21: each step of a Meta rename re-sent ~120 KB (66 KB brief with
+    44 vault notes + both skills loaded whole, 53 KB) through a gateway with no caching;
+    ~3.6M input tokens, a phantom "$15" (unrecognised free model) and the run was killed
+    before its read-back. Renames stayed Meta drafts because nothing published them."""
+    import re
+
+    import era_dispatch as d
+
+    brands = d.load_brands()["brands"]
+    dc = brands["delta_cuisine"]
+    manage = d._build_ads_ops_brief("manage", "delta_cuisine", dc, "rename them", "", "")
+    report = d._build_ads_ops_brief("report", "delta_cuisine", dc, "how are they doing", "", "")
+    assert len(manage) < 16000 and len(report) < 12000
+    for b in (manage, report):
+        assert "never load era-ads-manager or era-meta-analyst with the Skill tool" in b
+        assert re.search(r"SKILL\.md offset=\d+ limit=\d+", b)
+    assert "offset=" in d._ads_ops_reading("manage") and "Campaign names" in manage
+    # lean + safe publish
+    assert "Each change ONCE" in manage and "Never Read a saved tool-output file" in manage
+    assert "ads_activate_entity" in manage and "effective_status is ACTIVE" in manage
+    assert "activating a PAUSED campaign switches it ON" in manage
+    # MSG for any chat destination; ended campaigns are not active
+    assert "chat -> MSG, whatever its Meta objective" in manage
+    assert "an ended campaign is not active" in manage
+    # the vault is focused for ads ops
+    from core import cm_vault
+
+    seen = {}
+    monkeypatch.setattr(cm_vault, "render_vault_context", lambda *a, **k: seen.update(k) or "")
+    src = (
+        d.inspect.getsource(d)
+        if hasattr(d, "inspect")
+        else open(d.__file__, encoding="utf-8").read()
+    )
+    assert '{"focus": _ADS_VAULT_FOCUS, "max_chars": _ADS_VAULT_MAX_CHARS}' in src
+    assert d._ADS_VAULT_FOCUS.search("Meta_Ads_Playbook") and not d._ADS_VAULT_FOCUS.search(
+        "HUD_Improvement_Ideas"
+    )
+    # no Skill tool, and a free-route budget that a phantom price does not kill
+    assert 'deny.append("Skill")' in src and 'cmd += ["--disallowedTools", "Skill"]' in src
+    monkeypatch.setattr("core.llm.brains.cm_order", lambda *a: ("local", "gateway:omniroute"))
+    assert d._ads_ops_budget() == d._ADS_OPS_FREE_ROUTE_BUDGET_USD
+    monkeypatch.setattr("core.llm.brains.cm_order", lambda *a: ("gateway:claude", "local"))
+    assert d._ads_ops_budget() == d._ADS_OPS_MAX_BUDGET_USD == 15
+
+
+def test_the_vault_focus_keeps_only_matching_notes_and_lowers_the_budget():
+    import re
+
+    from core import cm_vault
+
+    full = cm_vault.render_vault_context("delta_cuisine", [], "ads")
+    lean = cm_vault.render_vault_context(
+        "delta_cuisine", [], "ads", focus=re.compile("meta", re.I), max_chars=6000
+    )
+    assert len(lean) <= len(full) and len(lean) < 7500

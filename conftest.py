@@ -259,6 +259,47 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _reset_task_brain(monkeypatch):
+    """The spoken brain choice (core/llm/brains.py) is process-wide session state, and
+    its background refresh would otherwise probe the real gateway during a test."""
+    from core.llm import brains
+
+    monkeypatch.setattr(brains, "refresh_async", lambda: None)
+    brains.set_choice("auto")
+    brains._cache.clear()
+    yield
+    brains.set_choice("auto")
+    brains._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_meta_watch(monkeypatch, tmp_path):
+    """core/meta_spec_watch keeps its digest/status under runtime/; a test must never read or
+    write the real ones. Start every test with a fresh, healthy status."""
+    import datetime
+
+    from core import meta_spec_watch as w
+
+    monkeypatch.setattr(w, "STATUS_PATH", tmp_path / "meta_specs_status.json")
+    monkeypatch.setattr(w, "DIGEST_PATH", tmp_path / "meta_specs_digest.json")
+    w.STATUS_PATH.write_text(
+        '{"checked_at": "%s", "ok": true, "changed": [], "acknowledged": true}'
+        % datetime.date.today().isoformat(),
+        encoding="utf-8",
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_live_crew_in_cm_runs(monkeypatch):
+    """era_dispatch asks the live crew for an ads creative package; a test that runs
+    run_task must not start Hermes/Qwen turns. tools/test_cm_crew_stage.py turns it on
+    with its own stub."""
+    monkeypatch.setenv("ERA_CM_CREW", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _block_live_self_improve_repair(monkeypatch):
     """actions.self_improve's guided repair pass calls a real model (generate_text).
 

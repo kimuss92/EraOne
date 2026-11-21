@@ -1340,7 +1340,14 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "order": {
                     "type": "STRING",
-                    "description": "The user's content order in their own words, e.g. 'quick publish the Perla reel'.",
+                    "description": (
+                        "The user's content order in their own words, e.g. 'quick publish the "
+                        "Perla reel'. Copy VERBATIM every file or folder path, link and pasted "
+                        "text the user gave (any format, inside or outside the master folder), "
+                        "and put a reel/file/folder the user only NAMED in quotes, e.g. 'HB'. "
+                        "If they refer to a file they sent you, keep the words 'the file I sent'. "
+                        "Never drop or summarise these inputs."
+                    ),
                 },
                 "brand": {
                     "type": "STRING",

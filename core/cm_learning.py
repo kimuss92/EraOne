@@ -161,6 +161,57 @@ def _similar(a: str, b: str, threshold: float = 0.6) -> bool:
     return len(ta & tb) / len(ta | tb) >= threshold
 
 
+# PF-075: what reached the lesson store live (2026-11-20 audit) was mostly one-off ORDERS
+# rendered into every later brief as "standing preferences" ("CONNECTIVITY TEST ONLY. Do
+# not generate content...", "Abort all tasks related to the Meta Ads campaign...", a whole
+# ads build spec). A standing preference is short and general; an order that names an
+# object id, is a test, aborts work, or runs past 300 characters is an instance.
+_ONE_OFF = re.compile(
+    r"\d{6,}|\btest\s+only\b|\bconnectivity\s+test\b|\b(?:abort|cancel|annule[rz]?)\b"
+    r"|\bdraft\s+only\b|\bads?\s*manager\b",
+    re.IGNORECASE,
+)
+
+
+# Live 2026-11-20 23:23/23:28: "pause appel and electro move their budget to the two winners"
+# and "I approve the drafts, publish them in the Meta Ads Manager" were stored as lessons.
+# An order that STARTS with a do-it-now action verb is an instruction for today, unless it
+# carries rule words ("pause any ad that costs over 2 EUR", "always ...").
+_ACTION_NOW = re.compile(
+    r"^\W*(?:(?:i|we)\s+)?(?:ok\w*\s+|yes\s+|please\s+)?(?:pause|resume|extend|prolong"
+    r"|activate|reactivate|unpause|publish|move|shift|reallocate|delete|duplicate"
+    r"|proceed|go\s+ahead)\b",
+    re.IGNORECASE,
+)
+_RULE_WORDS = re.compile(
+    r"\b(?:any|every|always|never|whenever|if|when|each|toujours|jamais|chaque|si|quand)\b",
+    re.IGNORECASE,
+)
+
+
+def is_one_off_order(text: str) -> bool:
+    """True when an order is a single instance, never a rule to keep."""
+    t = (text or "").strip()
+    if len(t) > 300 or _ONE_OFF.search(t):
+        return True
+    return bool(_ACTION_NOW.search(t)) and not _RULE_WORDS.search(t)
+
+
+def forget_lessons(brand_key: str, contains: str) -> int:
+    """Remove this brand's lessons whose text contains `contains` (case-insensitive).
+    Returns how many were removed. The owner's way to correct a wrong lesson."""
+    needle = (contains or "").strip().lower()
+    if not brand_key or len(needle) < 6:
+        return 0
+    store = _load_lessons()
+    kept = [e for e in store.get(brand_key, []) if needle not in str(e.get("text", "")).lower()]
+    removed = len(store.get(brand_key, [])) - len(kept)
+    if removed:
+        store[brand_key] = kept
+        _save_lessons(store)
+    return removed
+
+
 def carries_judgement(text: str) -> bool:
     """True when this order actually states a preference, rather than just asking
     for work.
@@ -180,6 +231,15 @@ def carries_judgement(text: str) -> bool:
     body = (text or "").strip()
     if len(body) < 8:
         return False
+    # "Draft only, do not publish anything" limits THIS run; it says nothing about the
+    # brand's taste. Live 2026-11-20 it was stored as a Ceram "material / avoid" lesson
+    # and would have been fed to every later brief (PF-073).
+    try:
+        from app.cm_intents import NEGATED_PUBLISH
+
+        body = NEGATED_PUBLISH.sub(" ", body)
+    except Exception:  # noqa: BLE001 - learning must never block work
+        pass
     return bool(_NEGATIVE.search(body) or _POSITIVE.search(body))
 
 
@@ -233,7 +293,7 @@ def record_feedback(
     otherwise the store fills with "plan the week" and drowns the real lessons.
     """
     order = (order or "").strip()
-    if not brand_key or len(order) < 8:
+    if not brand_key or len(order) < 8 or is_one_off_order(order):
         return None
 
     category, polarity = classify(order)
@@ -313,7 +373,8 @@ def lessons_for(brand_key: str) -> list[dict]:
 
 def render_lessons(brand_key: str) -> str:
     """The learned-preferences block for the brief. '' when nothing is known."""
-    lessons = lessons_for(brand_key)
+    # PF-075: a one-off order stored before the filter existed is never rendered as a rule.
+    lessons = [e for e in lessons_for(brand_key) if not is_one_off_order(e.get("text", ""))]
     if not lessons:
         return ""
 

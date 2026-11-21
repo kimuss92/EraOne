@@ -476,16 +476,28 @@ def render_vault_context(
     aliases: list[str] | None = None,
     task_type: str = "weekly",
     other_brands: dict[str, list[str]] | None = None,
+    focus: re.Pattern | None = None,
+    max_chars: int | None = None,
 ) -> str:
     """The vault block injected into the CM brief. '' when there is nothing.
 
     Presented as authoritative standing context, because that is what it is:
     these notes are the user's own written strategy. But brands.yaml still wins
     on routing — a note can never re-point an account id, and says so here.
+
+    `focus` keeps only the notes whose title, path or tags match it (all notes
+    when none match), and `max_chars` lowers the budget. Ads change/report runs
+    use both: live 2026-11-21 every step of a Meta rename re-sent all 44 notes
+    (54 KB: Netflix states, HUD ideas, wardrobe prompts) through a gateway that
+    does not cache, and the run was stopped by its budget before it finished.
     """
     notes = notes_for_brand(brand_key, aliases, other_brands=other_brands)
     if not notes:
         return ""
+    if focus is not None:
+        hit = [n for n in notes if focus.search(" ".join([n.title, n.rel, *n.tags]))]
+        notes = hit or notes
+    budget = max_chars or _MAX_BRIEF_CHARS
 
     # `continue` on overflow, not `break`: this is priority order, but a hard
     # break silently drops EVERY later note the moment one doesn't fit — even a
@@ -496,7 +508,7 @@ def render_vault_context(
     used = 0
     for note in notes:
         block = brief_block(note)
-        if used + len(block) > _MAX_BRIEF_CHARS:
+        if used + len(block) > budget:
             continue
         chunks.append(block)
         used += len(block)

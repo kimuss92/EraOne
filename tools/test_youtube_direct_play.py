@@ -198,3 +198,19 @@ def test_organic_watch_link_with_radio_parameters_is_a_video(browser, monkeypatc
     )
     result = ToolResult.from_any(yt._handle_play({"query": "Sabr El Rijal"}, None, "brave"))
     assert result.success and browser.navigations[-1] == URL
+
+
+@pytest.mark.parametrize("handler", [yt._handle_get_info, yt._handle_summarize])
+def test_no_video_open_answers_plainly_and_never_opens_a_dialog(handler, monkeypatch):
+    """PF-055: with no URL and no YouTube tab, say so. A blocking tkinter prompt froze the tool."""
+    import tkinter
+
+    def _no_dialog(*a, **k):
+        raise AssertionError("a modal dialog was opened")
+
+    monkeypatch.setattr(tkinter, "Tk", _no_dialog)
+    monkeypatch.setattr(yt, "_BROWSER_BRIDGE", False)
+    monkeypatch.setattr(yt, "_TRANSCRIPT_OK", True)
+    assert not hasattr(yt, "_ask_for_url")
+    out = handler({}, None, None, "brave")
+    assert "No YouTube video is open" in out

@@ -626,11 +626,17 @@ async def refresh_after_command(tool: str, params: dict, raw):
     # spotify_control), so a playback check spreads its 3 reads over 3.5 s.
     # Reads only: polling longer can never repeat or change an action.
     playback_check = expected is not None and expected[0] == "playback"
-    interval = 1.0 if playback_check else 0.2
-    deadline = time.monotonic() + (3.5 if playback_check else 2.0)
+    # PF-070: a CLOSE is judged only after the app had time to exit. Live
+    # 2026-11-20 15:30: Photoshop closed, but Era read it 0.5 s later and said
+    # "still running, so it did not close". Heavy apps (Photoshop, Premiere) need
+    # several seconds, so poll up to 15 s and stop the moment the process is gone.
+    close_check = expected == ("process_running", False)
+    interval = 1.0 if playback_check else (0.5 if close_check else 0.2)
+    deadline = time.monotonic() + (3.5 if playback_check else (15.0 if close_check else 2.0))
+    attempts = 30 if close_check else 3
     state = None
     _DISCOVER.set(expected == ("window", True))  # copied into the probe thread
-    for attempt in range(3):
+    for attempt in range(attempts):
         if cancelled():
             return raw
         try:
@@ -659,7 +665,7 @@ async def refresh_after_command(tool: str, params: dict, raw):
             break
         if _matches(state, expected) or expected is None or not result.success:
             break
-        if attempt < 2 and time.monotonic() + interval < deadline:
+        if attempt < attempts - 1 and time.monotonic() + interval < deadline:
             await asyncio.sleep(interval)
         else:
             break

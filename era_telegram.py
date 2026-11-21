@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -501,6 +502,62 @@ def preflight() -> dict:
     return info
 
 
+_INBOX_DIR = Path.home() / ".era" / "inbox"
+_LAST_ATTACHMENT = Path.home() / ".era" / "last_attachment.json"
+
+
+def _attachment_payload(msg: dict) -> tuple[dict, str] | None:
+    """(payload, file name) for a document, photo, video or animation the owner sent."""
+    doc = msg.get("document") or msg.get("video") or msg.get("animation")
+    if isinstance(doc, dict) and doc.get("file_id"):
+        name = doc.get("file_name") or ("video.mp4" if msg.get("video") else "file")
+        return doc, name
+    photos = msg.get("photo")
+    if isinstance(photos, list) and photos:
+        best = max(photos, key=lambda p: int(p.get("file_size") or 0))
+        if best.get("file_id"):
+            return best, "photo.jpg"
+    return None
+
+
+def _handle_attachment(msg: dict, on_command) -> None:
+    """Save one sent file to ~/.era/inbox, remember it, and run its caption. Never raises."""
+    import json as _json
+
+    found = _attachment_payload(msg)
+    if found is None:
+        return
+    payload, name = found
+    try:
+        path = download_file(payload["file_id"], dest_dir=_INBOX_DIR)
+        safe = re.sub(r"[^\w.\- ]+", "_", Path(name).name)[:120] or path.name
+        final = path.with_name(f"{path.name.split('_', 1)[0]}_{safe}")
+        if final != path and not final.exists():
+            path = path.rename(final)
+        _LAST_ATTACHMENT.write_text(
+            _json.dumps({"path": str(path), "name": safe, "saved_at": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"[TG] attachment failed: {e}")
+        send_message(f"I couldn't save that file — {e}")
+        return
+    caption = (msg.get("caption") or "").strip()
+    print(f"[TG] file from owner saved: {path.name}")
+    if not caption:
+        send_message(
+            f"Got it: {safe}, saved at {path}. Tell me what to do with it "
+            "(you can say 'the file I sent')."
+        )
+        return
+    send_message(f"Got {safe}. Working on: {caption}")
+    try:
+        on_command(f"{caption} (file I sent: {path})")
+    except Exception as e:
+        print(f"[TG] on_command raised (file): {e}")
+        send_message(f"That failed on my side: {e}")
+
+
 def _handle_voice_message(msg: dict, on_command) -> None:
     """Transcribe one voice note and run it as a command. Never raises.
 
@@ -681,8 +738,22 @@ def poll_forever(
                     ).start()
                     continue
 
+                if not text and _attachment_payload(msg) is not None:
+                    # PF-076: a file the owner sends is CONTEXT for an order (data, never an
+                    # order itself): saved, remembered as the last attachment, and its
+                    # caption, if any, runs as the order with the file's path attached.
+                    threading.Thread(
+                        target=_handle_attachment,
+                        args=(dict(msg), on_command),
+                        name="era-telegram-file",
+                        daemon=True,
+                    ).start()
+                    continue
+
                 if not text:
-                    send_message("I can act on text and voice notes — that message had neither.")
+                    send_message(
+                        "I can act on text, voice notes and files — that message had none."
+                    )
                     continue
 
                 print(f"[TG] command from owner: {text[:80]!r}")

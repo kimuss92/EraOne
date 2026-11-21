@@ -5,10 +5,13 @@ and CM report delivery. Operates on self.* state.
 """
 
 import asyncio
+import json
+import os
 import re
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.cm_intents import _infer_cm_task_type
@@ -18,6 +21,56 @@ from app.notify import _tg_notify
 from app.text_intents import _build_paste_clarify_instruction, _say_exactly
 from core.cancel_registry import CURRENT_TOKEN, REGISTRY, CancelledTask, offload
 from core.tool_result import ToolResult
+
+# PF-072: the outcome of the LAST community-management job is kept where Era can read it.
+# Before, a result was only spoken (or queued for a reconnect); asked "what did the Meta
+# check say?" she had nothing but a "handed off" line and offered to "check the log file".
+_CM_LAST_PATH = Path(
+    os.getenv("ERA_CM_LAST_RESULT", str(Path.home() / ".era" / "cm_last_result.json"))
+)
+
+
+def _record_cm_outcome(payload: dict[str, Any], ok: bool, text: Any, result: Any = None) -> None:
+    """Persist how a CM job ended. Never raises: bookkeeping must not break delivery."""
+    try:
+        rec = {
+            "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "brand": payload.get("brand_key"),
+            "task_type": payload.get("task_type"),
+            "order": str(payload.get("text", ""))[:300],
+            "ok": bool(ok),
+            "report": str(text or "")[:4000],
+            "wrote_files": (result or {}).get("wrote_files") if isinstance(result, dict) else None,
+            "log_path": (result or {}).get("log_path") if isinstance(result, dict) else None,
+        }
+        _CM_LAST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CM_LAST_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, _CM_LAST_PATH)
+    except Exception as e:  # noqa: BLE001
+        print(f"[CM-FLOW] could not record outcome: {e}")
+
+
+def read_last_cm_outcome(max_age_s: float = 6 * 3600) -> dict[str, Any] | None:
+    """The last finished CM job (newer than `max_age_s`), or None."""
+    try:
+        rec = json.loads(_CM_LAST_PATH.read_text(encoding="utf-8"))
+        done = datetime.fromisoformat(rec["finished_at"])
+        if (datetime.now(UTC) - done).total_seconds() > max_age_s:
+            return None
+        return rec
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def render_last_cm_outcome(rec: dict[str, Any]) -> str:
+    """One block Era can answer from: what ran, whether it worked, what it said."""
+    status = "FINISHED OK" if rec.get("ok") else "FAILED"
+    return (
+        f"Last community-management job ({rec.get('brand')} {rec.get('task_type')}, "
+        f"{status} at {rec.get('finished_at')}).\nOrder: {rec.get('order')}\n"
+        f"Report: {rec.get('report')}"
+    )
 
 
 class _CMOutcome:
@@ -363,6 +416,7 @@ class CMFlowMixin:
         try:
             import era_dispatch as ed
         except Exception as e:
+            _record_cm_outcome(payload, False, f"failed to start: {e}")
             self._deliver_or_queue_cm_report(f"That community-management task failed to start: {e}")
             return
 
@@ -392,6 +446,7 @@ class CMFlowMixin:
         except CancelledTask:
             raise
         except Exception as e:
+            _record_cm_outcome(payload, False, f"failed: {e}")
             self._deliver_or_queue_cm_report(f"That community-management task failed: {e}")
             return
 
@@ -446,6 +501,7 @@ class CMFlowMixin:
             # they carry the brand tag. Disarm the turn mirror so the reply Era speaks
             # doesn't arrive a second time, untagged.
             self._tg_reply_pending = False
+            _record_cm_outcome(payload, True, spoken, result)
             self._deliver_or_queue_cm_report(spoken)
             # A CM run can take 30 minutes. If you ordered it from Telegram — or just
             # walked away — the spoken result reaches an empty room. Mirror it to the
@@ -453,8 +509,13 @@ class CMFlowMixin:
             _tg_notify(f"[{(result.get('brand') or brand_key or 'CM')}] {spoken}")
         else:
             err = str(result.get("error", "unknown error"))
+            _record_cm_outcome(payload, False, err, result)
             self._tg_reply_pending = False
-            self._deliver_or_queue_cm_report("That community-management task failed: " + err)
+            # Verbatim: live 2026-11-20 21:12 Gemini turned "couldn't find a reel named
+            # 'new 2'" into an invented folder path and an offer to list it (PF-072).
+            self._deliver_or_queue_cm_report(
+                "That community-management task failed: " + err, verbatim=True
+            )
             _tg_notify(f"[{brand_key or 'CM'}] task failed: {err}")
 
     def _maybe_record_feedback(self, user_text: str) -> None:
@@ -601,6 +662,11 @@ class CMFlowMixin:
         # trace. Held instead, it is delivered right after the resume ack (see
         # _resume_from_standby).
         if self._loop and self.session and not getattr(self, "_standby_active", False):
+            # The hand-off window mutes Gemini so she does not answer an order the CM
+            # lane owns. The lane's OWN report must be heard: live 2026-11-20 21:20 an
+            # instant "couldn't find 'new 2'" refusal was spoken inside the window and
+            # muted, so Era said nothing at all.
+            self._cm_handoff_until = 0.0
             self.speak(_say_exactly(text) if verbatim else text)
             return
         # Accumulate, never overwrite: five reports finishing while Era was away
